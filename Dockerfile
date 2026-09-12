@@ -16,7 +16,7 @@ ARG SHAIRPORT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git autoconf automake libtool pkg-config \
     libssl-dev libavahi-client-dev libasound2-dev libsoxr-dev \
-    libplist-dev libgcrypt20-dev libuuid-dev libpopt-dev libconfig-dev \
+    libplist-dev libgcrypt20-dev uuid-dev libpopt-dev libconfig-dev \
     libsodium-dev libavutil-dev libavcodec-dev libavformat-dev xxd \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
