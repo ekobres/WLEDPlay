@@ -118,24 +118,31 @@
     for (let i = 0; i < 16; i++) bandsEl.appendChild(document.createElement("i"));
     const bars = [...bandsEl.children];
 
-    async function tick() {
-      let s;
-      try { s = await fetch("/status").then((r) => r.json()); }
-      catch { return; }
+    let updateHz = 50;
+    let lastMeta = 0;
+
+    function paintSpectrum(s) {
       const live = !!s.airplay.connected;
       $("conn").textContent = live ? "live" : "idle";
       $("conn").className = "pill" + (live ? " live" : "");
-      $("ver").textContent = s.version || "";
-      $("receiver").textContent = s.airplay.receiver_name || "WLEDPlay";
-      const md = s.metadata || {};
-      const parts = [md.title, md.artist, md.album].filter(Boolean);
-      $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
       const rms = Number(s.audio.rms || 0);
       $("level").textContent = Math.round(rms * 100) + "%" + (s.audio.peak ? "  peak" : "");
       $("level").className = "value" + (s.audio.peak ? " peak" : "");
       $("levelbar").style.width = Math.min(100, rms * 100) + "%";
       const hz = Number(s.audio.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1) + " Hz" : "—";
+      (s.audio.bands || []).forEach((v, i) => {
+        if (bars[i]) bars[i].style.height = Math.max(2, (v / 255) * 100) + "%";
+      });
+      if (s.audio.update_hz > 0) updateHz = s.audio.update_hz;
+    }
+
+    function paintMeta(s) {
+      $("ver").textContent = s.version || "";
+      $("receiver").textContent = s.airplay.receiver_name || "WLEDPlay";
+      const md = s.metadata || {};
+      const parts = [md.title, md.artist, md.album].filter(Boolean);
+      $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
       $("pps").textContent = Number(s.wled.packets_per_second || 0).toFixed(0) + " /s";
       $("dest").textContent = (s.wled.destinations && s.wled.destinations.length)
         ? s.wled.destinations.join(", ")
@@ -143,9 +150,6 @@
       $("sync").textContent = (s.audio.sync_offset_ms || 0) + " ms";
       $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
         + "s · " + (s.airplay.connections || 0) + " connects";
-      (s.audio.bands || []).forEach((v, i) => {
-        if (bars[i]) bars[i].style.height = Math.max(2, (v / 255) * 100) + "%";
-      });
       const c = s.counters || {};
       $("counters").textContent =
         "pcm " + (c.pcm_frames || 0)
@@ -155,7 +159,22 @@
         + "  underrun " + (c.pcm_underruns || 0)
         + "  overrun " + (c.analysis_overruns || 0);
     }
-    setInterval(tick, 200);
+
+    async function tick() {
+      const started = performance.now();
+      let s;
+      try { s = await fetch("/status").then((r) => r.json()); }
+      catch { s = null; }
+      if (s) {
+        paintSpectrum(s);
+        if (started - lastMeta >= 1000) {
+          paintMeta(s);
+          lastMeta = started;
+        }
+      }
+      const period = 1000 / Math.max(1, updateHz);
+      setTimeout(tick, Math.max(0, period - (performance.now() - started)));
+    }
     tick();
   </script>
 </body>

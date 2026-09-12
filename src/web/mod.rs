@@ -34,6 +34,7 @@ pub struct AudioStatus {
     pub dominant_frequency: f32,
     pub bands: [u8; 16],
     pub sync_offset_ms: i32,
+    pub update_hz: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

@@ -259,12 +259,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     rt = runtime.lock().unwrap();
                 }
                 let pkt = rt.analyzer.build_packet();
+                publish_audio(&status, &rt, &cfg);
                 drop(rt);
                 sender.send(&pkt)?;
                 packets_last_sec += 1;
             } else if udp_active {
                 let pkt = rt.analyzer.silence_packet();
                 let closed = rt.stdin_closed;
+                publish_audio(&status, &rt, &cfg);
                 drop(rt);
                 sender.send(&pkt)?;
                 packets_last_sec += 1;
@@ -464,6 +466,7 @@ fn update_status(
     s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
     s.audio.bands = rt.analyzer.fft_bands();
     s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
+    s.audio.update_hz = cfg.audio.update_hz;
     s.wled.packets_per_second = packets_per_sec as f32;
     s.wled.destination = sender.destination();
     s.wled.destinations = cfg.wled.destinations.clone();
@@ -480,4 +483,17 @@ fn update_status(
         .stream_since
         .map(|t| t.elapsed().as_secs_f32())
         .unwrap_or(0.0);
+}
+
+fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config) {
+    let mut s = status.lock().unwrap();
+    s.audio.sample_rate = pcm::ANALYSIS_RATE;
+    s.audio.channels = 1;
+    s.audio.rms = rt.analyzer.rms_proxy();
+    s.audio.peak = rt.analyzer.samples.sample_peak;
+    s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
+    s.audio.bands = rt.analyzer.fft_bands();
+    s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
+    s.audio.update_hz = cfg.audio.update_hz;
+    s.airplay.connected = rt.stream_active;
 }
