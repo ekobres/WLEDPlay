@@ -43,10 +43,13 @@ RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
     make install
 
 FROM debian:bookworm-slim
+# Runtime package names are Debian 12 (bookworm), not Trixie.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates avahi-daemon libssl3 libsoxr0 libconfig11 libgcrypt20 \
-    libplist-2.0-4 libuuid1 libpopt0 libsodium23 \
-    libavcodec59 libavformat59 libavutil57 \
+    ca-certificates avahi-daemon dbus \
+    libssl3 libsoxr0 libconfig9 libgcrypt20 \
+    libplist3 libuuid1 libpopt0 libsodium23 \
+    libavahi-client3 libavahi-common3 \
+    libavcodec59 libavformat59 libavutil57 libswresample4 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=shairport-build /usr/local/bin/shairport-sync /usr/local/bin/

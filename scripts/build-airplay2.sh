@@ -19,6 +19,8 @@ fi
 need() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing build tool: $1"
+    echo "On a Docker-only host, skip this script and use:"
+    echo "  WLEDPLAY_DESTINATION=<wled-ip> docker compose up -d --build"
     exit 1
   }
 }
