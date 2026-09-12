@@ -1,0 +1,14 @@
+[Unit]
+Description=WLEDPlay AirPlay-to-WLED bridge
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/wledplay
+ExecStart=/usr/local/bin/wledplay --config /etc/wledplay/config.yaml --input stdin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

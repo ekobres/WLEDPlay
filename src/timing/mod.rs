@@ -1,0 +1,20 @@
+//! Presentation timing compensation (future use).
+
+#[derive(Debug, Clone)]
+pub struct SyncOffset {
+    pub offset_ms: i32,
+}
+
+impl SyncOffset {
+    pub fn new(offset_ms: i32) -> Self {
+        Self { offset_ms }
+    }
+
+    pub fn delay(&self) -> std::time::Duration {
+        if self.offset_ms > 0 {
+            std::time::Duration::from_millis(self.offset_ms as u64)
+        } else {
+            std::time::Duration::ZERO
+        }
+    }
+}

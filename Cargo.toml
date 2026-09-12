@@ -1,0 +1,32 @@
+[package]
+name = "wledplay"
+version = "0.1.0"
+edition = "2021"
+description = "AirPlay-to-WLED audio-reactive bridge"
+license = "MIT"
+readme = "README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wledplay"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+libc = "0.2"
+realfft = "3"
+rustfft = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+socket2 = { version = "0.5", features = ["all"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+approx = "0.5"

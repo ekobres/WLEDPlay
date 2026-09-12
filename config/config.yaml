@@ -1,0 +1,26 @@
+airplay:
+  name: "WLEDPlay"
+
+audio:
+  sync_offset_ms: 0
+  gain: auto
+  update_hz: 50
+
+wled:
+  multicast_address: "239.0.0.1"
+  port: 11988
+  destinations:
+    - "10.11.1.124"
+
+logging:
+  level: info
+
+web:
+  enabled: true
+  listen: "0.0.0.0"
+  port: 8080
+
+pcm:
+  rate: 44100
+  channels: 2
+  format: s16le

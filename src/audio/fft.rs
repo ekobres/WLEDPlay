@@ -1,0 +1,90 @@
+use realfft::RealFftPlanner;
+use rustfft::num_complex::Complex;
+
+pub const SAMPLES_FFT: usize = 512;
+pub const SAMPLES_FFT_2: usize = 256;
+pub const SAMPLE_RATE: u32 = 22050;
+pub const FFT_DOWNSCALE: f32 = 0.40;
+
+pub struct FftEngine {
+    window: Vec<f32>,
+    scratch: Vec<Complex<f32>>,
+    output: Vec<Complex<f32>>,
+    magnitudes: Vec<f32>,
+    r2c: std::sync::Arc<dyn realfft::RealToComplex<f32>>,
+}
+
+impl FftEngine {
+    pub fn new() -> Self {
+        let mut planner = RealFftPlanner::<f32>::new();
+        let r2c = planner.plan_fft_forward(SAMPLES_FFT);
+        let mut window = vec![0.0; SAMPLES_FFT];
+        for (i, w) in window.iter_mut().enumerate() {
+            *w = blackman_harris(i, SAMPLES_FFT);
+        }
+        let scratch = r2c.make_scratch_vec();
+        let output = r2c.make_output_vec();
+        Self {
+            window,
+            scratch,
+            output,
+            magnitudes: vec![0.0; SAMPLES_FFT_2],
+            r2c,
+        }
+    }
+
+    pub fn analyze(&mut self, samples: &[f32; SAMPLES_FFT]) -> (f32, f32) {
+        let mut input: Vec<f32> = samples.to_vec();
+        let mean: f32 = input.iter().sum::<f32>() / SAMPLES_FFT as f32;
+        for s in &mut input {
+            *s -= mean;
+        }
+        for (i, s) in input.iter_mut().enumerate() {
+            *s *= self.window[i];
+        }
+
+        self.r2c
+            .process_with_scratch(&mut input, &mut self.output, &mut self.scratch)
+            .expect("fft");
+
+        self.magnitudes[0] = 0.0;
+        let mut major_peak = 1.0f32;
+        let mut magnitude = 0.001f32;
+        let bin_hz = SAMPLE_RATE as f32 / SAMPLES_FFT as f32;
+
+        for i in 1..SAMPLES_FFT_2 {
+            let re = self.output[i].re;
+            let im = self.output[i].im;
+            let mag = (re * re + im * im).sqrt();
+            self.magnitudes[i] = mag;
+            if mag > magnitude {
+                magnitude = mag;
+                major_peak = i as f32 * bin_hz;
+            }
+        }
+
+        (major_peak.clamp(1.0, 11025.0), magnitude)
+    }
+
+    pub fn magnitudes(&self) -> &[f32] {
+        &self.magnitudes
+    }
+}
+
+fn blackman_harris(n: usize, n_fft: usize) -> f32 {
+    let a0 = 0.35875;
+    let a1 = 0.48829;
+    let a2 = 0.14128;
+    let a3 = 0.01168;
+    let x = 2.0 * std::f32::consts::PI * n as f32 / n_fft as f32;
+    a0 - a1 * x.cos() + a2 * (2.0 * x).cos() - a3 * (3.0 * x).cos()
+}
+
+pub fn fft_add_avg(mags: &[f32], from: usize, to: usize) -> f32 {
+    let mut result = 0.0f32;
+    for i in from..=to.min(mags.len() - 1) {
+        result += mags[i];
+    }
+    result *= 0.0625;
+    result / (to - from + 1) as f32
+}

@@ -1,0 +1,8 @@
+WLEDPlay Docker image includes separately licensed software:
+
+- Shairport Sync (GPL-2.0+) — https://github.com/mikebrady/shairport-sync
+- NQPTP (GPL-2.0) — https://github.com/mikebrady/nqptp
+
+WLEDPlay analyzer binary is MIT licensed. See /LICENSE.
+
+Source code for GPL components is available at the URLs above.
