@@ -14,6 +14,7 @@ fi
 WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
 WLEDPLAY_DESTINATION="${WLEDPLAY_DESTINATION:-}"
+WLEDPLAY_INTERFACE="${WLEDPLAY_INTERFACE:-}"
 PCM_FIFO="/run/wledplay.pcm"
 
 shutdown() {
@@ -32,6 +33,17 @@ if [ "$ENABLE_AIRPLAY2" = "1" ]; then
 fi
 
 sed "s/WLEDPlay/${WLEDPLAY_AIRPLAY_NAME}/g" /etc/shairport-sync.conf > /tmp/shairport-sync.conf
+if [ -n "$WLEDPLAY_INTERFACE" ]; then
+  if grep -q 'interface =' /tmp/shairport-sync.conf; then
+    sed -i "s|^[[:space:]]*//[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
+    sed -i "s|^[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
+  else
+    sed -i "/^general = {/a\\
+  interface = \"${WLEDPLAY_INTERFACE}\";
+" /tmp/shairport-sync.conf
+  fi
+  echo "Shairport interface: ${WLEDPLAY_INTERFACE}"
+fi
 
 rm -f "$PCM_FIFO"
 mkfifo "$PCM_FIFO"
@@ -47,6 +59,11 @@ if [ -n "$WLEDPLAY_DESTINATION" ]; then
   IFS=$OLDIFS
 fi
 
+IFACE_ARGS=""
+if [ -n "$WLEDPLAY_INTERFACE" ]; then
+  IFACE_ARGS="--interface ${WLEDPLAY_INTERFACE}"
+fi
+
 echo "Starting wledplay..."
 # shellcheck disable=SC2086
 /wledplay \
@@ -59,6 +76,7 @@ echo "Starting wledplay..."
   --pcm-channels "${WLEDPLAY_PCM_CHANNELS}" \
   --pcm-format "${WLEDPLAY_PCM_FORMAT}" \
   $DEST_ARGS \
+  $IFACE_ARGS \
   < "$PCM_FIFO" &
 WLEDPLAY_PID=$!
 

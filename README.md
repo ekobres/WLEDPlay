@@ -45,8 +45,10 @@ On a Linux host (Pi, NUC, etc.):
 Or:
 
 ```bash
-WLEDPLAY_DESTINATION=10.11.1.124 docker compose up -d --build
+WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
 ```
+
+On a multi-homed host, set `WLEDPLAY_INTERFACE` to the VLAN NIC (`ip -br addr`). That binds Shairport, WLED UDP, and `/status` to that interface.
 
 Then group **WLEDPlay** with a HomePod / Apple TV and measure visual vs audible sync (`docs/SYNC_MEASUREMENT.md`). AP2 PCM is pinned to **48000 Hz S16LE**.
 
@@ -60,6 +62,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_MULTICAST_ADDRESS` | Default `239.0.0.1` |
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
+| `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + UDP + HTTP |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
 | `WLEDPLAY_LOG_LEVEL` | Log level |
 
@@ -73,7 +76,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 Requires **host networking** (mDNS, multicast, AirPlay 2 PTP). This does not work as a LAN AirPlay receiver on Docker Desktop for Mac.
 
 ```bash
-WLEDPLAY_DESTINATION=10.11.1.124 docker compose up -d --build
+WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
 ```
 
 Stack: `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED

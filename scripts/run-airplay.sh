@@ -40,6 +40,19 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sed "s/name = \"WLEDPlay\"/name = \"${AIRPLAY_NAME}\"/" "$SHAIRPORT_CONF" > "$TMP_CONF"
+if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
+  python3 - "$TMP_CONF" "$WLEDPLAY_INTERFACE" <<'PY'
+import pathlib, re, sys
+p, iface = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+if re.search(r"(?m)^[ \t]*//?[ \t]*interface\s*=", text) or re.search(r"(?m)^[ \t]*interface\s*=", text):
+    text = re.sub(r"(?m)^[ \t]*//[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+    text = re.sub(r"(?m)^[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+else:
+    text = text.replace("general = {", f'general = {{\n  interface = "{iface}";', 1)
+p.write_text(text)
+PY
+fi
 
 echo "Advertising AirPlay receiver: ${AIRPLAY_NAME}"
 echo "WLEDPlay config: ${CONFIG}"
@@ -61,5 +74,11 @@ if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:5000 -sTCP:LISTEN >/dev/nul
 fi
 
 # Shairport writes PCM in real time; do not pace again.
+IFACE_ARGS=()
+if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
+  IFACE_ARGS=(--interface "$WLEDPLAY_INTERFACE")
+  echo "Interface: ${WLEDPLAY_INTERFACE}"
+fi
+
 "$SHAIRPORT_BIN" -c "$TMP_CONF" -o stdout | \
-  "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime
+  "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime "${IFACE_ARGS[@]}"

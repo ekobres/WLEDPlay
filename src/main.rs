@@ -59,6 +59,10 @@ struct Cli {
     /// Disable pacing (AirPlay / Shairport already emit PCM in real time)
     #[arg(long)]
     no_realtime: bool,
+
+    /// Bind AirPlay/UDP/HTTP to this host NIC (e.g. eth1). Env: WLEDPLAY_INTERFACE
+    #[arg(long, env = "WLEDPLAY_INTERFACE")]
+    interface: Option<String>,
 }
 
 struct PcmRuntime {
@@ -93,6 +97,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     cfg.pcm.format = cli.pcm_format;
     if !cli.destinations.is_empty() {
         cfg.wled.destinations = cli.destinations;
+    }
+    if let Some(iface) = cli.interface.filter(|s| !s.is_empty()) {
+        cfg.network.interface = iface;
     }
 
     tracing_subscriber::fmt()
@@ -139,6 +146,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Realtime PCM pacing: enabled");
     }
 
+    let iface_bind = if cfg.network.interface.is_empty() {
+        None
+    } else {
+        match wledplay::netif::resolve_interface(&cfg.network.interface) {
+            Ok(b) => {
+                tracing::info!("Network interface: {} ({})", b.name, b.ipv4);
+                if cfg.web.listen == "0.0.0.0" {
+                    cfg.web.listen = b.ipv4.to_string();
+                }
+                Some(b)
+            }
+            Err(e) => {
+                tracing::error!("{e}");
+                std::process::exit(1);
+            }
+        }
+    };
+
     let status: SharedStatus = Arc::new(Mutex::new(RuntimeStatus {
         version: VERSION.into(),
         airplay: AirplayStatus {
@@ -159,7 +184,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
 
-    let mut sender = WledSender::new(cfg.multicast_ip(), cfg.wled.port, unicast)?;
+    let mut sender = WledSender::new(
+        cfg.multicast_ip(),
+        cfg.wled.port,
+        unicast,
+        iface_bind.as_ref().map(|b| b.ipv4),
+        iface_bind.as_ref().map(|b| b.name.as_str()),
+    )?;
 
     let update_interval = Duration::from_millis(1000 / cfg.audio.update_hz.max(1) as u64);
     let stdin_is_pipe = !io::stdin().is_terminal();

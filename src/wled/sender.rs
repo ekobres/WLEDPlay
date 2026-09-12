@@ -22,15 +22,26 @@ impl WledSender {
         multicast: IpAddr,
         port: u16,
         unicast_destinations: Vec<SocketAddr>,
+        bind_ip: Option<Ipv4Addr>,
+        bind_device: Option<&str>,
     ) -> Result<Self, SendError> {
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         socket.set_reuse_address(true)?;
         #[cfg(unix)]
         socket.set_reuse_port(true)?;
-        socket.bind(&SocketAddr::from(([0, 0, 0, 0], 0)).into())?;
+
+        let local = bind_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
+        socket.bind(&SocketAddr::from((local, 0)).into())?;
+
+        if let Some(name) = bind_device.filter(|n| !n.is_empty()) {
+            bind_udp_device(&socket, name, local);
+        }
 
         if let IpAddr::V4(addr) = multicast {
-            socket.join_multicast_v4(&addr, &Ipv4Addr::UNSPECIFIED)?;
+            socket.join_multicast_v4(&addr, &local)?;
+            if !local.is_unspecified() {
+                let _ = socket.set_multicast_if_v4(&local);
+            }
         }
 
         Ok(Self {
@@ -86,3 +97,23 @@ impl WledSender {
         }
     }
 }
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn bind_udp_device(socket: &Socket, name: &str, local: Ipv4Addr) {
+    if let Err(e) = socket.bind_device(Some(name.as_bytes())) {
+        tracing::warn!("SO_BINDTODEVICE {name} failed ({e}); using bind address {local}");
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn bind_udp_device(_socket: &Socket, _name: &str, _local: Ipv4Addr) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn bind_udp_device(socket: &Socket, name: &str, local: Ipv4Addr) {
+    if let Err(e) = socket.bind_device(Some(name.as_bytes())) {
+        tracing::warn!("SO_BINDTODEVICE {name} failed ({e}); using bind address {local}");
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn bind_udp_device(_socket: &Socket, _name: &str, _local: Ipv4Addr) {}

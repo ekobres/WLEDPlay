@@ -16,6 +16,15 @@ pub struct Config {
     pub web: WebConfig,
     #[serde(default)]
     pub pcm: PcmFormat,
+    #[serde(default)]
+    pub network: NetworkConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    /// Host NIC name (e.g. eth1, vlan11). Empty = bind all interfaces.
+    #[serde(default)]
+    pub interface: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +231,7 @@ impl Default for Config {
                 channels: default_pcm_channels(),
                 format: default_pcm_format(),
             },
+            network: NetworkConfig::default(),
         }
     }
 }
@@ -271,6 +281,11 @@ impl Config {
         if let Ok(v) = std::env::var("WLEDPLAY_DESTINATION") {
             if !v.is_empty() {
                 self.wled.destinations = v.split(',').map(|s| s.trim().to_string()).collect();
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_INTERFACE") {
+            if !v.is_empty() {
+                self.network.interface = v;
             }
         }
     }

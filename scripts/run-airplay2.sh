@@ -76,6 +76,19 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sed "s/name = \"WLEDPlay\"/name = \"${AIRPLAY_NAME}\"/" "$SHAIRPORT_CONF" > "$TMP_CONF"
+if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
+  python3 - "$TMP_CONF" "$WLEDPLAY_INTERFACE" <<'PY'
+import pathlib, re, sys
+p, iface = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+if re.search(r"(?m)^[ \t]*//?[ \t]*interface\s*=", text) or re.search(r"(?m)^[ \t]*interface\s*=", text):
+    text = re.sub(r"(?m)^[ \t]*//[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+    text = re.sub(r"(?m)^[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+else:
+    text = text.replace("general = {", f'general = {{\n  interface = "{iface}";', 1)
+p.write_text(text)
+PY
+fi
 
 echo "Starting nqptp (${NQPTP_BIN})..."
 "$NQPTP_BIN" &
@@ -89,6 +102,12 @@ fi
 echo "Advertising AirPlay 2 receiver: ${AIRPLAY_NAME}"
 echo "PCM: 48000 Hz S16LE stereo (pinned). Group this destination with HomePods to measure sync."
 
+IFACE_ARGS=()
+if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
+  IFACE_ARGS=(--interface "$WLEDPLAY_INTERFACE")
+  echo "Interface: ${WLEDPLAY_INTERFACE}"
+fi
+
 "$SHAIRPORT_BIN" -c "$TMP_CONF" --service-type=airplay2 -o stdout | \
   "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime \
-    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le
+    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le "${IFACE_ARGS[@]}"
