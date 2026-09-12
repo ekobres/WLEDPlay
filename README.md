@@ -48,7 +48,7 @@ Or:
 WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
 ```
 
-On a multi-homed host, set `WLEDPLAY_INTERFACE` to the VLAN NIC (`ip -br addr`). That binds Shairport, WLED UDP, and `/status` to that interface.
+On a multi-homed host, set `WLEDPLAY_INTERFACE` to the VLAN NIC (`ip -br addr`). That binds Shairport, Avahi, WLED UDP, and `/status` to that interface. The container starts its own D-Bus + Avahi; if the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
 
 Then group **WLEDPlay** with a HomePod / Apple TV and measure visual vs audible sync (`docs/SYNC_MEASUREMENT.md`). AP2 PCM is pinned to **48000 Hz S16LE**.
 
@@ -62,7 +62,8 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_MULTICAST_ADDRESS` | Default `239.0.0.1` |
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
-| `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + UDP + HTTP |
+| `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + Avahi + UDP + HTTP |
+| `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
 | `WLEDPLAY_LOG_LEVEL` | Log level |
 
@@ -79,7 +80,7 @@ Requires **host networking** (mDNS, multicast, AirPlay 2 PTP). This does not wor
 WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
 ```
 
-Stack: `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
+Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
 
 No `/dev/snd` required.
 

@@ -47,7 +47,7 @@ RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
 FROM debian:bookworm-slim
 # Runtime package names are Debian 12 (bookworm), not Trixie.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates avahi-daemon dbus \
+    ca-certificates avahi-daemon dbus dbus-bin \
     libssl3 libsoxr0 libconfig9 libgcrypt20 \
     libplist3 libuuid1 libpopt0 libsodium23 \
     libavahi-client3 libavahi-common3 \
@@ -60,6 +60,7 @@ COPY --from=wledplay-build /src/target/release/wledplay /wledplay
 
 COPY config/config.yaml /etc/wledplay/config.yaml
 COPY docker/shairport-sync.conf /etc/shairport-sync.conf
+COPY docker/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/NOTICE /NOTICE
 COPY LICENSE /LICENSE
@@ -73,7 +74,8 @@ ENV WLEDPLAY_AIRPLAY_NAME=WLEDPlay \
     WLEDPLAY_PCM_RATE=48000 \
     WLEDPLAY_PCM_FORMAT=s16le \
     WLEDPLAY_INTERFACE= \
-    ENABLE_AIRPLAY2=1
+    ENABLE_AIRPLAY2=1 \
+    ENABLE_AVAHI=1
 
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

@@ -138,9 +138,10 @@ matrix still lags the speakers. WLEDPlay also drops stdin backlog older than
 
 Container entrypoint order:
 
-1. Start **nqptp** (AirPlay 2)
-2. Start **shairport-sync** (stdout → pipe)
+1. Start **dbus** + **avahi-daemon** (mDNS; pin to `WLEDPLAY_INTERFACE` when set)
+2. Start **nqptp** (AirPlay 2)
 3. Start **wledplay** (reads pipe)
+4. Start **shairport-sync** (stdout → pipe)
 
 On SIGTERM:
 
