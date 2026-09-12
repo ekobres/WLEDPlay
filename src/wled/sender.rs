@@ -107,13 +107,3 @@ fn bind_udp_device(socket: &Socket, name: &str, local: Ipv4Addr) {
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn bind_udp_device(_socket: &Socket, _name: &str, _local: Ipv4Addr) {}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn bind_udp_device(socket: &Socket, name: &str, local: Ipv4Addr) {
-    if let Err(e) = socket.bind_device(Some(name.as_bytes())) {
-        tracing::warn!("SO_BINDTODEVICE {name} failed ({e}); using bind address {local}");
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn bind_udp_device(_socket: &Socket, _name: &str, _local: Ipv4Addr) {}
