@@ -159,6 +159,14 @@ impl Analyzer {
     pub fn rms_proxy(&self) -> f32 {
         self.samples.volume_smth() / 255.0
     }
+
+    pub fn fft_bands(&self) -> [u8; 16] {
+        let mut fft = [0u8; 16];
+        for (i, v) in self.fft_result.iter().enumerate() {
+            fft[i] = (*v).min(254);
+        }
+        fft
+    }
 }
 
 pub fn hz_to_bin(hz: f32) -> usize {

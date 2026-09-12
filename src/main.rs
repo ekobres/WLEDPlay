@@ -72,6 +72,9 @@ struct PcmRuntime {
     last_pcm: Option<Instant>,
     stream_since: Option<Instant>,
     stdin_closed: bool,
+    connections: u64,
+    pcm_underruns: u64,
+    analysis_overruns: u64,
 }
 
 fn pcm_idle_timeout(rt: &PcmRuntime) -> Duration {
@@ -169,6 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         airplay: AirplayStatus {
             connected: false,
             receiver_name: cfg.airplay.name.clone(),
+            ..Default::default()
         },
         ..Default::default()
     }));
@@ -209,6 +213,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         last_pcm: None,
         stream_since: None,
         stdin_closed: false,
+        connections: 0,
+        pcm_underruns: 0,
+        analysis_overruns: 0,
     }));
 
     spawn_pcm_reader(
@@ -239,6 +246,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         status.lock().unwrap().airplay.connected = false;
                         idle_packets_sent = 0;
                         announced_end = true;
+                    } else if t.elapsed() > update_interval {
+                        rt.pcm_underruns += 1;
                     }
                 }
             }
@@ -289,9 +298,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let rt = runtime.lock().unwrap();
             update_status(
                 &status,
-                &rt.analyzer,
+                &rt,
                 &sender,
-                rt.pcm_frames,
                 packets_last_sec,
                 &cfg,
             );
@@ -365,6 +373,7 @@ fn spawn_pcm_reader(
                 if !pace_realtime && bytes_per_second > 0 {
                     let keep = (bytes_per_second * STDIN_KEEP_MS / 1000).max(4096);
                     if let Some(skipped) = discard_stdin_backlog(&mut reader, keep) {
+                        runtime.lock().unwrap().analysis_overruns += 1;
                         if last_skip_log.elapsed() >= Duration::from_secs(2) {
                             tracing::info!(
                                 "dropped {} bytes of PCM backlog (~{} ms)",
@@ -396,6 +405,7 @@ fn spawn_pcm_reader(
                             tracing::info!("PCM stream connected");
                             rt.stream_active = true;
                             rt.stream_since = Some(Instant::now());
+                            rt.connections += 1;
                             rt.analyzer.set_stream_active(true);
                             status.lock().unwrap().airplay.connected = true;
                             playback_clock = Instant::now();
@@ -444,23 +454,33 @@ fn start_ms() -> u64 {
 
 fn update_status(
     status: &SharedStatus,
-    analyzer: &Analyzer,
+    rt: &PcmRuntime,
     sender: &WledSender,
-    pcm_frames: u64,
     packets_per_sec: u64,
     cfg: &Config,
 ) {
     let mut s = status.lock().unwrap();
     s.audio.sample_rate = pcm::ANALYSIS_RATE;
     s.audio.channels = 1;
-    s.audio.rms = analyzer.rms_proxy();
-    s.audio.peak = analyzer.samples.sample_peak;
-    s.audio.dominant_frequency = analyzer.dominant_frequency();
+    s.audio.rms = rt.analyzer.rms_proxy();
+    s.audio.peak = rt.analyzer.samples.sample_peak;
+    s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
+    s.audio.bands = rt.analyzer.fft_bands();
+    s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
     s.wled.packets_per_second = packets_per_sec as f32;
     s.wled.destination = sender.destination();
-    s.counters.pcm_frames = pcm_frames;
-    s.counters.fft_frames = analyzer.fft_frames();
+    s.wled.destinations = cfg.wled.destinations.clone();
+    s.counters.pcm_frames = rt.pcm_frames;
+    s.counters.fft_frames = rt.analyzer.fft_frames();
     s.counters.packets_sent = sender.packets_sent();
     s.counters.udp_errors = sender.udp_errors();
+    s.counters.pcm_underruns = rt.pcm_underruns;
+    s.counters.analysis_overruns = rt.analysis_overruns;
+    s.counters.airplay_connections = rt.connections;
     s.airplay.receiver_name = cfg.airplay.name.clone();
+    s.airplay.connections = rt.connections;
+    s.airplay.stream_duration_s = rt
+        .stream_since
+        .map(|t| t.elapsed().as_secs_f32())
+        .unwrap_or(0.0);
 }

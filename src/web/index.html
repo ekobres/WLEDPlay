@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WLEDPlay</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --card: #141a2e;
+      --line: #243049;
+      --text: #e8eefc;
+      --muted: #8b97b3;
+      --ok: #3ee0a0;
+      --idle: #6b7590;
+      --peak: #ff5c7a;
+      --bar: #5b8cff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header, main { max-width: 880px; margin: 0 auto; padding: 20px; }
+    header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.04em; }
+    .pill {
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 0.78rem;
+      background: #1d243c;
+      color: var(--idle);
+    }
+    .pill.live { color: var(--ok); background: #143528; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
+    .value.peak { color: var(--peak); }
+    .meter { height: 10px; background: #0e1424; border-radius: 6px; overflow: hidden; margin-top: 8px; }
+    .meter > span { display: block; height: 100%; width: 0; background: var(--bar); }
+    .bands {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 4px;
+      height: 140px;
+      align-items: end;
+      margin-top: 12px;
+    }
+    .bands i {
+      display: block;
+      background: linear-gradient(180deg, #8ec5ff, var(--bar));
+      border-radius: 3px 3px 0 0;
+      min-height: 2px;
+      height: 2%;
+    }
+    pre { margin: 8px 0 0; color: var(--muted); font-size: 0.78rem; overflow: auto; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WLEDPlay</h1>
+    <span id="conn" class="pill">idle</span>
+    <span id="ver" class="pill"></span>
+  </header>
+  <main>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Receiver</div>
+        <div class="value" id="receiver">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Track</div>
+        <div class="value" id="track">No metadata yet</div>
+      </div>
+      <div class="card">
+        <div class="label">Level</div>
+        <div class="value" id="level">0%</div>
+        <div class="meter"><span id="levelbar"></span></div>
+      </div>
+      <div class="card">
+        <div class="label">Dominant frequency</div>
+        <div class="value" id="freq">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Packet rate</div>
+        <div class="value" id="pps">0 /s</div>
+      </div>
+      <div class="card">
+        <div class="label">Destinations</div>
+        <div class="value" id="dest">—</div>
+      </div>
+      <div class="card">
+        <div class="label">Sync offset</div>
+        <div class="value" id="sync">0 ms</div>
+      </div>
+      <div class="card">
+        <div class="label">Stream</div>
+        <div class="value" id="stream">0s · 0 connects</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label">16 FFT bands</div>
+      <div class="bands" id="bands"></div>
+      <pre id="counters"></pre>
+    </div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const bandsEl = $("bands");
+    for (let i = 0; i < 16; i++) bandsEl.appendChild(document.createElement("i"));
+    const bars = [...bandsEl.children];
+
+    async function tick() {
+      let s;
+      try { s = await fetch("/status").then((r) => r.json()); }
+      catch { return; }
+      const live = !!s.airplay.connected;
+      $("conn").textContent = live ? "live" : "idle";
+      $("conn").className = "pill" + (live ? " live" : "");
+      $("ver").textContent = s.version || "";
+      $("receiver").textContent = s.airplay.receiver_name || "WLEDPlay";
+      const md = s.metadata || {};
+      const parts = [md.title, md.artist, md.album].filter(Boolean);
+      $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
+      const rms = Number(s.audio.rms || 0);
+      $("level").textContent = Math.round(rms * 100) + "%" + (s.audio.peak ? "  peak" : "");
+      $("level").className = "value" + (s.audio.peak ? " peak" : "");
+      $("levelbar").style.width = Math.min(100, rms * 100) + "%";
+      const hz = Number(s.audio.dominant_frequency || 0);
+      $("freq").textContent = hz > 1 ? hz.toFixed(1) + " Hz" : "—";
+      $("pps").textContent = Number(s.wled.packets_per_second || 0).toFixed(0) + " /s";
+      $("dest").textContent = (s.wled.destinations && s.wled.destinations.length)
+        ? s.wled.destinations.join(", ")
+        : (s.wled.destination || "—");
+      $("sync").textContent = (s.audio.sync_offset_ms || 0) + " ms";
+      $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
+        + "s · " + (s.airplay.connections || 0) + " connects";
+      (s.audio.bands || []).forEach((v, i) => {
+        if (bars[i]) bars[i].style.height = Math.max(2, (v / 255) * 100) + "%";
+      });
+      const c = s.counters || {};
+      $("counters").textContent =
+        "pcm " + (c.pcm_frames || 0)
+        + "  fft " + (c.fft_frames || 0)
+        + "  packets " + (c.packets_sent || 0)
+        + "  udp_err " + (c.udp_errors || 0)
+        + "  underrun " + (c.pcm_underruns || 0)
+        + "  overrun " + (c.analysis_overruns || 0);
+    }
+    setInterval(tick, 200);
+    tick();
+  </script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 use axum::extract::State;
+use axum::response::Html;
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -12,6 +13,7 @@ pub struct RuntimeStatus {
     pub airplay: AirplayStatus,
     pub audio: AudioStatus,
     pub wled: WledStatus,
+    pub metadata: TrackMetadataStatus,
     pub counters: CounterStatus,
 }
 
@@ -19,6 +21,8 @@ pub struct RuntimeStatus {
 pub struct AirplayStatus {
     pub connected: bool,
     pub receiver_name: String,
+    pub connections: u64,
+    pub stream_duration_s: f32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -28,12 +32,22 @@ pub struct AudioStatus {
     pub rms: f32,
     pub peak: bool,
     pub dominant_frequency: f32,
+    pub bands: [u8; 16],
+    pub sync_offset_ms: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct WledStatus {
     pub packets_per_second: f32,
     pub destination: String,
+    pub destinations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TrackMetadataStatus {
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -42,6 +56,9 @@ pub struct CounterStatus {
     pub fft_frames: u64,
     pub packets_sent: u64,
     pub udp_errors: u64,
+    pub pcm_underruns: u64,
+    pub analysis_overruns: u64,
+    pub airplay_connections: u64,
 }
 
 pub type SharedStatus = Arc<Mutex<RuntimeStatus>>;
@@ -52,6 +69,7 @@ pub async fn serve(
     status: SharedStatus,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
+        .route("/", get(ui))
         .route("/health", get(health))
         .route("/status", get(status_handler))
         .with_state(status);
@@ -61,12 +79,17 @@ pub async fn serve(
     socket.set_reuse_address(true)?;
     #[cfg(unix)]
     socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
     socket.listen(128)?;
     let listener = TcpListener::from_std(socket.into())?;
     tracing::info!("HTTP status listening on http://{listen}:{port}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn ui() -> Html<&'static str> {
+    Html(include_str!("index.html"))
 }
 
 async fn health() -> &'static str {

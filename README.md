@@ -70,6 +70,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 
 ## HTTP status
 
+- `GET /` — debug UI (connection, level, 16 bands, destinations)
 - `GET /health` — liveness
 - `GET /status` — JSON runtime state (default `:8080`)
 
