@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
@@ -46,6 +47,9 @@ pub struct AirplayConfig {
 pub struct AudioConfig {
     #[serde(default)]
     pub sync_offset_ms: i32,
+    /// Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM).
+    #[serde(default)]
+    pub shairport_latency_offset_s: f64,
     #[serde(default = "default_gain")]
     pub gain: GainSetting,
     #[serde(default)]
@@ -83,6 +87,8 @@ pub struct WledConfig {
     pub port: u16,
     #[serde(default)]
     pub destinations: Vec<String>,
+    #[serde(default = "default_multicast_enabled")]
+    pub multicast_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +121,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             sync_offset_ms: 0,
+            shairport_latency_offset_s: 0.0,
             gain: default_gain(),
             update_hz: 50,
         }
@@ -135,6 +142,7 @@ impl Default for WledConfig {
             multicast_address: default_multicast(),
             port: default_port(),
             destinations: vec![],
+            multicast_enabled: true,
         }
     }
 }
@@ -210,6 +218,9 @@ fn default_pcm_format() -> String {
 fn default_gain() -> GainSetting {
     GainSetting::Auto
 }
+fn default_multicast_enabled() -> bool {
+    true
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -219,6 +230,7 @@ impl Default for Config {
             },
             audio: AudioConfig {
                 sync_offset_ms: 0,
+                shairport_latency_offset_s: 0.0,
                 gain: default_gain(),
                 update_hz: 50,
             },
@@ -226,6 +238,7 @@ impl Default for Config {
                 multicast_address: default_multicast(),
                 port: default_port(),
                 destinations: vec![],
+                multicast_enabled: true,
             },
             logging: LoggingConfig {
                 level: default_log_level(),
@@ -313,6 +326,33 @@ impl Config {
                 self.metadata.pipe = v;
             }
         }
+        if let Ok(v) = std::env::var("WLEDPLAY_SHAIRPORT_LATENCY_OFFSET") {
+            if !v.is_empty() {
+                if let Ok(p) = v.parse() {
+                    self.audio.shairport_latency_offset_s = p;
+                }
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_MULTICAST_ENABLED") {
+            self.wled.multicast_enabled = v != "0" && !v.eq_ignore_ascii_case("false");
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let body = serde_yaml::to_string(self).map_err(|e| format!("serialize config: {e}"))?;
+        std::fs::write(
+            path,
+            format!("# WLEDPlay configuration (written by the control UI)\n{body}"),
+        )
+        .map_err(|e| format!("write {}: {e}", path.display()))
+    }
+
+    pub fn path_writable(path: &Path) -> bool {
+        File::options().write(true).open(path).is_ok()
+            || path
+                .parent()
+                .map(|dir| File::options().write(true).open(dir).is_ok())
+                .unwrap_or(false)
     }
 
     pub fn agc_mode(&self) -> AgcMode {
@@ -338,7 +378,7 @@ impl Config {
     }
 }
 
-fn parse_destination(s: &str, default_port: u16) -> Option<SocketAddr> {
+pub fn parse_destination(s: &str, default_port: u16) -> Option<SocketAddr> {
     let s = s.trim();
     if s.is_empty() {
         return None;

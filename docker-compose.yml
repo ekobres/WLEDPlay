@@ -5,10 +5,12 @@ services:
     container_name: wledplay
     network_mode: host
     restart: unless-stopped
+    volumes:
+      - ./config/config.yaml:/etc/wledplay/config.yaml
     environment:
-      WLEDPLAY_AIRPLAY_NAME: "WLEDPlay"
-      WLEDPLAY_MULTICAST_ADDRESS: "239.0.0.1"
-      WLEDPLAY_PORT: "11988"
+      WLEDPLAY_AIRPLAY_NAME: "${WLEDPLAY_AIRPLAY_NAME:-}"
+      WLEDPLAY_MULTICAST_ADDRESS: "${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
+      WLEDPLAY_PORT: "${WLEDPLAY_PORT:-11988}"
       WLEDPLAY_LOG_LEVEL: "info"
       WLEDPLAY_DESTINATION: "${WLEDPLAY_DESTINATION:-}"
       WLEDPLAY_INTERFACE: "${WLEDPLAY_INTERFACE:-}"

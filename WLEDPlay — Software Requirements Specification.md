@@ -311,7 +311,7 @@ wled:
     - 10.0.20.42
 ```
 
-Multicast should remain the default.
+Multicast should remain the default and must be toggleable at runtime from the web UI without removing configured unicast destinations.
 
 ---
 
@@ -360,7 +360,7 @@ Do not artificially delay visualization unless timing information demonstrates t
 
 For the initial implementation, synchronization accuracy should be measured and documented.
 
-Future versions may implement configurable timing compensation.
+Configurable timing compensation is required.
 
 Example:
 
@@ -369,7 +369,7 @@ audio:
   sync_offset_ms: 0
 ```
 
-Positive and negative offsets should eventually be supported.
+Positive and negative offsets must be supported. The operator should be able to adjust delay from the web UI while a stream is active (see §22.2). The UI may present a single “visual delay” control rather than separate Shairport and WLEDPlay knobs, as long as the stored configuration remains explicit.
 
 ---
 
@@ -409,6 +409,8 @@ Example:
 airplay:
   name: "WLED Visualizer"
 ```
+
+The operator must be able to rename the instance from the web UI. Changing the advertised AirPlay name may restart Shairport Sync so Bonjour re-publishes the new name. An in-progress AirPlay session may drop; that is acceptable if the UI warns before applying.
 
 ---
 
@@ -526,7 +528,15 @@ WLEDPLAY_MULTICAST_ADDRESS
 WLEDPLAY_PORT
 WLEDPLAY_SYNC_OFFSET_MS
 WLEDPLAY_LOG_LEVEL
+WLEDPLAY_INTERFACE
+WLEDPLAY_DESTINATION
 ```
+
+Settings changed from the web UI must persist across process restart when a writable configuration file is available. Docker deployments should mount that file (or an overlay) rather than relying on the image-baked copy.
+
+If the configuration path is read-only, apply the change in memory and report that it will revert on restart.
+
+Environment variables remain the override at process start. After a UI persist + restart, the saved YAML is the source of truth unless an env var is still set.
 
 ---
 
@@ -575,18 +585,19 @@ Debug logging may expose:
 
 # 21. Status Interface
 
-A simple HTTP status endpoint is desirable.
+A simple HTTP status endpoint is required.
 
-Minimum endpoints:
+Minimum read endpoints:
 
 ```text
 GET /health
 GET /status
+GET /config
 ```
 
 `/health` should be appropriate for container health checks.
 
-`/status` should return JSON containing information such as:
+`/status` should return JSON containing runtime information such as:
 
 ```json
 {
@@ -609,28 +620,100 @@ GET /status
 }
 ```
 
-Exact schema may evolve.
+`/config` should return the editable operator settings and enough context to render controls (available network interfaces, whether multicast is enabled, current delay, destinations, persistence state). Exact schema may evolve.
+
+Control endpoints are specified in §22.2.
 
 ---
 
-# 22. Optional Web UI
+# 22. Web UI
 
-A minimal browser UI may be implemented after the core functionality works.
+A browser UI is required after the core audio path works.
 
-It should display:
+WLEDPlay must function fully without the UI (`--no-web` or `web.enabled: false`). The audio pipeline must not depend on a connected browser.
+
+## 22.1 Display
+
+The UI should display:
 
 - AirPlay connection state;
-- current track metadata if available;
+- current track metadata and artwork if available;
 - audio level;
-- 16 FFT bands;
+- 16 FFT bands at the analysis/send frame rate;
 - dominant frequency;
 - packet rate;
 - WLED destinations;
-- synchronization offset.
+- multicast on/off;
+- current network interface;
+- synchronization / visual delay;
+- AirPlay receiver name.
 
-Avoid making the web interface a dependency of the audio pipeline.
+## 22.2 Live control
 
-WLEDPlay must function fully without the UI.
+The UI is the primary operator console for a running instance. To the extent a setting can be applied without breaking the AirPlay or WLED path, it must be changeable live. Settings that require a subsystem restart must still be changeable from the UI, with an explicit confirm step.
+
+### Required controls
+
+| Control | Expected behavior |
+|---|---|
+| Visual delay | Advance or retard visualization relative to the speakers. Apply immediately during an active stream. Support both earlier and later visuals (negative and positive compensation). |
+| AirPlay name | Rename the advertised receiver from the default `WLEDPlay`. Re-advertise via mDNS. Warn that the current AirPlay session may drop. |
+| Network interface | When more than one usable IPv4 NIC is present, choose which one binds AirPlay / Avahi / WLED UDP. HTTP may remain on all interfaces so the management address keeps working. Apply via stack restart. |
+| Multicast | Enable or disable WLED Audio Sync multicast send/join without stopping unicast destinations. Apply immediately. |
+| Unicast destinations | Add or remove WLED controller IPs (and optional port). Apply immediately. An empty list with multicast off means “send nowhere.” |
+| Restart | Restart the WLEDPlay process (and, in the Docker stack, Shairport / NQPTP as needed) so pending bind/name/interface changes take effect. Docker `restart: unless-stopped` (or equivalent) must bring the stack back. |
+
+### Additional controls (should)
+
+- WLED UDP port
+- Multicast group address
+- Shairport latency offset, if exposed separately from the unified visual-delay control
+- AGC / gain, if changing it does not require rebuilding the analyzer mid-buffer
+
+### Apply vs restart
+
+Classify every control as:
+
+```text
+live     — takes effect on the next packet / immediately
+restart  — requires process or Shairport restart
+```
+
+`GET /config` must mark each field with that classification.
+
+Live examples: visual delay, multicast enable, destination list.
+
+Restart examples: AirPlay name, network interface, HTTP listen address (do not offer HTTP bind/port changes that would disconnect the UI without a warning).
+
+### Control API
+
+Minimum write endpoints:
+
+```text
+GET    /config
+PATCH  /config
+POST   /restart
+GET    /interfaces
+```
+
+`PATCH /config` accepts a partial JSON body of operator settings. Unknown fields are ignored. Invalid values return `4xx` and leave the previous settings unchanged.
+
+`GET /interfaces` returns the host’s usable IPv4 interfaces (name, address, whether currently selected).
+
+`POST /restart` initiates an orderly shutdown after the current settings have been persisted (when possible). The container/service supervisor restarts the process.
+
+The control API must not be required for audio-reactive operation.
+
+### Persistence
+
+Successful `PATCH /config` writes the new values to the configured YAML file when that path is writable. The response indicates `persisted: true|false`.
+
+### Safety
+
+- Do not interrupt PCM analysis to render the UI.
+- A failed apply must leave the last good configuration in effect.
+- Confirm destructive or session-dropping actions (rename, interface change, restart).
+- The control surface is local-LAN only (see §32). No Internet callback, account, or cloud dashboard.
 
 ---
 
@@ -941,6 +1024,8 @@ outside the local network.
 
 Any future telemetry must be explicit opt-in.
 
+The HTTP control API (§22.2) is reachable by any client that can open the listen address. v1 assumes a trusted LAN. Do not bind the control UI to the public Internet. Optional shared-secret or listen-address restriction may be added later; it is not required for the initial control surface.
+
 ---
 
 # 33. Privacy
@@ -1106,7 +1191,23 @@ Implement:
 /status
 ```
 
-Add minimal visualization/debugging UI if useful.
+Add visualization/debugging UI if useful.
+
+---
+
+## Phase 7 — Live operator console
+
+Add the §22.2 control surface:
+
+- visual delay while streaming;
+- AirPlay rename;
+- interface selection on multi-homed hosts;
+- multicast enable/disable;
+- unicast destination edit;
+- persist-to-config;
+- orderly restart.
+
+The audio pipeline must keep working if the UI is closed or disabled.
 
 ---
 

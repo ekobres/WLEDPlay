@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
 
+CFG_YAML="/etc/wledplay/config.yaml"
+yaml_quoted() {
+  key=$1
+  sed -n "s/^[[:space:]]*${key}:[[:space:]]*\"\\(.*\\)\"/\\1/p" "$CFG_YAML" 2>/dev/null | head -1
+}
+
+WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-}"
+if [ -z "$WLEDPLAY_AIRPLAY_NAME" ]; then
+  WLEDPLAY_AIRPLAY_NAME="$(yaml_quoted name)"
+fi
 WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-WLEDPlay}"
 WLEDPLAY_MULTICAST_ADDRESS="${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
 WLEDPLAY_PORT="${WLEDPLAY_PORT:-11988}"
@@ -15,7 +25,13 @@ WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
 WLEDPLAY_DESTINATION="${WLEDPLAY_DESTINATION:-}"
 WLEDPLAY_INTERFACE="${WLEDPLAY_INTERFACE:-}"
+if [ -z "$WLEDPLAY_INTERFACE" ]; then
+  WLEDPLAY_INTERFACE="$(yaml_quoted interface)"
+fi
 WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
+if [ -z "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
+  WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="$(sed -n 's/^[[:space:]]*shairport_latency_offset_s:[[:space:]]*//p' "$CFG_YAML" 2>/dev/null | head -1)"
+fi
 ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
 PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
@@ -153,4 +169,5 @@ shairport-sync -c /tmp/shairport-sync.conf > "$PCM_FIFO" &
 SHAIRPORT_PID=$!
 
 echo "WLEDPlay stack running (AirPlay: ${WLEDPLAY_AIRPLAY_NAME}, WLED: ${WLEDPLAY_MULTICAST_ADDRESS}:${WLEDPLAY_PORT})"
-wait "$SHAIRPORT_PID"
+wait "$WLEDPLAY_PID" || true
+shutdown

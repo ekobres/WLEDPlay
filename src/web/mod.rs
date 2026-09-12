@@ -1,8 +1,11 @@
+use crate::control::{ConfigPatch, Control};
 use crate::metadata::SharedArtwork;
+use crate::netif::InterfaceInfo;
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::{routing::get, Json, Router};
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::Serialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
@@ -13,6 +16,7 @@ use tokio::net::TcpListener;
 pub struct AppState {
     pub status: SharedStatus,
     pub artwork: SharedArtwork,
+    pub control: Option<Control>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -51,6 +55,7 @@ pub struct WledStatus {
     pub packets_per_second: f32,
     pub destination: String,
     pub destinations: Vec<String>,
+    pub multicast_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -84,6 +89,9 @@ pub async fn serve(
         .route("/health", get(health))
         .route("/status", get(status_handler))
         .route("/artwork", get(artwork_handler))
+        .route("/config", get(config_get).patch(config_patch))
+        .route("/interfaces", get(interfaces_handler))
+        .route("/restart", post(restart_handler))
         .with_state(state);
 
     let addr: SocketAddr = format!("{listen}:{port}").parse()?;
@@ -124,5 +132,38 @@ async fn artwork_handler(State(state): State<AppState>) -> Response {
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn config_get(State(state): State<AppState>) -> Response {
+    match &state.control {
+        Some(ctrl) => Json(ctrl.view()).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+
+async fn config_patch(State(state): State<AppState>, Json(patch): Json<ConfigPatch>) -> Response {
+    let Some(ctrl) = &state.control else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match ctrl.apply_patch(patch) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+async fn interfaces_handler(State(state): State<AppState>) -> Json<Vec<InterfaceInfo>> {
+    Json(match &state.control {
+        Some(ctrl) => ctrl.view().interfaces,
+        None => vec![],
+    })
+}
+
+async fn restart_handler(State(state): State<AppState>) -> StatusCode {
+    if let Some(ctrl) = &state.control {
+        ctrl.request_restart();
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
     }
 }

@@ -67,16 +67,20 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_WEB_PORT` | HTTP port (default `8080`) |
 | `WLEDPLAY_METADATA_PIPE` | Shairport metadata FIFO (Docker: `/run/wledplay.meta`) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
+| `WLEDPLAY_MULTICAST_ENABLED` | `false` / `0` disables multicast send (unicast still works) |
 | `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
 | `WLEDPLAY_LOG_LEVEL` | Log level |
 
 ## HTTP status
 
-- `GET /` — debug UI (connection, track, artwork, level, 16 bands, destinations)
+- `GET /` — debug UI and operator controls
 - `GET /health` — liveness
 - `GET /status` — JSON runtime state (default `:8080`)
 - `GET /artwork` — current cover art (404 if none)
+- `GET /config` / `PATCH /config` — live settings
+- `GET /interfaces` — usable IPv4 NICs
+- `POST /restart` — orderly process restart
 
 ## Docker (Linux host)
 

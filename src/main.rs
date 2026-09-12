@@ -1,17 +1,20 @@
 use clap::Parser;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing_subscriber::EnvFilter;
 use wledplay::audio::Analyzer;
 use wledplay::config::Config;
+use wledplay::control::Control;
 use wledplay::metadata::{self, SharedArtwork, TrackMetadata};
 use wledplay::pcm::{self, PcmDecoder};
 use wledplay::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
-use wledplay::wled::WledSender;
+use wledplay::wled::{AudioSyncPacket, WledSender};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Silence packets sent after stream end before stopping UDP (SRS §34).
@@ -22,6 +25,8 @@ const PCM_IDLE_START: Duration = Duration::from_millis(2000);
 const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 /// Keep at most this much unread stdin PCM when not realtime-pacing (AirPlay).
 const STDIN_KEEP_MS: u64 = 80;
+/// Max queued Audio Sync packets for live visual delay (5s at 50 Hz, plus slack).
+const DELAY_QUEUE_MAX: usize = 300;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -98,6 +103,7 @@ fn pcm_idle_timeout(rt: &PcmRuntime) -> Duration {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
+    let config_path = cli.config.clone();
     let mut cfg = Config::load(cli.config.as_deref());
 
     if cli.multicast != "239.0.0.1" {
@@ -189,12 +195,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }));
     let artwork: SharedArtwork = Arc::new(Mutex::new(None));
 
+    let mut sender = WledSender::new(
+        cfg.multicast_ip(),
+        cfg.wled.port,
+        unicast,
+        iface_bind.as_ref().map(|b| b.ipv4),
+        iface_bind.as_ref().map(|b| b.name.as_str()),
+    )?;
+    sender.set_multicast_enabled(cfg.wled.multicast_enabled);
+    let sender = Arc::new(Mutex::new(sender));
+    let live_cfg = Arc::new(Mutex::new(cfg.clone()));
+    let restart = Arc::new(AtomicBool::new(false));
+    let control = Control {
+        config: live_cfg.clone(),
+        sender: sender.clone(),
+        config_path: config_path.clone(),
+        applied_name: cfg.airplay.name.clone(),
+        applied_interface: cfg.network.interface.clone(),
+        applied_shairport: cfg.audio.shairport_latency_offset_s,
+        restart: restart.clone(),
+    };
+
     if cfg.web.enabled && !cli.no_web {
         let listen = cfg.web.listen.clone();
         let port = cfg.web.port;
         let state = AppState {
             status: status.clone(),
             artwork: artwork.clone(),
+            control: Some(control),
         };
         tokio::spawn(async move {
             if let Err(e) = web::serve(&listen, port, state).await {
@@ -206,14 +234,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !cfg.metadata.pipe.is_empty() {
         spawn_metadata_reader(cfg.metadata.pipe.clone(), status.clone(), artwork.clone());
     }
-
-    let mut sender = WledSender::new(
-        cfg.multicast_ip(),
-        cfg.wled.port,
-        unicast,
-        iface_bind.as_ref().map(|b| b.ipv4),
-        iface_bind.as_ref().map(|b| b.name.as_str()),
-    )?;
 
     let update_interval = Duration::from_millis(1000 / cfg.audio.update_hz.max(1) as u64);
     let stdin_is_pipe = !io::stdin().is_terminal();
@@ -257,8 +277,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut announced_end = false;
     let mut last_pcm_frames = 0u64;
     let mut stale_sends = 0u32;
+    let mut delay_q: VecDeque<(Instant, AudioSyncPacket)> = VecDeque::new();
 
     loop {
+        if restart.load(Ordering::Relaxed) {
+            tracing::info!("Restart requested; exiting so the supervisor can relaunch");
+            break;
+        }
         let now = Instant::now();
         if last_send.elapsed() >= update_interval {
             let mut rt = runtime.lock().unwrap();
@@ -290,28 +315,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     stale_sends = 0;
                     last_pcm_frames = rt.pcm_frames;
                 }
-                if cfg.audio.sync_offset_ms > 0 {
-                    drop(rt);
-                    thread::sleep(Duration::from_millis(cfg.audio.sync_offset_ms as u64));
-                    rt = runtime.lock().unwrap();
-                }
                 let pkt = rt.analyzer.build_packet();
-                publish_audio(&status, &rt, &cfg);
+                publish_audio(&status, &rt, &live_cfg.lock().unwrap());
+                let delay_ms = live_cfg.lock().unwrap().audio.sync_offset_ms.max(0) as u64;
                 drop(rt);
-                sender.send(&pkt)?;
-                packets_last_sec += 1;
+                enqueue_packet(&mut delay_q, pkt, delay_ms);
             } else if udp_active {
                 let pkt = rt.analyzer.silence_packet();
                 let closed = rt.stdin_closed;
-                publish_audio(&status, &rt, &cfg);
+                publish_audio(&status, &rt, &live_cfg.lock().unwrap());
+                let delay_ms = live_cfg.lock().unwrap().audio.sync_offset_ms.max(0) as u64;
                 drop(rt);
-                sender.send(&pkt)?;
-                packets_last_sec += 1;
+                enqueue_packet(&mut delay_q, pkt, delay_ms);
                 idle_packets_sent += 1;
                 if idle_packets_sent >= IDLE_GRACE_PACKETS {
                     udp_active = false;
                     tracing::info!("Audio Sync transmission stopped (stream idle)");
-                    if stdin_is_pipe && closed {
+                    if stdin_is_pipe && closed && delay_q.is_empty() {
                         tracing::info!("Input closed; exiting");
                         break;
                     }
@@ -319,7 +339,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 let closed = rt.stdin_closed;
                 drop(rt);
-                if stdin_is_pipe && closed {
+                if stdin_is_pipe && closed && delay_q.is_empty() {
                     if !announced_end {
                         tracing::info!("Input closed; exiting");
                     }
@@ -330,14 +350,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             last_send = now;
         }
 
+        let due = Instant::now();
+        while delay_q.front().map(|(t, _)| due >= *t).unwrap_or(false) {
+            let (_, pkt) = delay_q.pop_front().unwrap();
+            sender.lock().unwrap().send(&pkt)?;
+            packets_last_sec += 1;
+        }
+
         if last_status.elapsed() >= Duration::from_secs(1) {
             let rt = runtime.lock().unwrap();
+            let live = live_cfg.lock().unwrap();
             update_status(
                 &status,
                 &rt,
-                &sender,
+                &sender.lock().unwrap(),
                 packets_last_sec,
-                &cfg,
+                &live,
             );
             packets_last_sec = 0;
             last_status = Instant::now();
@@ -347,6 +375,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+fn enqueue_packet(
+    queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
+    packet: AudioSyncPacket,
+    delay_ms: u64,
+) {
+    queue.push_back((Instant::now() + Duration::from_millis(delay_ms), packet));
+    while queue.len() > DELAY_QUEUE_MAX {
+        queue.pop_front();
+    }
 }
 
 fn discard_stdin_backlog(reader: &mut impl Read, keep_bytes: u64) -> Option<usize> {
@@ -591,6 +630,7 @@ fn update_status(
     s.wled.packets_per_second = packets_per_sec as f32;
     s.wled.destination = sender.destination();
     s.wled.destinations = cfg.wled.destinations.clone();
+    s.wled.multicast_enabled = cfg.wled.multicast_enabled;
     s.counters.pcm_frames = rt.pcm_frames;
     s.counters.fft_frames = rt.analyzer.fft_frames();
     s.counters.packets_sent = sender.packets_sent();

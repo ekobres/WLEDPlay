@@ -1,11 +1,48 @@
 //! Resolve a NIC name to the IPv4 we should bind on a multi-homed host.
 
+use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Debug, Clone)]
 pub struct InterfaceBind {
     pub name: String,
     pub ipv4: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InterfaceInfo {
+    pub name: String,
+    pub ipv4: String,
+    pub selected: bool,
+}
+
+pub fn list_interfaces(selected: &str) -> Vec<InterfaceInfo> {
+    let mut out = Vec::new();
+    let Ok(addrs) = if_addrs::get_if_addrs() else {
+        return out;
+    };
+    for iface in addrs {
+        if iface.is_loopback() {
+            continue;
+        }
+        let IpAddr::V4(ipv4) = iface.ip() else {
+            continue;
+        };
+        if ipv4.is_unspecified() || ipv4.is_link_local() {
+            continue;
+        }
+        let selected = !selected.is_empty() && iface.name == selected;
+        if out.iter().any(|i: &InterfaceInfo| i.name == iface.name && i.ipv4 == ipv4.to_string()) {
+            continue;
+        }
+        out.push(InterfaceInfo {
+            name: iface.name,
+            ipv4: ipv4.to_string(),
+            selected,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 pub fn resolve_interface(name: &str) -> Result<InterfaceBind, String> {

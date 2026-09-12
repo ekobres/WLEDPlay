@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod config;
+pub mod control;
 pub mod metadata;
 pub mod netif;
 pub mod pcm;

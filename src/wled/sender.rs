@@ -13,6 +13,7 @@ pub struct WledSender {
     socket: UdpSocket,
     multicast_addr: SocketAddr,
     unicast_destinations: Vec<SocketAddr>,
+    multicast_enabled: bool,
     packets_sent: u64,
     udp_errors: u64,
 }
@@ -48,18 +49,29 @@ impl WledSender {
             socket: socket.into(),
             multicast_addr: SocketAddr::new(multicast, port),
             unicast_destinations,
+            multicast_enabled: true,
             packets_sent: 0,
             udp_errors: 0,
         })
     }
 
+    pub fn set_unicast(&mut self, destinations: Vec<SocketAddr>) {
+        self.unicast_destinations = destinations;
+    }
+
+    pub fn set_multicast_enabled(&mut self, enabled: bool) {
+        self.multicast_enabled = enabled;
+    }
+
     pub fn send(&mut self, packet: &AudioSyncPacket) -> Result<(), SendError> {
         let bytes = packet.encode();
-        match self.socket.send_to(&bytes, self.multicast_addr) {
-            Ok(_) => self.packets_sent += 1,
-            Err(e) => {
-                self.udp_errors += 1;
-                tracing::warn!("multicast send failed: {e}");
+        if self.multicast_enabled {
+            match self.socket.send_to(&bytes, self.multicast_addr) {
+                Ok(_) => self.packets_sent += 1,
+                Err(e) => {
+                    self.udp_errors += 1;
+                    tracing::warn!("multicast send failed: {e}");
+                }
             }
         }
         for dest in &self.unicast_destinations.clone() {
@@ -82,18 +94,17 @@ impl WledSender {
     }
 
     pub fn destination(&self) -> String {
-        if self.unicast_destinations.is_empty() {
-            format!("{}", self.multicast_addr)
+        let mut parts = Vec::new();
+        if self.multicast_enabled {
+            parts.push(self.multicast_addr.to_string());
+        }
+        for d in &self.unicast_destinations {
+            parts.push(d.ip().to_string());
+        }
+        if parts.is_empty() {
+            "none".into()
         } else {
-            format!(
-                "{} + {}",
-                self.multicast_addr,
-                self.unicast_destinations
-                    .iter()
-                    .map(|d| d.ip().to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )
+            parts.join(" + ")
         }
     }
 }
