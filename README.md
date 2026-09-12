@@ -63,6 +63,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
 | `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + Avahi + UDP + HTTP |
+| `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
 | `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
 | `WLEDPLAY_LOG_LEVEL` | Log level |

@@ -15,6 +15,7 @@ WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
 WLEDPLAY_DESTINATION="${WLEDPLAY_DESTINATION:-}"
 WLEDPLAY_INTERFACE="${WLEDPLAY_INTERFACE:-}"
+WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
 ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
 PCM_FIFO="/run/wledplay.pcm"
 
@@ -103,6 +104,10 @@ if [ -n "$WLEDPLAY_INTERFACE" ]; then
 " /tmp/shairport-sync.conf
   fi
   echo "Shairport interface: ${WLEDPLAY_INTERFACE}"
+fi
+if [ -n "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
+  sed -i "s|^[[:space:]]*audio_backend_latency_offset_in_seconds = .*|  audio_backend_latency_offset_in_seconds = ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET};|" /tmp/shairport-sync.conf
+  echo "Shairport latency offset: ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET}s"
 fi
 
 rm -f "$PCM_FIFO"
