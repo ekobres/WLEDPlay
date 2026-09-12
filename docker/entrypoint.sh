@@ -18,6 +18,7 @@ WLEDPLAY_INTERFACE="${WLEDPLAY_INTERFACE:-}"
 WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
 ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
 PCM_FIFO="/run/wledplay.pcm"
+META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
 
 wait_for() {
   path=$1
@@ -110,8 +111,9 @@ if [ -n "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   echo "Shairport latency offset: ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET}s"
 fi
 
-rm -f "$PCM_FIFO"
+rm -f "$PCM_FIFO" "$META_FIFO"
 mkfifo "$PCM_FIFO"
+mkfifo "$META_FIFO"
 
 DEST_ARGS=""
 if [ -n "$WLEDPLAY_DESTINATION" ]; then
@@ -142,6 +144,7 @@ echo "Starting wledplay..."
   --pcm-format "${WLEDPLAY_PCM_FORMAT}" \
   $DEST_ARGS \
   $IFACE_ARGS \
+  --metadata-pipe "$META_FIFO" \
   < "$PCM_FIFO" &
 WLEDPLAY_PID=$!
 

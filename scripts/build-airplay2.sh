@@ -54,7 +54,7 @@ clone_tag https://github.com/mikebrady/shairport-sync.git "$SRC/shairport-sync" 
   cd "$SRC/shairport-sync"
   autoreconf -fi
   ./configure --prefix="$PREFIX" \
-    --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr
+    --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata
   make -j"$(nproc 2>/dev/null || echo 4)"
   make install
 )

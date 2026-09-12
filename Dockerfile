@@ -25,7 +25,7 @@ RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
     autoreconf -fi && \
-    ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr && \
+    ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata && \
     make -j"$(nproc)" && \
     make install
 
@@ -77,6 +77,7 @@ ENV WLEDPLAY_AIRPLAY_NAME=WLEDPlay \
     WLEDPLAY_WEB_LISTEN=0.0.0.0 \
     WLEDPLAY_WEB_PORT=8080 \
     WLEDPLAY_SHAIRPORT_LATENCY_OFFSET= \
+    WLEDPLAY_METADATA_PIPE=/run/wledplay.meta \
     ENABLE_AIRPLAY2=1 \
     ENABLE_AVAHI=1
 

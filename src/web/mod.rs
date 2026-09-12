@@ -1,11 +1,19 @@
+use crate::metadata::SharedArtwork;
 use axum::extract::State;
-use axum::response::Html;
+use axum::http::{header, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub status: SharedStatus,
+    pub artwork: SharedArtwork,
+}
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RuntimeStatus {
@@ -23,6 +31,7 @@ pub struct AirplayStatus {
     pub receiver_name: String,
     pub connections: u64,
     pub stream_duration_s: f32,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -49,6 +58,7 @@ pub struct TrackMetadataStatus {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub title: Option<String>,
+    pub has_artwork: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -67,13 +77,14 @@ pub type SharedStatus = Arc<Mutex<RuntimeStatus>>;
 pub async fn serve(
     listen: &str,
     port: u16,
-    status: SharedStatus,
+    state: AppState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
         .route("/", get(ui))
         .route("/health", get(health))
         .route("/status", get(status_handler))
-        .with_state(status);
+        .route("/artwork", get(artwork_handler))
+        .with_state(state);
 
     let addr: SocketAddr = format!("{listen}:{port}").parse()?;
     let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
@@ -97,6 +108,21 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn status_handler(State(status): State<SharedStatus>) -> Json<RuntimeStatus> {
-    Json(status.lock().unwrap().clone())
+async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
+    Json(state.status.lock().unwrap().clone())
+}
+
+async fn artwork_handler(State(state): State<AppState>) -> Response {
+    let art = state.artwork.lock().unwrap();
+    match art.as_ref() {
+        Some(a) => (
+            [
+                (header::CONTENT_TYPE, a.content_type.clone()),
+                (header::CACHE_CONTROL, "no-store".into()),
+            ],
+            a.bytes.clone(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }

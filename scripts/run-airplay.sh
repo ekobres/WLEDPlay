@@ -80,5 +80,11 @@ if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
   echo "Interface: ${WLEDPLAY_INTERFACE}"
 fi
 
+META_PIPE="${WLEDPLAY_METADATA_PIPE:-/tmp/wledplay.meta}"
+rm -f "$META_PIPE"
+mkfifo "$META_PIPE"
+echo "Metadata pipe: ${META_PIPE}"
+
 "$SHAIRPORT_BIN" -c "$TMP_CONF" -o stdout | \
-  "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime "${IFACE_ARGS[@]}"
+  "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime \
+    --metadata-pipe "$META_PIPE" "${IFACE_ARGS[@]}"

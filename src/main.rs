@@ -1,5 +1,6 @@
 use clap::Parser;
-use std::io::{self, IsTerminal, Read};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, IsTerminal, Read};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -7,8 +8,9 @@ use std::time::{Duration, Instant};
 use tracing_subscriber::EnvFilter;
 use wledplay::audio::Analyzer;
 use wledplay::config::Config;
+use wledplay::metadata::{self, SharedArtwork, TrackMetadata};
 use wledplay::pcm::{self, PcmDecoder};
-use wledplay::web::{self, AirplayStatus, RuntimeStatus, SharedStatus};
+use wledplay::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use wledplay::wled::WledSender;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,11 +24,16 @@ const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 const STDIN_KEEP_MS: u64 = 80;
 
 #[derive(Parser, Debug)]
-#[command(name = "wledplay", about = "AirPlay-to-WLED audio-reactive bridge")]
+#[command(
+    name = "wledplay",
+    version,
+    about = "AirPlay-to-WLED audio-reactive bridge"
+)]
 struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
+    /// `stdin` or a PCM file / FIFO path
     #[arg(long, default_value = "stdin")]
     input: String,
 
@@ -63,6 +70,10 @@ struct Cli {
     /// Bind AirPlay/UDP to this host NIC (e.g. eth1). Env: WLEDPLAY_INTERFACE
     #[arg(long, env = "WLEDPLAY_INTERFACE")]
     interface: Option<String>,
+
+    /// Shairport metadata FIFO. Env: WLEDPLAY_METADATA_PIPE
+    #[arg(long, env = "WLEDPLAY_METADATA_PIPE", value_name = "PATH")]
+    metadata_pipe: Option<PathBuf>,
 }
 
 struct PcmRuntime {
@@ -103,6 +114,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     if let Some(iface) = cli.interface.filter(|s| !s.is_empty()) {
         cfg.network.interface = iface;
+    }
+    if let Some(pipe) = cli.metadata_pipe.filter(|p| !p.as_os_str().is_empty()) {
+        cfg.metadata.pipe = pipe.display().to_string();
     }
 
     tracing_subscriber::fmt()
@@ -173,16 +187,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         },
         ..Default::default()
     }));
+    let artwork: SharedArtwork = Arc::new(Mutex::new(None));
 
     if cfg.web.enabled && !cli.no_web {
         let listen = cfg.web.listen.clone();
         let port = cfg.web.port;
-        let st = status.clone();
+        let state = AppState {
+            status: status.clone(),
+            artwork: artwork.clone(),
+        };
         tokio::spawn(async move {
-            if let Err(e) = web::serve(&listen, port, st).await {
+            if let Err(e) = web::serve(&listen, port, state).await {
                 tracing::error!("web server error: {e}");
             }
         });
+    }
+
+    if !cfg.metadata.pipe.is_empty() {
+        spawn_metadata_reader(cfg.metadata.pipe.clone(), status.clone(), artwork.clone());
     }
 
     let mut sender = WledSender::new(
@@ -196,9 +218,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let update_interval = Duration::from_millis(1000 / cfg.audio.update_hz.max(1) as u64);
     let stdin_is_pipe = !io::stdin().is_terminal();
 
-    if cli.input != "stdin" {
-        tracing::error!("Only --input stdin is implemented; use the AirPlay runner or Docker");
-        std::process::exit(1);
+    let pcm_path = if cli.input == "stdin" {
+        None
+    } else {
+        Some(PathBuf::from(&cli.input))
+    };
+    if let Some(path) = pcm_path.as_ref() {
+        tracing::info!("PCM input: {}", path.display());
     }
 
     tracing::info!("Waiting for PCM stream...");
@@ -220,6 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         status.clone(),
         cfg.pcm.clone(),
         pace_realtime,
+        pcm_path,
     );
 
     let mut last_send = Instant::now();
@@ -228,6 +255,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut udp_active = false;
     let mut idle_packets_sent = 0u64;
     let mut announced_end = false;
+    let mut last_pcm_frames = 0u64;
+    let mut stale_sends = 0u32;
 
     loop {
         let now = Instant::now();
@@ -243,8 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         status.lock().unwrap().airplay.connected = false;
                         idle_packets_sent = 0;
                         announced_end = true;
-                    } else if t.elapsed() > update_interval {
-                        rt.pcm_underruns += 1;
+                        stale_sends = 0;
                     }
                 }
             }
@@ -253,6 +281,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 udp_active = true;
                 idle_packets_sent = 0;
                 announced_end = false;
+                if rt.pcm_frames == last_pcm_frames {
+                    stale_sends += 1;
+                    if stale_sends == 2 {
+                        rt.pcm_underruns += 1;
+                    }
+                } else {
+                    stale_sends = 0;
+                    last_pcm_frames = rt.pcm_frames;
+                }
                 if cfg.audio.sync_offset_ms > 0 {
                     drop(rt);
                     thread::sleep(Duration::from_millis(cfg.audio.sync_offset_ms as u64));
@@ -353,96 +390,180 @@ fn spawn_pcm_reader(
     status: SharedStatus,
     pcm: wledplay::config::PcmFormat,
     pace_realtime: bool,
+    input_path: Option<PathBuf>,
 ) {
     thread::Builder::new()
-        .name("pcm-stdin".into())
+        .name("pcm-input".into())
         .spawn(move || {
-            let bytes_per_second = pcm.rate as u64
-                * pcm.channels as u64
-                * pcm.bytes_per_sample() as u64;
-            let mut decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm);
-            let stdin = io::stdin();
-            let mut reader = stdin.lock();
-            let mut read_buf = [0u8; 4096];
-            let mut playback_clock = Instant::now();
-            let mut bytes_played: u64 = 0;
-            let mut last_skip_log = Instant::now();
-
-            loop {
-                if !pace_realtime && bytes_per_second > 0 {
-                    let keep = (bytes_per_second * STDIN_KEEP_MS / 1000).max(4096);
-                    if let Some(skipped) = discard_stdin_backlog(&mut reader, keep) {
-                        runtime.lock().unwrap().analysis_overruns += 1;
-                        if last_skip_log.elapsed() >= Duration::from_secs(2) {
-                            tracing::info!(
-                                "dropped {} bytes of PCM backlog (~{} ms)",
-                                skipped,
-                                skipped as u64 * 1000 / bytes_per_second
-                            );
-                            last_skip_log = Instant::now();
-                        }
+            if let Some(path) = input_path {
+                match File::open(&path) {
+                    Ok(file) => read_pcm(
+                        file,
+                        false,
+                        runtime,
+                        status,
+                        pcm,
+                        pace_realtime,
+                    ),
+                    Err(e) => {
+                        tracing::error!("PCM input {}: {e}", path.display());
+                        runtime.lock().unwrap().stdin_closed = true;
                     }
                 }
-                match reader.read(&mut read_buf) {
-                    Ok(0) => {
-                        let mut rt = runtime.lock().unwrap();
-                        if rt.stream_active {
-                            tracing::info!("PCM stream ended");
-                            rt.stream_active = false;
-                            rt.stream_since = None;
-                            rt.analyzer.set_stream_active(false);
-                            status.lock().unwrap().airplay.connected = false;
-                        }
+            } else {
+                read_pcm(io::stdin(), true, runtime, status, pcm, pace_realtime);
+            }
+        })
+        .expect("pcm reader thread");
+}
+
+fn read_pcm(
+    mut reader: impl Read,
+    discard_stdin_backlog_ok: bool,
+    runtime: Arc<Mutex<PcmRuntime>>,
+    status: SharedStatus,
+    pcm: wledplay::config::PcmFormat,
+    pace_realtime: bool,
+) {
+    let bytes_per_second =
+        pcm.rate as u64 * pcm.channels as u64 * pcm.bytes_per_sample() as u64;
+    let mut decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm);
+    let mut read_buf = [0u8; 4096];
+    let mut playback_clock = Instant::now();
+    let mut bytes_played: u64 = 0;
+    let mut last_skip_log = Instant::now();
+
+    loop {
+        if discard_stdin_backlog_ok && !pace_realtime && bytes_per_second > 0 {
+            let keep = (bytes_per_second * STDIN_KEEP_MS / 1000).max(4096);
+            if let Some(skipped) = discard_stdin_backlog(&mut reader, keep) {
+                runtime.lock().unwrap().analysis_overruns += 1;
+                if last_skip_log.elapsed() >= Duration::from_secs(2) {
+                    tracing::info!(
+                        "dropped {} bytes of PCM backlog (~{} ms)",
+                        skipped,
+                        skipped as u64 * 1000 / bytes_per_second
+                    );
+                    last_skip_log = Instant::now();
+                }
+            }
+        }
+        match reader.read(&mut read_buf) {
+            Ok(0) => {
+                let mut rt = runtime.lock().unwrap();
+                if rt.stream_active {
+                    tracing::info!("PCM stream ended");
+                    rt.stream_active = false;
+                    rt.stream_since = None;
+                    rt.analyzer.set_stream_active(false);
+                    status.lock().unwrap().airplay.connected = false;
+                }
+                rt.stdin_closed = true;
+                break;
+            }
+            Ok(n) => {
+                let now_ms = start_ms();
+                let mut cursor = std::io::Cursor::new(&read_buf[..n]);
+                let mut rt = runtime.lock().unwrap();
+                if !rt.stream_active {
+                    tracing::info!("PCM stream connected");
+                    rt.stream_active = true;
+                    rt.stream_since = Some(Instant::now());
+                    rt.connections += 1;
+                    rt.analyzer.set_stream_active(true);
+                    status.lock().unwrap().airplay.connected = true;
+                    playback_clock = Instant::now();
+                    bytes_played = 0;
+                }
+                match decoder.decode_chunk(&mut cursor, |sample| {
+                    rt.analyzer.ingest_mono_sample(sample, now_ms);
+                }) {
+                    Ok(frames) => rt.pcm_frames += frames as u64,
+                    Err(e) => {
+                        tracing::error!("PCM decode error: {e}");
                         rt.stdin_closed = true;
                         break;
                     }
-                    Ok(n) => {
-                        let now_ms = start_ms();
-                        let mut cursor = std::io::Cursor::new(&read_buf[..n]);
-                        let mut rt = runtime.lock().unwrap();
-                        if !rt.stream_active {
-                            tracing::info!("PCM stream connected");
-                            rt.stream_active = true;
-                            rt.stream_since = Some(Instant::now());
-                            rt.connections += 1;
-                            rt.analyzer.set_stream_active(true);
-                            status.lock().unwrap().airplay.connected = true;
-                            playback_clock = Instant::now();
-                            bytes_played = 0;
-                        }
-                        match decoder.decode_chunk(&mut cursor, |sample| {
-                            rt.analyzer.ingest_mono_sample(sample, now_ms);
-                        }) {
-                            Ok(frames) => rt.pcm_frames += frames as u64,
-                            Err(e) => {
-                                tracing::error!("PCM decode error: {e}");
-                                rt.stdin_closed = true;
-                                break;
-                            }
-                        }
-                        rt.last_pcm = Some(Instant::now());
-                        drop(rt);
+                }
+                rt.last_pcm = Some(Instant::now());
+                drop(rt);
 
-                        if pace_realtime && bytes_per_second > 0 {
-                            bytes_played += n as u64;
-                            let target = Duration::from_secs_f64(
-                                bytes_played as f64 / bytes_per_second as f64,
-                            );
-                            let elapsed = playback_clock.elapsed();
-                            if target > elapsed {
-                                thread::sleep(target - elapsed);
-                            }
-                        }
+                if pace_realtime && bytes_per_second > 0 {
+                    bytes_played += n as u64;
+                    let target =
+                        Duration::from_secs_f64(bytes_played as f64 / bytes_per_second as f64);
+                    let elapsed = playback_clock.elapsed();
+                    if target > elapsed {
+                        thread::sleep(target - elapsed);
                     }
+                }
+            }
+            Err(e) => {
+                tracing::error!("PCM read error: {e}");
+                runtime.lock().unwrap().stdin_closed = true;
+                break;
+            }
+        }
+    }
+}
+
+fn spawn_metadata_reader(path: String, status: SharedStatus, artwork: SharedArtwork) {
+    thread::Builder::new()
+        .name("metadata".into())
+        .spawn(move || {
+            tracing::info!("Metadata pipe: {path}");
+            loop {
+                let file = match File::open(&path) {
+                    Ok(f) => f,
                     Err(e) => {
-                        tracing::error!("stdin read error: {e}");
-                        runtime.lock().unwrap().stdin_closed = true;
-                        break;
+                        tracing::warn!("metadata pipe {path}: {e}");
+                        thread::sleep(Duration::from_secs(2));
+                        continue;
+                    }
+                };
+                let mut reader = BufReader::new(file);
+                let mut raw = String::new();
+                let mut line = String::new();
+                let mut meta = TrackMetadata::default();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            raw.push_str(&line);
+                            for item in metadata::drain_items(&mut raw) {
+                                let mut art = artwork.lock().unwrap();
+                                if metadata::apply_item(&mut meta, &mut art, &item) {
+                                    if item.code == "minm" || item.code == "asar" {
+                                        tracing::info!(
+                                            "Track: {} — {}",
+                                            meta.artist.as_deref().unwrap_or("?"),
+                                            meta.title.as_deref().unwrap_or("?")
+                                        );
+                                    }
+                                    if item.code == "clip" {
+                                        if let Some(src) = &meta.source {
+                                            tracing::info!("AirPlay source: {src}");
+                                        }
+                                    }
+                                }
+                            }
+                            let mut s = status.lock().unwrap();
+                            s.metadata.artist = meta.artist.clone();
+                            s.metadata.album = meta.album.clone();
+                            s.metadata.title = meta.title.clone();
+                            s.metadata.has_artwork = meta.has_artwork;
+                            s.airplay.source = meta.source.clone();
+                        }
+                        Err(e) => {
+                            tracing::warn!("metadata read: {e}");
+                            break;
+                        }
                     }
                 }
             }
         })
-        .expect("pcm reader thread");
+        .expect("metadata reader thread");
 }
 
 fn start_ms() -> u64 {

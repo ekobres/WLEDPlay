@@ -65,6 +65,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + Avahi + UDP |
 | `WLEDPLAY_WEB_LISTEN` | HTTP bind address (default `0.0.0.0`) |
 | `WLEDPLAY_WEB_PORT` | HTTP port (default `8080`) |
+| `WLEDPLAY_METADATA_PIPE` | Shairport metadata FIFO (Docker: `/run/wledplay.meta`) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
 | `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
@@ -72,9 +73,10 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 
 ## HTTP status
 
-- `GET /` — debug UI (connection, level, 16 bands, destinations)
+- `GET /` — debug UI (connection, track, artwork, level, 16 bands, destinations)
 - `GET /health` — liveness
 - `GET /status` — JSON runtime state (default `:8080`)
+- `GET /artwork` — current cover art (404 if none)
 
 ## Docker (Linux host)
 

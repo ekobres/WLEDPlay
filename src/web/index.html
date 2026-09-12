@@ -42,6 +42,11 @@
       padding: 14px 16px;
     }
     .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .track-card { display: flex; gap: 12px; align-items: center; }
+    #art {
+      width: 72px; height: 72px; object-fit: cover; border-radius: 8px;
+      background: #0e1424; flex-shrink: 0;
+    }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
     .value.peak { color: var(--peak); }
     .meter { height: 10px; background: #0e1424; border-radius: 6px; overflow: hidden; margin-top: 8px; }
@@ -76,9 +81,12 @@
         <div class="label">Receiver</div>
         <div class="value" id="receiver">—</div>
       </div>
-      <div class="card">
-        <div class="label">Track</div>
-        <div class="value" id="track">No metadata yet</div>
+      <div class="card track-card">
+        <img id="art" alt="" hidden>
+        <div>
+          <div class="label">Track</div>
+          <div class="value" id="track">No metadata yet</div>
+        </div>
       </div>
       <div class="card">
         <div class="label">Level</div>
@@ -143,6 +151,19 @@
       const md = s.metadata || {};
       const parts = [md.title, md.artist, md.album].filter(Boolean);
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
+      const art = $("art");
+      if (md.has_artwork) {
+        const key = parts.join("|");
+        if (art.dataset.key !== key) {
+          art.src = "/artwork?t=" + encodeURIComponent(key);
+          art.dataset.key = key;
+        }
+        art.hidden = false;
+      } else {
+        art.removeAttribute("src");
+        art.hidden = true;
+        art.dataset.key = "";
+      }
       $("pps").textContent = Number(s.wled.packets_per_second || 0).toFixed(0) + " /s";
       $("dest").textContent = (s.wled.destinations && s.wled.destinations.length)
         ? s.wled.destinations.join(", ")

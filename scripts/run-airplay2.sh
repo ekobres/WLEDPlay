@@ -108,6 +108,12 @@ if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
   echo "Interface: ${WLEDPLAY_INTERFACE}"
 fi
 
+META_PIPE="${WLEDPLAY_METADATA_PIPE:-/tmp/wledplay.meta}"
+rm -f "$META_PIPE"
+mkfifo "$META_PIPE"
+echo "Metadata pipe: ${META_PIPE}"
+
 "$SHAIRPORT_BIN" -c "$TMP_CONF" --service-type=airplay2 -o stdout | \
   "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime \
-    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le "${IFACE_ARGS[@]}"
+    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le \
+    --metadata-pipe "$META_PIPE" "${IFACE_ARGS[@]}"

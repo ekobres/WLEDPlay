@@ -26,6 +26,9 @@ web:
   listen: "0.0.0.0"
   port: 8080
 
+metadata:
+  pipe: ""
+
 pcm:
   rate: 44100
   channels: 2

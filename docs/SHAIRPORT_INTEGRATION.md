@@ -101,10 +101,7 @@ WLEDPlay resamples and downmixes before analysis.
 
 ## Metadata
 
-Shairport Sync can expose D-Bus/metadata (title, artist, album, artwork) when built with metadata support. WLEDPlay Phase 6+ may read metadata via:
-
-- Shairport Sync `-M` / metadata socket
-- Parsing companion log output
+Shairport Sync exposes title, artist, album, and cover art on a FIFO when built with `--with-metadata`. WLEDPlay reads that pipe (`--metadata-pipe` / `WLEDPLAY_METADATA_PIPE`) and serves it on `/status` and `/artwork`.
 
 Not required for audio-reactive operation.
 

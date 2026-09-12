@@ -18,6 +18,15 @@ pub struct Config {
     pub pcm: PcmFormat,
     #[serde(default)]
     pub network: NetworkConfig,
+    #[serde(default)]
+    pub metadata: MetadataConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MetadataConfig {
+    /// Shairport Sync metadata FIFO. Empty = disabled.
+    #[serde(default)]
+    pub pipe: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -232,6 +241,7 @@ impl Default for Config {
                 format: default_pcm_format(),
             },
             network: NetworkConfig::default(),
+            metadata: MetadataConfig::default(),
         }
     }
 }
@@ -296,6 +306,11 @@ impl Config {
         if let Ok(v) = std::env::var("WLEDPLAY_WEB_PORT") {
             if let Ok(p) = v.parse() {
                 self.web.port = p;
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_METADATA_PIPE") {
+            if !v.is_empty() {
+                self.metadata.pipe = v;
             }
         }
     }
