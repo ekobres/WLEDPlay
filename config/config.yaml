@@ -12,7 +12,8 @@ wled:
   destinations:
     - "10.11.1.124"
 
-# Host NIC for AirPlay + UDP + HTTP on a multi-homed machine (e.g. eth1).
+# Host NIC for AirPlay + WLED UDP on a multi-homed machine (e.g. eth1).
+# HTTP still listens on web.listen (default 0.0.0.0) so the management IP works.
 # Override with WLEDPLAY_INTERFACE. Empty = all interfaces.
 network:
   interface: ""

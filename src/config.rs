@@ -288,6 +288,16 @@ impl Config {
                 self.network.interface = v;
             }
         }
+        if let Ok(v) = std::env::var("WLEDPLAY_WEB_LISTEN") {
+            if !v.is_empty() {
+                self.web.listen = v;
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_WEB_PORT") {
+            if let Ok(p) = v.parse() {
+                self.web.port = p;
+            }
+        }
     }
 
     pub fn agc_mode(&self) -> AgcMode {

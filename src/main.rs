@@ -60,7 +60,7 @@ struct Cli {
     #[arg(long)]
     no_realtime: bool,
 
-    /// Bind AirPlay/UDP/HTTP to this host NIC (e.g. eth1). Env: WLEDPLAY_INTERFACE
+    /// Bind AirPlay/UDP to this host NIC (e.g. eth1). Env: WLEDPLAY_INTERFACE
     #[arg(long, env = "WLEDPLAY_INTERFACE")]
     interface: Option<String>,
 }
@@ -155,9 +155,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match wledplay::netif::resolve_interface(&cfg.network.interface) {
             Ok(b) => {
                 tracing::info!("Network interface: {} ({})", b.name, b.ipv4);
-                if cfg.web.listen == "0.0.0.0" {
-                    cfg.web.listen = b.ipv4.to_string();
-                }
                 Some(b)
             }
             Err(e) => {
