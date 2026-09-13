@@ -45,10 +45,9 @@ pub struct InterfaceBind {
 pub struct InterfaceInfo {
     pub name: String,
     pub ipv4: String,
-    pub selected: bool,
 }
 
-pub fn list_interfaces(selected: &str) -> Vec<InterfaceInfo> {
+pub fn list_interfaces() -> Vec<InterfaceInfo> {
     let mut out = Vec::new();
     let Ok(addrs) = if_addrs::get_if_addrs() else {
         return out;
@@ -63,18 +62,24 @@ pub fn list_interfaces(selected: &str) -> Vec<InterfaceInfo> {
         if ipv4.is_unspecified() || ipv4.is_link_local() {
             continue;
         }
-        let selected = !selected.is_empty() && iface.name == selected;
         if out.iter().any(|i: &InterfaceInfo| i.name == iface.name && i.ipv4 == ipv4.to_string()) {
             continue;
         }
         out.push(InterfaceInfo {
             name: iface.name,
             ipv4: ipv4.to_string(),
-            selected,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+pub fn optional_bind(name: &str) -> Result<Option<InterfaceBind>, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(resolve_interface(name)?))
 }
 
 pub fn resolve_interface(name: &str) -> Result<InterfaceBind, String> {

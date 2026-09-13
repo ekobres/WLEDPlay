@@ -76,8 +76,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sed "s/name = \"WLEDPlay\"/name = \"${AIRPLAY_NAME}\"/" "$SHAIRPORT_CONF" > "$TMP_CONF"
-if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
-  python3 - "$TMP_CONF" "$WLEDPLAY_INTERFACE" <<'PY'
+if [[ -n "${WLEDPLAY_AIRPLAY_INTERFACE:-}" ]]; then
+  python3 - "$TMP_CONF" "$WLEDPLAY_AIRPLAY_INTERFACE" <<'PY'
 import pathlib, re, sys
 p, iface = pathlib.Path(sys.argv[1]), sys.argv[2]
 text = p.read_text()
@@ -102,10 +102,8 @@ fi
 echo "Advertising AirPlay 2 receiver: ${AIRPLAY_NAME}"
 echo "PCM: 48000 Hz S16LE stereo (pinned). Group this destination with HomePods to measure sync."
 
-IFACE_ARGS=()
-if [[ -n "${WLEDPLAY_INTERFACE:-}" ]]; then
-  IFACE_ARGS=(--interface "$WLEDPLAY_INTERFACE")
-  echo "Interface: ${WLEDPLAY_INTERFACE}"
+if [[ -n "${WLEDPLAY_AIRPLAY_INTERFACE:-}" ]]; then
+  echo "AirPlay/mDNS interface: ${WLEDPLAY_AIRPLAY_INTERFACE}"
 fi
 
 META_PIPE="${WLEDPLAY_METADATA_PIPE:-/tmp/wledplay.meta}"
@@ -116,4 +114,4 @@ echo "Metadata pipe: ${META_PIPE}"
 "$SHAIRPORT_BIN" -c "$TMP_CONF" --service-type=airplay2 -o stdout | \
   "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime \
     --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le \
-    --metadata-pipe "$META_PIPE" "${IFACE_ARGS[@]}"
+    --metadata-pipe "$META_PIPE"

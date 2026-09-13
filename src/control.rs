@@ -12,7 +12,10 @@ pub struct Control {
     pub sender: Arc<Mutex<WledSender>>,
     pub config_path: Option<PathBuf>,
     pub applied_name: String,
-    pub applied_interface: String,
+    pub applied_http: String,
+    pub applied_airplay: String,
+    pub applied_unicast: String,
+    pub applied_multicast: String,
     pub applied_shairport: f64,
     pub restart: Arc<AtomicBool>,
 }
@@ -26,7 +29,10 @@ pub struct ConfigPatch {
     pub multicast_address: Option<String>,
     pub port: Option<u16>,
     pub destinations: Option<Vec<String>>,
-    pub interface: Option<String>,
+    pub http_interface: Option<String>,
+    pub airplay_interface: Option<String>,
+    pub unicast_interface: Option<String>,
+    pub multicast_interface: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,7 +55,10 @@ pub struct ConfigValues {
     pub multicast_address: String,
     pub port: u16,
     pub destinations: Vec<String>,
-    pub interface: String,
+    pub http_interface: String,
+    pub airplay_interface: String,
+    pub unicast_interface: String,
+    pub multicast_interface: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +67,10 @@ pub struct ConfigFields {
     pub multicast_enabled: &'static str,
     pub destinations: &'static str,
     pub airplay_name: &'static str,
-    pub interface: &'static str,
+    pub http_interface: &'static str,
+    pub airplay_interface: &'static str,
+    pub unicast_interface: &'static str,
+    pub multicast_interface: &'static str,
     pub shairport_latency_offset_s: &'static str,
     pub multicast_address: &'static str,
     pub port: &'static str,
@@ -71,7 +83,10 @@ impl ConfigFields {
             multicast_enabled: "live",
             destinations: "live",
             airplay_name: "restart",
-            interface: "restart",
+            http_interface: "restart",
+            airplay_interface: "restart",
+            unicast_interface: "restart",
+            multicast_interface: "restart",
             shairport_latency_offset_s: "restart",
             multicast_address: "restart",
             port: "restart",
@@ -90,7 +105,7 @@ impl Control {
         ConfigView {
             values: values_from(&cfg),
             fields: ConfigFields::standard(),
-            interfaces: netif::list_interfaces(&cfg.network.interface),
+            interfaces: netif::list_interfaces(),
             persisted: false,
             persist_error: None,
             needs_restart: self.needs_restart(&cfg),
@@ -127,7 +142,7 @@ impl Control {
         Ok(ConfigView {
             values: values_from(&cfg),
             fields: ConfigFields::standard(),
-            interfaces: netif::list_interfaces(&cfg.network.interface),
+            interfaces: netif::list_interfaces(),
             persisted,
             persist_error,
             needs_restart: self.needs_restart(&cfg),
@@ -141,7 +156,10 @@ impl Control {
 
     fn needs_restart(&self, cfg: &Config) -> bool {
         cfg.airplay.name != self.applied_name
-            || cfg.network.interface != self.applied_interface
+            || cfg.network.http != self.applied_http
+            || cfg.network.airplay != self.applied_airplay
+            || cfg.network.unicast != self.applied_unicast
+            || cfg.network.multicast != self.applied_multicast
             || (cfg.audio.shairport_latency_offset_s - self.applied_shairport).abs() > 0.0001
     }
 }
@@ -188,12 +206,10 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             }
         }
     }
-    if let Some(iface) = &patch.interface {
-        let iface = iface.trim();
-        if !iface.is_empty() {
-            netif::resolve_interface(iface)?;
-        }
-    }
+    validate_iface(&patch.http_interface)?;
+    validate_iface(&patch.airplay_interface)?;
+    validate_iface(&patch.unicast_interface)?;
+    validate_iface(&patch.multicast_interface)?;
 
     if let Some(name) = patch.airplay_name {
         cfg.airplay.name = name.trim().to_string();
@@ -220,8 +236,27 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             .filter(|s| !s.is_empty())
             .collect();
     }
-    if let Some(iface) = patch.interface {
-        cfg.network.interface = iface.trim().to_string();
+    if let Some(iface) = patch.http_interface {
+        cfg.network.http = iface.trim().to_string();
+    }
+    if let Some(iface) = patch.airplay_interface {
+        cfg.network.airplay = iface.trim().to_string();
+    }
+    if let Some(iface) = patch.unicast_interface {
+        cfg.network.unicast = iface.trim().to_string();
+    }
+    if let Some(iface) = patch.multicast_interface {
+        cfg.network.multicast = iface.trim().to_string();
+    }
+    Ok(())
+}
+
+fn validate_iface(name: &Option<String>) -> Result<(), String> {
+    if let Some(iface) = name {
+        let iface = iface.trim();
+        if !iface.is_empty() {
+            netif::resolve_interface(iface)?;
+        }
     }
     Ok(())
 }
@@ -254,7 +289,10 @@ fn values_from(cfg: &Config) -> ConfigValues {
         multicast_address: cfg.wled.multicast_address.clone(),
         port: cfg.wled.port,
         destinations: cfg.wled.destinations.clone(),
-        interface: cfg.network.interface.clone(),
+        http_interface: cfg.network.http.clone(),
+        airplay_interface: cfg.network.airplay.clone(),
+        unicast_interface: cfg.network.unicast.clone(),
+        multicast_interface: cfg.network.multicast.clone(),
     }
 }
 
@@ -313,5 +351,25 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(err.unwrap_err(), "invalid destination: not-an-ip");
         assert_eq!(cfg.airplay.name, "KeepMe");
+    }
+
+    #[test]
+    fn patch_sets_four_nics_independently() {
+        let mut cfg = Config::default();
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                http_interface: Some("".into()),
+                airplay_interface: Some("".into()),
+                unicast_interface: Some("".into()),
+                multicast_interface: Some("".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(cfg.network.http.is_empty());
+        assert!(cfg.network.airplay.is_empty());
+        assert!(cfg.network.unicast.is_empty());
+        assert!(cfg.network.multicast.is_empty());
     }
 }

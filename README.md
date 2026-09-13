@@ -45,10 +45,14 @@ On a Linux host (Pi, NUC, etc.):
 Or:
 
 ```bash
-WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
+WLEDPLAY_DESTINATION=10.11.1.124 \
+WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
+WLEDPLAY_UNICAST_INTERFACE=eth2 \
+WLEDPLAY_MULTICAST_INTERFACE=eth2 \
+docker compose up -d --build
 ```
 
-On a multi-homed host, set `WLEDPLAY_INTERFACE` to the VLAN NIC (`ip -br addr`). That binds Shairport, Avahi, and WLED UDP to that interface. The debug UI stays on `0.0.0.0:8080` so `http://<management-ip>:8080/` works. The container starts its own D-Bus + Avahi; if the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
+On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin — HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus + Avahi; if the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
 
 Then group **WLEDPlay** with a HomePod / Apple TV and measure visual vs audible sync (`docs/SYNC_MEASUREMENT.md`). AP2 PCM is pinned to **48000 Hz S16LE**.
 
@@ -62,8 +66,11 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 | `WLEDPLAY_MULTICAST_ADDRESS` | Default `239.0.0.1` |
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
-| `WLEDPLAY_INTERFACE` | Host NIC name (e.g. `eth1`) for AirPlay + Avahi + UDP |
-| `WLEDPLAY_WEB_LISTEN` | HTTP bind address (default `0.0.0.0`) |
+| `WLEDPLAY_HTTP_INTERFACE` | NIC for the HTTP UI (empty = `web.listen` / all interfaces) |
+| `WLEDPLAY_AIRPLAY_INTERFACE` | NIC for Shairport + Avahi (mDNS / AirPlay) |
+| `WLEDPLAY_UNICAST_INTERFACE` | NIC for WLED unicast UDP |
+| `WLEDPLAY_MULTICAST_INTERFACE` | NIC for WLED multicast (`239.0.0.1`) |
+| `WLEDPLAY_WEB_LISTEN` | HTTP bind address when HTTP NIC is unset (default `0.0.0.0`) |
 | `WLEDPLAY_WEB_PORT` | HTTP port (default `8080`) |
 | `WLEDPLAY_METADATA_PIPE` | Shairport metadata FIFO (Docker: `/run/wledplay.meta`) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
@@ -87,7 +94,11 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 Requires **host networking** (mDNS, multicast, AirPlay 2 PTP). This does not work as a LAN AirPlay receiver on Docker Desktop for Mac.
 
 ```bash
-WLEDPLAY_DESTINATION=10.11.1.124 WLEDPLAY_INTERFACE=eth1 docker compose up -d --build
+WLEDPLAY_DESTINATION=10.11.1.124 \
+WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
+WLEDPLAY_UNICAST_INTERFACE=eth2 \
+WLEDPLAY_MULTICAST_INTERFACE=eth2 \
+docker compose up -d --build
 ```
 
 Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
@@ -111,7 +122,7 @@ Verify:
 python3 scripts/verify_wled_sync.py 10.11.1.124
 ```
 
-**Fix:** run WLEDPlay on a host in the **same VLAN as WLED** (IoT / `10.11.x`), or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path. On a multi-homed host set `WLEDPLAY_INTERFACE` to the WLED VLAN NIC so `239.0.0.1` is not sent out the management default route. IGMP snooping may keep that group off the router trunk if no receiver on that path has joined.
+**Fix:** run WLEDPlay on a host in the **same VLAN as WLED** (IoT / `10.11.x`), or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path. On a multi-homed host set `network.unicast` / `network.multicast` (or the matching env vars) to the WLED VLAN NIC so `239.0.0.1` is not sent out the management default route. IGMP snooping may keep that group off the router trunk if no receiver on that path has joined.
 
 On UniFi: create a rule allowing `10.11.1.124:11988/udp` from your WLEDPlay host (or the IoT VLAN).
 

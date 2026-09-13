@@ -10,7 +10,8 @@ pub enum SendError {
 }
 
 pub struct WledSender {
-    socket: UdpSocket,
+    multicast_socket: UdpSocket,
+    unicast_socket: UdpSocket,
     multicast_addr: SocketAddr,
     unicast_destinations: Vec<SocketAddr>,
     multicast_enabled: bool,
@@ -23,54 +24,41 @@ impl WledSender {
         multicast: IpAddr,
         port: u16,
         unicast_destinations: Vec<SocketAddr>,
-        bind_ip: Option<Ipv4Addr>,
-        bind_device: Option<&str>,
+        unicast: Option<(&str, Ipv4Addr)>,
+        multicast_bind: Option<(&str, Ipv4Addr)>,
     ) -> Result<Self, SendError> {
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        socket.set_reuse_address(true)?;
-        #[cfg(unix)]
-        socket.set_reuse_port(true)?;
+        let unicast_socket = bind_udp(unicast)?;
+        let multicast_socket = bind_udp(multicast_bind)?;
 
-        let local = bind_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
-        socket.bind(&SocketAddr::from((local, 0)).into())?;
-
-        if let Some(name) = bind_device.filter(|n| !n.is_empty()) {
-            bind_udp_device(&socket, name, local);
-        }
-
-        let mcast_if = bind_ip
-            .filter(|ip| !ip.is_unspecified())
-            .or_else(|| {
-                unicast_destinations
-                    .iter()
-                    .find_map(|d| crate::netif::egress_ipv4_toward(d.ip()))
-            });
-        // Kernel default is TTL 1 and no multicast IF: on a multi-homed host the
-        // packets follow the default route NIC, not the WLED VLAN.
-        if let Err(e) = socket.set_multicast_ttl_v4(20) {
+        if let Err(e) = multicast_socket.set_multicast_ttl_v4(20) {
             tracing::warn!("IP_MULTICAST_TTL: {e}");
         }
-        if let Some(ip) = mcast_if {
-            if let Err(e) = socket.set_multicast_if_v4(&ip) {
+        if let Some((_, ip)) = multicast_bind {
+            if let Err(e) = multicast_socket.set_multicast_if_v4(&ip) {
                 tracing::warn!("IP_MULTICAST_IF {ip}: {e}");
             } else {
                 tracing::info!("WLED multicast egress {ip} ttl=20");
             }
         } else {
             tracing::warn!(
-                "WLED multicast has no egress NIC (set WLEDPLAY_INTERFACE); kernel default route will be used"
+                "WLED multicast has no egress NIC (set network.multicast); kernel default route will be used"
             );
         }
-
         if let IpAddr::V4(addr) = multicast {
-            let join_if = mcast_if.unwrap_or(local);
-            if let Err(e) = socket.join_multicast_v4(&addr, &join_if) {
+            let join_if = multicast_bind
+                .map(|(_, ip)| ip)
+                .unwrap_or(Ipv4Addr::UNSPECIFIED);
+            if let Err(e) = multicast_socket.join_multicast_v4(&addr, &join_if) {
                 tracing::warn!("join {addr} on {join_if}: {e}");
             }
         }
+        if let Some((name, ip)) = unicast {
+            tracing::info!("WLED unicast egress {name} ({ip})");
+        }
 
         Ok(Self {
-            socket: socket.into(),
+            multicast_socket: multicast_socket.into(),
+            unicast_socket: unicast_socket.into(),
             multicast_addr: SocketAddr::new(multicast, port),
             unicast_destinations,
             multicast_enabled: true,
@@ -90,7 +78,7 @@ impl WledSender {
     pub fn send(&mut self, packet: &AudioSyncPacket) -> Result<(), SendError> {
         let bytes = packet.encode();
         if self.multicast_enabled {
-            match self.socket.send_to(&bytes, self.multicast_addr) {
+            match self.multicast_socket.send_to(&bytes, self.multicast_addr) {
                 Ok(_) => self.packets_sent += 1,
                 Err(e) => {
                     self.udp_errors += 1;
@@ -99,7 +87,7 @@ impl WledSender {
             }
         }
         for dest in &self.unicast_destinations.clone() {
-            if let Err(e) = self.socket.send_to(&bytes, dest) {
+            if let Err(e) = self.unicast_socket.send_to(&bytes, dest) {
                 self.udp_errors += 1;
                 tracing::warn!("unicast send to {dest} failed: {e}");
             } else {
@@ -131,6 +119,19 @@ impl WledSender {
             parts.join(" + ")
         }
     }
+}
+
+fn bind_udp(bind: Option<(&str, Ipv4Addr)>) -> Result<Socket, SendError> {
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    let local = bind.map(|(_, ip)| ip).unwrap_or(Ipv4Addr::UNSPECIFIED);
+    socket.bind(&SocketAddr::from((local, 0)).into())?;
+    if let Some((name, ip)) = bind.filter(|(n, _)| !n.is_empty()) {
+        bind_udp_device(&socket, name, ip);
+    }
+    Ok(socket)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]

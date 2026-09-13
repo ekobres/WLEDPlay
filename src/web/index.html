@@ -140,8 +140,14 @@
       <input id="ctl-delay" type="number" step="50" min="-5000" max="5000">
       <label for="ctl-name">AirPlay name — restart to re-advertise</label>
       <input id="ctl-name" type="text" maxlength="64">
-      <label for="ctl-iface">Network interface — restart</label>
-      <select id="ctl-iface"></select>
+      <label for="ctl-http">HTTP (management) — restart</label>
+      <select id="ctl-http"></select>
+      <label for="ctl-airplay">AirPlay / mDNS (user network) — restart</label>
+      <select id="ctl-airplay"></select>
+      <label for="ctl-unicast">WLED unicast — restart</label>
+      <select id="ctl-unicast"></select>
+      <label for="ctl-multicast">WLED multicast — restart</label>
+      <select id="ctl-multicast"></select>
       <div class="check">
         <input id="ctl-mcast" type="checkbox">
         <span>Send multicast</span>
@@ -239,22 +245,10 @@
       if (document.activeElement !== $("ctl-name")) $("ctl-name").value = v.airplay_name || "";
       if (document.activeElement !== $("ctl-dest")) $("ctl-dest").value = (v.destinations || []).join("\n");
       $("ctl-mcast").checked = !!v.multicast_enabled;
-      const sel = $("ctl-iface");
-      const current = v.interface || "";
-      if (document.activeElement !== sel) {
-        sel.innerHTML = "";
-        const any = document.createElement("option");
-        any.value = "";
-        any.textContent = "All interfaces";
-        sel.appendChild(any);
-        (c.interfaces || []).forEach((i) => {
-          const o = document.createElement("option");
-          o.value = i.name;
-          o.textContent = i.name + " (" + i.ipv4 + ")";
-          sel.appendChild(o);
-        });
-        sel.value = current;
-      }
+      fillIfaceSelect("ctl-http", v.http_interface || "", c.interfaces);
+      fillIfaceSelect("ctl-airplay", v.airplay_interface || "", c.interfaces);
+      fillIfaceSelect("ctl-unicast", v.unicast_interface || "", c.interfaces);
+      fillIfaceSelect("ctl-multicast", v.multicast_interface || "", c.interfaces);
       const bits = [];
       if (c.needs_restart) bits.push("restart needed");
       if (c.persisted) bits.push("saved");
@@ -272,13 +266,36 @@
 
     let lastConfig = { values: {} };
 
+    function fillIfaceSelect(id, current, interfaces) {
+      const sel = $(id);
+      if (document.activeElement === sel) return;
+      sel.innerHTML = "";
+      const any = document.createElement("option");
+      any.value = "";
+      any.textContent = "All interfaces";
+      sel.appendChild(any);
+      (interfaces || []).forEach((i) => {
+        const o = document.createElement("option");
+        o.value = i.name;
+        o.textContent = i.name + " (" + i.ipv4 + ")";
+        sel.appendChild(o);
+      });
+      sel.value = current;
+    }
+
+    function nicsChanged(prev) {
+      return $("ctl-http").value !== (prev.http_interface || "")
+        || $("ctl-airplay").value !== (prev.airplay_interface || "")
+        || $("ctl-unicast").value !== (prev.unicast_interface || "")
+        || $("ctl-multicast").value !== (prev.multicast_interface || "");
+    }
+
     $("ctl-save").onclick = async () => {
       const dest = $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
       const name = $("ctl-name").value.trim();
-      const iface = $("ctl-iface").value;
       const prev = lastConfig.values || {};
       if (Object.prototype.hasOwnProperty.call(prev, "airplay_name")
-          && ((name && name !== prev.airplay_name) || iface !== (prev.interface || ""))) {
+          && ((name && name !== prev.airplay_name) || nicsChanged(prev))) {
         if (!confirm("Name or interface changes need a restart and may drop AirPlay. Save anyway?")) {
           return;
         }
@@ -286,7 +303,10 @@
       const body = {
         visual_delay_ms: Number($("ctl-delay").value),
         airplay_name: name,
-        interface: iface,
+        http_interface: $("ctl-http").value,
+        airplay_interface: $("ctl-airplay").value,
+        unicast_interface: $("ctl-unicast").value,
+        multicast_interface: $("ctl-multicast").value,
         multicast_enabled: $("ctl-mcast").checked,
         destinations: dest
       };

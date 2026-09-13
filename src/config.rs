@@ -32,9 +32,18 @@ pub struct MetadataConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkConfig {
-    /// Host NIC name (e.g. eth1, vlan11). Empty = bind all interfaces.
+    /// HTTP control UI. Empty = `web.listen` (default all interfaces).
     #[serde(default)]
-    pub interface: String,
+    pub http: String,
+    /// Shairport Sync + Avahi (mDNS / AirPlay). Empty = all interfaces.
+    #[serde(default)]
+    pub airplay: String,
+    /// WLED Audio Sync unicast UDP. Empty = kernel default route.
+    #[serde(default)]
+    pub unicast: String,
+    /// WLED Audio Sync multicast (`239.0.0.1`). Empty = kernel default route.
+    #[serde(default)]
+    pub multicast: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,9 +315,24 @@ impl Config {
                 self.wled.destinations = v.split(',').map(|s| s.trim().to_string()).collect();
             }
         }
-        if let Ok(v) = std::env::var("WLEDPLAY_INTERFACE") {
+        if let Ok(v) = std::env::var("WLEDPLAY_HTTP_INTERFACE") {
             if !v.is_empty() {
-                self.network.interface = v;
+                self.network.http = v;
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_AIRPLAY_INTERFACE") {
+            if !v.is_empty() {
+                self.network.airplay = v;
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_UNICAST_INTERFACE") {
+            if !v.is_empty() {
+                self.network.unicast = v;
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_MULTICAST_INTERFACE") {
+            if !v.is_empty() {
+                self.network.multicast = v;
             }
         }
         if let Ok(v) = std::env::var("WLEDPLAY_WEB_LISTEN") {

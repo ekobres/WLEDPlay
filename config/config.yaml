@@ -14,11 +14,14 @@ wled:
     - "10.11.1.124"
   multicast_enabled: true
 
-# Host NIC for AirPlay + WLED UDP on a multi-homed machine (e.g. eth1).
-# HTTP still listens on web.listen (default 0.0.0.0) so the management IP works.
-# Override with WLEDPLAY_INTERFACE. Empty = all interfaces.
+# Bind each traffic type to a host NIC (`ip -br addr`). Empty = no pin.
+# HTTP empty uses web.listen (default 0.0.0.0). UDP empty uses the kernel route.
+# Example three-VLAN host: http=mgmt, airplay=user, unicast+multicast=IoT.
 network:
-  interface: ""
+  http: ""
+  airplay: ""
+  unicast: ""
+  multicast: ""
 
 logging:
   level: info

@@ -74,9 +74,21 @@ struct Cli {
     #[arg(long)]
     no_realtime: bool,
 
-    /// Bind AirPlay/UDP to this host NIC (e.g. eth1). Env: WLEDPLAY_INTERFACE
-    #[arg(long, env = "WLEDPLAY_INTERFACE")]
-    interface: Option<String>,
+    /// Bind the HTTP UI to this host NIC. Env: WLEDPLAY_HTTP_INTERFACE
+    #[arg(long, env = "WLEDPLAY_HTTP_INTERFACE")]
+    http_interface: Option<String>,
+
+    /// Bind Shairport / Avahi (mDNS, AirPlay) to this host NIC. Env: WLEDPLAY_AIRPLAY_INTERFACE
+    #[arg(long, env = "WLEDPLAY_AIRPLAY_INTERFACE")]
+    airplay_interface: Option<String>,
+
+    /// Bind WLED unicast UDP to this host NIC. Env: WLEDPLAY_UNICAST_INTERFACE
+    #[arg(long, env = "WLEDPLAY_UNICAST_INTERFACE")]
+    unicast_interface: Option<String>,
+
+    /// Bind WLED multicast UDP to this host NIC. Env: WLEDPLAY_MULTICAST_INTERFACE
+    #[arg(long, env = "WLEDPLAY_MULTICAST_INTERFACE")]
+    multicast_interface: Option<String>,
 
     /// Shairport metadata FIFO. Env: WLEDPLAY_METADATA_PIPE
     #[arg(long, env = "WLEDPLAY_METADATA_PIPE", value_name = "PATH")]
@@ -120,8 +132,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !cli.destinations.is_empty() {
         cfg.wled.destinations = cli.destinations;
     }
-    if let Some(iface) = cli.interface.filter(|s| !s.is_empty()) {
-        cfg.network.interface = iface;
+    if let Some(iface) = cli.http_interface.filter(|s| !s.is_empty()) {
+        cfg.network.http = iface;
+    }
+    if let Some(iface) = cli.airplay_interface.filter(|s| !s.is_empty()) {
+        cfg.network.airplay = iface;
+    }
+    if let Some(iface) = cli.unicast_interface.filter(|s| !s.is_empty()) {
+        cfg.network.unicast = iface;
+    }
+    if let Some(iface) = cli.multicast_interface.filter(|s| !s.is_empty()) {
+        cfg.network.multicast = iface;
     }
     if let Some(pipe) = cli.metadata_pipe.filter(|p| !p.as_os_str().is_empty()) {
         cfg.metadata.pipe = pipe.display().to_string();
@@ -171,20 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Realtime PCM pacing: enabled");
     }
 
-    let iface_bind = if cfg.network.interface.is_empty() {
-        None
-    } else {
-        match wledplay::netif::resolve_interface(&cfg.network.interface) {
-            Ok(b) => {
-                tracing::info!("Network interface: {} ({})", b.name, b.ipv4);
-                Some(b)
-            }
-            Err(e) => {
-                tracing::error!("{e}");
-                std::process::exit(1);
-            }
-        }
-    };
+    let http_bind = resolve_optional_nic("HTTP", &cfg.network.http);
+    let _airplay_bind = resolve_optional_nic("AirPlay/mDNS", &cfg.network.airplay);
+    let unicast_bind = resolve_optional_nic("WLED unicast", &cfg.network.unicast);
+    let multicast_bind = resolve_optional_nic("WLED multicast", &cfg.network.multicast);
 
     let status: SharedStatus = Arc::new(Mutex::new(RuntimeStatus {
         version: VERSION.into(),
@@ -201,8 +212,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cfg.multicast_ip(),
         cfg.wled.port,
         unicast,
-        iface_bind.as_ref().map(|b| b.ipv4),
-        iface_bind.as_ref().map(|b| b.name.as_str()),
+        unicast_bind.as_ref().map(|b| (b.name.as_str(), b.ipv4)),
+        multicast_bind.as_ref().map(|b| (b.name.as_str(), b.ipv4)),
     )?;
     sender.set_multicast_enabled(cfg.wled.multicast_enabled);
     let sender = Arc::new(Mutex::new(sender));
@@ -213,13 +224,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sender: sender.clone(),
         config_path: config_path.clone(),
         applied_name: cfg.airplay.name.clone(),
-        applied_interface: cfg.network.interface.clone(),
+        applied_http: cfg.network.http.clone(),
+        applied_airplay: cfg.network.airplay.clone(),
+        applied_unicast: cfg.network.unicast.clone(),
+        applied_multicast: cfg.network.multicast.clone(),
         applied_shairport: cfg.audio.shairport_latency_offset_s,
         restart: restart.clone(),
     };
 
     if cfg.web.enabled && !cli.no_web {
-        let listen = cfg.web.listen.clone();
+        let listen = http_bind
+            .as_ref()
+            .map(|b| b.ipv4.to_string())
+            .unwrap_or_else(|| cfg.web.listen.clone());
         let port = cfg.web.port;
         let state = AppState {
             status: status.clone(),
@@ -376,6 +393,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+fn resolve_optional_nic(role: &str, name: &str) -> Option<wledplay::netif::InterfaceBind> {
+    match wledplay::netif::optional_bind(name) {
+        Ok(Some(b)) => {
+            tracing::info!("{role} interface: {} ({})", b.name, b.ipv4);
+            Some(b)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::error!("{role}: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Count one underrun per contiguous PCM gap, not once per send tick.

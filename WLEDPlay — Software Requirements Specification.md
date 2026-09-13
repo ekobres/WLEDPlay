@@ -509,6 +509,12 @@ wled:
 
   destinations: []
 
+network:
+  http: ""
+  airplay: ""
+  unicast: ""
+  multicast: ""
+
 logging:
   level: info
 
@@ -528,7 +534,10 @@ WLEDPLAY_MULTICAST_ADDRESS
 WLEDPLAY_PORT
 WLEDPLAY_SYNC_OFFSET_MS
 WLEDPLAY_LOG_LEVEL
-WLEDPLAY_INTERFACE
+WLEDPLAY_HTTP_INTERFACE
+WLEDPLAY_AIRPLAY_INTERFACE
+WLEDPLAY_UNICAST_INTERFACE
+WLEDPLAY_MULTICAST_INTERFACE
 WLEDPLAY_DESTINATION
 ```
 
@@ -644,7 +653,7 @@ The UI should display:
 - packet rate;
 - WLED destinations;
 - multicast on/off;
-- current network interface;
+- current HTTP, AirPlay/mDNS, unicast, and multicast interfaces;
 - synchronization / visual delay;
 - AirPlay receiver name.
 
@@ -658,7 +667,10 @@ The UI is the primary operator console for a running instance. To the extent a s
 |---|---|
 | Visual delay | Advance or retard visualization relative to the speakers. Apply immediately during an active stream. Support both earlier and later visuals (negative and positive compensation). |
 | AirPlay name | Rename the advertised receiver from the default `WLEDPlay`. Re-advertise via mDNS. Warn that the current AirPlay session may drop. |
-| Network interface | When more than one usable IPv4 NIC is present, choose which one binds AirPlay / Avahi / WLED UDP. HTTP may remain on all interfaces so the management address keeps working. Apply via stack restart. |
+| HTTP interface | Bind the control UI to a management NIC, or leave unset for all interfaces. Apply via stack restart. |
+| AirPlay / mDNS interface | Bind Shairport Sync and Avahi to the user-network NIC. Apply via stack restart. |
+| Unicast interface | Bind WLED Audio Sync unicast UDP to the IoT / device NIC. Apply via stack restart. |
+| Multicast interface | Bind WLED Audio Sync multicast (`239.0.0.1`) to an IoT NIC, which may differ from unicast. Apply via stack restart. |
 | Multicast | Enable or disable WLED Audio Sync multicast send/join without stopping unicast destinations. Apply immediately. |
 | Unicast destinations | Add or remove WLED controller IPs (and optional port). Apply immediately. An empty list with multicast off means “send nowhere.” |
 | Restart | Restart the WLEDPlay process (and, in the Docker stack, Shairport / NQPTP as needed) so pending bind/name/interface changes take effect. Docker `restart: unless-stopped` (or equivalent) must bring the stack back. |
@@ -683,7 +695,7 @@ restart  — requires process or Shairport restart
 
 Live examples: visual delay, multicast enable, destination list.
 
-Restart examples: AirPlay name, network interface, HTTP listen address (do not offer HTTP bind/port changes that would disconnect the UI without a warning).
+Restart examples: AirPlay name, any of the four network interfaces, HTTP listen address (do not offer HTTP bind/port changes that would disconnect the UI without a warning).
 
 ### Control API
 
@@ -698,7 +710,7 @@ GET    /interfaces
 
 `PATCH /config` accepts a partial JSON body of operator settings. Unknown fields are ignored. Invalid values return `4xx` and leave the previous settings unchanged.
 
-`GET /interfaces` returns the host’s usable IPv4 interfaces (name, address, whether currently selected).
+`GET /interfaces` returns the host’s usable IPv4 interfaces (name, address). The four current selections are on `GET /config`.
 
 `POST /restart` initiates an orderly shutdown after the current settings have been persisted (when possible). The container/service supervisor restarts the process.
 
@@ -1201,7 +1213,7 @@ Add the §22.2 control surface:
 
 - visual delay while streaming;
 - AirPlay rename;
-- interface selection on multi-homed hosts;
+- per-traffic interface selection on multi-homed hosts (HTTP, AirPlay/mDNS, unicast, multicast);
 - multicast enable/disable;
 - unicast destination edit;
 - persist-to-config;

@@ -2,15 +2,28 @@
 set -eu
 
 CFG_YAML="/etc/wledplay/config.yaml"
-yaml_quoted() {
+yaml_scalar() {
   key=$1
-  sed -n "s/^[[:space:]]*${key}:[[:space:]]*\"\\(.*\\)\"/\\1/p" "$CFG_YAML" 2>/dev/null | head -1
+  [ -f "$CFG_YAML" ] || return 0
+  val=$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*\"\\(.*\\)\"[[:space:]]*$/\\1/p" "$CFG_YAML" 2>/dev/null | head -1)
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+    return
+  fi
+  sed -n "s/^[[:space:]]*${key}:[[:space:]]*\\([^#[:space:]\"].*\\)$/\\1/p" "$CFG_YAML" 2>/dev/null | head -1 | tr -d '[:space:]'
 }
 
-WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-}"
-if [ -z "$WLEDPLAY_AIRPLAY_NAME" ]; then
-  WLEDPLAY_AIRPLAY_NAME="$(yaml_quoted name)"
-fi
+pick_env() {
+  var=$1
+  key=$2
+  eval "cur=\${$var:-}"
+  if [ -z "$cur" ]; then
+    cur=$(yaml_scalar "$key")
+    eval "$var=\$cur"
+  fi
+}
+
+pick_env WLEDPLAY_AIRPLAY_NAME name
 WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-WLEDPlay}"
 WLEDPLAY_MULTICAST_ADDRESS="${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
 WLEDPLAY_PORT="${WLEDPLAY_PORT:-11988}"
@@ -24,10 +37,12 @@ fi
 WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
 WLEDPLAY_DESTINATION="${WLEDPLAY_DESTINATION:-}"
-WLEDPLAY_INTERFACE="${WLEDPLAY_INTERFACE:-}"
-if [ -z "$WLEDPLAY_INTERFACE" ]; then
-  WLEDPLAY_INTERFACE="$(yaml_quoted interface)"
-fi
+pick_env WLEDPLAY_HTTP_INTERFACE http
+pick_env WLEDPLAY_AIRPLAY_INTERFACE airplay
+pick_env WLEDPLAY_UNICAST_INTERFACE unicast
+pick_env WLEDPLAY_MULTICAST_INTERFACE multicast
+export WLEDPLAY_HTTP_INTERFACE WLEDPLAY_AIRPLAY_INTERFACE
+export WLEDPLAY_UNICAST_INTERFACE WLEDPLAY_MULTICAST_INTERFACE
 WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
 if [ -z "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="$(sed -n 's/^[[:space:]]*shairport_latency_offset_s:[[:space:]]*//p' "$CFG_YAML" 2>/dev/null | head -1)"
@@ -67,13 +82,13 @@ start_mdns() {
 
   avahi_conf=/tmp/avahi-daemon.conf
   cp /etc/avahi/avahi-daemon.conf "$avahi_conf"
-  if [ -n "$WLEDPLAY_INTERFACE" ]; then
+  if [ -n "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
     if grep -q '^#*allow-interfaces=' "$avahi_conf"; then
-      sed -i "s|^#*allow-interfaces=.*|allow-interfaces=${WLEDPLAY_INTERFACE}|" "$avahi_conf"
+      sed -i "s|^#*allow-interfaces=.*|allow-interfaces=${WLEDPLAY_AIRPLAY_INTERFACE}|" "$avahi_conf"
     else
-      sed -i "/^\\[server\\]/a allow-interfaces=${WLEDPLAY_INTERFACE}" "$avahi_conf"
+      sed -i "/^\\[server\\]/a allow-interfaces=${WLEDPLAY_AIRPLAY_INTERFACE}" "$avahi_conf"
     fi
-    echo "Avahi allow-interfaces: ${WLEDPLAY_INTERFACE}"
+    echo "Avahi allow-interfaces: ${WLEDPLAY_AIRPLAY_INTERFACE}"
   fi
 
   echo "Starting avahi-daemon..."
@@ -111,16 +126,16 @@ if [ "$ENABLE_AIRPLAY2" = "1" ]; then
 fi
 
 sed "s/WLEDPlay/${WLEDPLAY_AIRPLAY_NAME}/g" /etc/shairport-sync.conf > /tmp/shairport-sync.conf
-if [ -n "$WLEDPLAY_INTERFACE" ]; then
+if [ -n "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
   if grep -q 'interface =' /tmp/shairport-sync.conf; then
-    sed -i "s|^[[:space:]]*//[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
-    sed -i "s|^[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
+    sed -i "s|^[[:space:]]*//[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_AIRPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
+    sed -i "s|^[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_AIRPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
   else
     sed -i "/^general = {/a\\
-  interface = \"${WLEDPLAY_INTERFACE}\";
+  interface = \"${WLEDPLAY_AIRPLAY_INTERFACE}\";
 " /tmp/shairport-sync.conf
   fi
-  echo "Shairport interface: ${WLEDPLAY_INTERFACE}"
+  echo "Shairport interface: ${WLEDPLAY_AIRPLAY_INTERFACE}"
 fi
 if [ -n "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   sed -i "s|^[[:space:]]*audio_backend_latency_offset_in_seconds = .*|  audio_backend_latency_offset_in_seconds = ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET};|" /tmp/shairport-sync.conf
@@ -142,11 +157,6 @@ if [ -n "$WLEDPLAY_DESTINATION" ]; then
   IFS=$OLDIFS
 fi
 
-IFACE_ARGS=""
-if [ -n "$WLEDPLAY_INTERFACE" ]; then
-  IFACE_ARGS="--interface ${WLEDPLAY_INTERFACE}"
-fi
-
 echo "Starting wledplay..."
 # shellcheck disable=SC2086
 /wledplay \
@@ -159,7 +169,6 @@ echo "Starting wledplay..."
   --pcm-channels "${WLEDPLAY_PCM_CHANNELS}" \
   --pcm-format "${WLEDPLAY_PCM_FORMAT}" \
   $DEST_ARGS \
-  $IFACE_ARGS \
   --metadata-pipe "$META_FIFO" \
   < "$PCM_FIFO" &
 WLEDPLAY_PID=$!
