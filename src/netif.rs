@@ -3,6 +3,38 @@
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr};
 
+pub fn ipv4_same_subnet(local: Ipv4Addr, mask: Ipv4Addr, dest: Ipv4Addr) -> bool {
+    let local = u32::from(local);
+    let mask = u32::from(mask);
+    let dest = u32::from(dest);
+    local & mask == dest & mask
+}
+
+/// Local IPv4 that should send toward `dest` (same subnet). Used for multicast IF.
+pub fn egress_ipv4_toward(dest: IpAddr) -> Option<Ipv4Addr> {
+    let IpAddr::V4(dest) = dest else {
+        return None;
+    };
+    let Ok(addrs) = if_addrs::get_if_addrs() else {
+        return None;
+    };
+    for iface in addrs {
+        if iface.is_loopback() {
+            continue;
+        }
+        let if_addrs::IfAddr::V4(v4) = iface.addr else {
+            continue;
+        };
+        if v4.ip.is_unspecified() || v4.ip.is_link_local() {
+            continue;
+        }
+        if ipv4_same_subnet(v4.ip, v4.netmask, dest) {
+            return Some(v4.ip);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceBind {
     pub name: String,
@@ -80,5 +112,19 @@ pub fn resolve_interface(name: &str) -> Result<InterfaceBind, String> {
             "interface {name} not found (available: {})",
             names.into_iter().collect::<Vec<_>>().join(", ")
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ipv4_same_subnet;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn same_subnet_matches_vlan() {
+        let local = Ipv4Addr::new(10, 11, 1, 10);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        assert!(ipv4_same_subnet(local, mask, Ipv4Addr::new(10, 11, 1, 124)));
+        assert!(!ipv4_same_subnet(local, mask, Ipv4Addr::new(10, 0, 0, 100)));
     }
 }

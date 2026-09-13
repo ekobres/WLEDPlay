@@ -38,10 +38,34 @@ impl WledSender {
             bind_udp_device(&socket, name, local);
         }
 
+        let mcast_if = bind_ip
+            .filter(|ip| !ip.is_unspecified())
+            .or_else(|| {
+                unicast_destinations
+                    .iter()
+                    .find_map(|d| crate::netif::egress_ipv4_toward(d.ip()))
+            });
+        // Kernel default is TTL 1 and no multicast IF: on a multi-homed host the
+        // packets follow the default route NIC, not the WLED VLAN.
+        if let Err(e) = socket.set_multicast_ttl_v4(20) {
+            tracing::warn!("IP_MULTICAST_TTL: {e}");
+        }
+        if let Some(ip) = mcast_if {
+            if let Err(e) = socket.set_multicast_if_v4(&ip) {
+                tracing::warn!("IP_MULTICAST_IF {ip}: {e}");
+            } else {
+                tracing::info!("WLED multicast egress {ip} ttl=20");
+            }
+        } else {
+            tracing::warn!(
+                "WLED multicast has no egress NIC (set WLEDPLAY_INTERFACE); kernel default route will be used"
+            );
+        }
+
         if let IpAddr::V4(addr) = multicast {
-            socket.join_multicast_v4(&addr, &local)?;
-            if !local.is_unspecified() {
-                let _ = socket.set_multicast_if_v4(&local);
+            let join_if = mcast_if.unwrap_or(local);
+            if let Err(e) = socket.join_multicast_v4(&addr, &join_if) {
+                tracing::warn!("join {addr} on {join_if}: {e}");
             }
         }
 

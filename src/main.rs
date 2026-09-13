@@ -25,6 +25,8 @@ const PCM_IDLE_START: Duration = Duration::from_millis(2000);
 const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 /// Keep at most this much unread stdin PCM when not realtime-pacing (AirPlay).
 const STDIN_KEEP_MS: u64 = 80;
+/// Count an underrun only after PCM has been silent this long (AirPlay writes ~21 ms frames).
+const PCM_UNDERRUN_AFTER: Duration = Duration::from_millis(80);
 /// Max queued Audio Sync packets for live visual delay (5s at 50 Hz, plus slack).
 const DELAY_QUEUE_MAX: usize = 300;
 
@@ -275,8 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut udp_active = false;
     let mut idle_packets_sent = 0u64;
     let mut announced_end = false;
-    let mut last_pcm_frames = 0u64;
-    let mut stale_sends = 0u32;
+    let mut underrun_open = false;
     let mut delay_q: VecDeque<(Instant, AudioSyncPacket)> = VecDeque::new();
 
     loop {
@@ -284,7 +285,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tracing::info!("Restart requested; exiting so the supervisor can relaunch");
             break;
         }
-        let now = Instant::now();
         if last_send.elapsed() >= update_interval {
             let mut rt = runtime.lock().unwrap();
             if rt.stream_active {
@@ -297,7 +297,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         status.lock().unwrap().airplay.connected = false;
                         idle_packets_sent = 0;
                         announced_end = true;
-                        stale_sends = 0;
+                        underrun_open = false;
                     }
                 }
             }
@@ -306,14 +306,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 udp_active = true;
                 idle_packets_sent = 0;
                 announced_end = false;
-                if rt.pcm_frames == last_pcm_frames {
-                    stale_sends += 1;
-                    if stale_sends == 2 {
-                        rt.pcm_underruns += 1;
-                    }
-                } else {
-                    stale_sends = 0;
-                    last_pcm_frames = rt.pcm_frames;
+                let starved = rt
+                    .last_pcm
+                    .map(|t| t.elapsed() >= PCM_UNDERRUN_AFTER)
+                    .unwrap_or(false);
+                if note_pcm_gap(&mut underrun_open, starved) {
+                    rt.pcm_underruns += 1;
                 }
                 let pkt = rt.analyzer.build_packet();
                 publish_audio(&status, &rt, &live_cfg.lock().unwrap());
@@ -347,7 +345,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
 
-            last_send = now;
+            last_send += update_interval;
+            if last_send.elapsed() >= update_interval {
+                last_send = Instant::now();
+            }
         }
 
         let due = Instant::now();
@@ -375,6 +376,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+/// Count one underrun per contiguous PCM gap, not once per send tick.
+fn note_pcm_gap(open: &mut bool, starved: bool) -> bool {
+    if starved {
+        if !*open {
+            *open = true;
+            return true;
+        }
+    } else {
+        *open = false;
+    }
+    false
 }
 
 fn enqueue_packet(
@@ -502,30 +516,39 @@ fn read_pcm(
             }
             Ok(n) => {
                 let now_ms = start_ms();
+                let mut samples = Vec::new();
                 let mut cursor = std::io::Cursor::new(&read_buf[..n]);
-                let mut rt = runtime.lock().unwrap();
-                if !rt.stream_active {
-                    tracing::info!("PCM stream connected");
-                    rt.stream_active = true;
-                    rt.stream_since = Some(Instant::now());
-                    rt.connections += 1;
-                    rt.analyzer.set_stream_active(true);
-                    status.lock().unwrap().airplay.connected = true;
-                    playback_clock = Instant::now();
-                    bytes_played = 0;
-                }
-                match decoder.decode_chunk(&mut cursor, |sample| {
-                    rt.analyzer.ingest_mono_sample(sample, now_ms);
+                let frames = match decoder.decode_chunk(&mut cursor, |sample| {
+                    samples.push(sample);
                 }) {
-                    Ok(frames) => rt.pcm_frames += frames as u64,
+                    Ok(frames) => frames,
                     Err(e) => {
                         tracing::error!("PCM decode error: {e}");
-                        rt.stdin_closed = true;
+                        runtime.lock().unwrap().stdin_closed = true;
                         break;
                     }
+                };
+                {
+                    let mut rt = runtime.lock().unwrap();
+                    if !rt.stream_active {
+                        tracing::info!("PCM stream connected");
+                        rt.stream_active = true;
+                        rt.stream_since = Some(Instant::now());
+                        rt.connections += 1;
+                        rt.analyzer.set_stream_active(true);
+                        status.lock().unwrap().airplay.connected = true;
+                        playback_clock = Instant::now();
+                        bytes_played = 0;
+                    }
+                    rt.pcm_frames += frames as u64;
+                    rt.last_pcm = Some(Instant::now());
                 }
-                rt.last_pcm = Some(Instant::now());
-                drop(rt);
+                {
+                    let mut rt = runtime.lock().unwrap();
+                    for sample in samples {
+                        rt.analyzer.ingest_mono_sample(sample, now_ms);
+                    }
+                }
 
                 if pace_realtime && bytes_per_second > 0 {
                     bytes_played += n as u64;
@@ -621,10 +644,17 @@ fn update_status(
     let mut s = status.lock().unwrap();
     s.audio.sample_rate = pcm::ANALYSIS_RATE;
     s.audio.channels = 1;
-    s.audio.rms = rt.analyzer.rms_proxy();
-    s.audio.peak = rt.analyzer.samples.sample_peak;
-    s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
-    s.audio.bands = rt.analyzer.fft_bands();
+    if rt.stream_active {
+        s.audio.rms = rt.analyzer.rms_proxy();
+        s.audio.peak = rt.analyzer.samples.sample_peak;
+        s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
+        s.audio.bands = rt.analyzer.fft_bands();
+    } else {
+        s.audio.rms = 0.0;
+        s.audio.peak = false;
+        s.audio.dominant_frequency = 0.0;
+        s.audio.bands = [0; 16];
+    }
     s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
     s.audio.update_hz = cfg.audio.update_hz;
     s.wled.packets_per_second = packets_per_sec as f32;
@@ -650,11 +680,32 @@ fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config) {
     let mut s = status.lock().unwrap();
     s.audio.sample_rate = pcm::ANALYSIS_RATE;
     s.audio.channels = 1;
-    s.audio.rms = rt.analyzer.rms_proxy();
-    s.audio.peak = rt.analyzer.samples.sample_peak;
-    s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
-    s.audio.bands = rt.analyzer.fft_bands();
+    if rt.stream_active {
+        s.audio.rms = rt.analyzer.rms_proxy();
+        s.audio.peak = rt.analyzer.samples.sample_peak;
+        s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
+        s.audio.bands = rt.analyzer.fft_bands();
+    } else {
+        s.audio.rms = 0.0;
+        s.audio.peak = false;
+        s.audio.dominant_frequency = 0.0;
+        s.audio.bands = [0; 16];
+    }
     s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
     s.audio.update_hz = cfg.audio.update_hz;
     s.airplay.connected = rt.stream_active;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::note_pcm_gap;
+
+    #[test]
+    fn counts_one_underrun_per_gap() {
+        let mut open = false;
+        assert!(note_pcm_gap(&mut open, true));
+        assert!(!note_pcm_gap(&mut open, true));
+        assert!(!note_pcm_gap(&mut open, false));
+        assert!(note_pcm_gap(&mut open, true));
+    }
 }

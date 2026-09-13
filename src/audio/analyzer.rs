@@ -49,6 +49,7 @@ impl Analyzer {
     }
 
     pub fn reset_silence(&mut self) {
+        self.samples.reset();
         self.sample_buffer.clear();
         self.fft_calc.fill(0.0);
         self.fft_avg.fill(0.0);
@@ -171,4 +172,21 @@ impl Analyzer {
 
 pub fn hz_to_bin(hz: f32) -> usize {
     ((hz / (SAMPLE_RATE as f32 / SAMPLES_FFT as f32)).round() as usize).min(255)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Analyzer;
+    use crate::config::AgcMode;
+
+    #[test]
+    fn silence_clears_stuck_peak_and_level() {
+        let mut a = Analyzer::new(AgcMode::Normal);
+        a.samples.sample_peak = true;
+        a.samples.sample_agc = 168.0;
+        a.samples.sample_avg = 168.0;
+        a.set_stream_active(false);
+        assert!(!a.samples.sample_peak);
+        assert!(a.rms_proxy() < 0.01);
+    }
 }

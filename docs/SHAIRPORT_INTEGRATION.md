@@ -107,6 +107,51 @@ Not required for audio-reactive operation.
 
 ---
 
+## How iOS / macOS choose the speaker icon
+
+There is **no `shairport-sync.conf` setting** that controls the Control Center icon. The advertised name (`general.name` / `WLEDPLAY_AIRPLAY_NAME`) is only the label.
+
+Apple picks the glyph from the AirPlay **model string**, which Shairport Sync hard-codes in `shairport.c`:
+
+```c
+config.model = strdup("ShairportSync");
+// config.model = strdup("AudioAccessory5,1");
+```
+
+That value is published in three places (see `bonjour_strings.c` and `rtsp.c`):
+
+| Channel | Key | Role |
+|---|---|---|
+| `_raop._tcp` TXT | `am=` | Classic / RAOP model |
+| `_airplay._tcp` TXT | `model=` | AirPlay 2 model |
+| RTSP `/info` plist | `model` | Confirmed after connect |
+
+Related keys that do **not** choose the icon:
+
+| Setting | What it actually does |
+|---|---|
+| `general.name` | Display name only |
+| `service_type` (`airplay2` / `classic`) | Protocol / picker grouping |
+| `airplay_device_id` / `airplay_device_id_offset` | Stable device identity |
+| `features` / `flags` / `srcvers` / `osvers` | Capability bits (hard-coded) |
+| `manufacturer` in `/info` | Always `"Shairport Sync"` |
+
+iOS Control Center uses at least three speaker glyphs, all visible in a mixed picker:
+
+| Advertisement | Typical icon |
+|---|---|
+| Apple model IDs (`AudioAccessory*`, `AppleTV*`, iPhone) | Product silhouette |
+| Licensed AirPlay 2 hardware (`model=One` + `manufacturer=Sonos`, Denon AVR, …) | Stylized bookshelf speaker |
+| Unknown / software receiver (`model=ShairportSync`, no `manufacturer` TXT) | Speaker cone with sound waves |
+
+WLEDPlay is the third class. Sonos and Denon are the second. They are not the same icon. macOS Control Center often draws both class 2 and class 3 as a bookshelf, which is why they can look similar on a Mac and different on iPhone.
+
+A captured Sonos One TXT record includes `model=One`, `manufacturer=Sonos`, and `features=0x445F8A00,0x1C340`. Shairport Sync advertises `model=ShairportSync` and does **not** put `manufacturer=` in the `_airplay._tcp` TXT. Apple appears to pick the bookshelf only for recognized third-party hardware (model/manufacturer allowlist), not for every AirPlay 2 endpoint.
+
+To look like a HomePod you would rebuild Shairport Sync and set `config.model` to an Apple ID (the commented `AudioAccessory5,1` line). Testers report the HomePod glyph can appear and then snap back on connect. Impersonating Apple or Sonos hardware is unsupported and can break grouping. There is no supported way to become a “licensed speaker” from config.
+
+---
+
 ## Presentation timing
 
 Shairport Sync tracks playout timing for synchronized AirPlay 2 output. For stdout backend:

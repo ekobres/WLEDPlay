@@ -111,7 +111,7 @@ Verify:
 python3 scripts/verify_wled_sync.py 10.11.1.124
 ```
 
-**Fix:** run WLEDPlay on a host in the **same VLAN as WLED** (IoT / `10.11.x`), or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path.
+**Fix:** run WLEDPlay on a host in the **same VLAN as WLED** (IoT / `10.11.x`), or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path. On a multi-homed host set `WLEDPLAY_INTERFACE` to the WLED VLAN NIC so `239.0.0.1` is not sent out the management default route. IGMP snooping may keep that group off the router trunk if no receiver on that path has joined.
 
 On UniFi: create a rule allowing `10.11.1.124:11988/udp` from your WLEDPlay host (or the IoT VLAN).
 
