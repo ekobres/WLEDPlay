@@ -64,4 +64,4 @@ echo "Installed:"
 "$PREFIX/bin/nqptp" -V || true
 "$PREFIX/bin/shairport-sync" -V || true
 echo
-echo "Next: ./scripts/run-airplay2.sh"
+echo "Next: ./scripts/run-airplay.sh"

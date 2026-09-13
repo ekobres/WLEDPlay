@@ -1,6 +1,8 @@
 # WLEDPlay
 
-Headless AirPlay-to-WLED audio-reactive bridge. Presents as an AirPlay receiver, analyzes decoded PCM, and transmits WLED Audio Sync V2 packets to one or more WLED 16.x controllers.
+Headless AirPlay 2-to-WLED audio-reactive bridge. Presents as an AirPlay receiver, analyzes decoded PCM, and transmits WLED Audio Sync V2 packets to one or more WLED 16.x controllers.
+
+**AirPlay 1 is deliberately not supported.** Classic AirPlay cannot join a live speaker group with correct presentation-time sync — the primary use case is grouping WLEDPlay with HomePods, Apple TVs, and other AirPlay 2 speakers.
 
 ## Quick start (PCM test, no AirPlay)
 
@@ -16,33 +18,18 @@ cat /tmp/test.pcm | ./target/release/wledplay --config config/config.yaml --inpu
 
 WLEDPlay stops UDP transmission shortly after the PCM stream ends and exits when stdin closes (pipe tests).
 
-## AirPlay (Phase 3)
+## AirPlay 2 (Linux)
 
-On macOS, Docker Desktop cannot advertise AirPlay on the LAN (`network_mode: host` is a Linux feature). Run Shairport Sync natively and pipe PCM into WLEDPlay:
+WLEDPlay requires **AirPlay 2** with **NQPTP** (UDP ports 319/320). macOS cannot host this stack; use a Linux host (Pi, NUC, LXC, Docker).
+
+On a Linux host:
 
 ```bash
-brew install shairport-sync
+./scripts/build-airplay.sh
 ./scripts/run-airplay.sh
 ```
 
-Then pick **WLEDPlay** in Control Center / Apple Music. The Homebrew formula is AirPlay 1 with a `stdout` backend — that is enough for a phone or Mac to stream audio.
-
-On macOS, **turn off AirPlay Receiver** first (`System Settings → General → AirDrop & Handoff`). Control Center already listens on TCP 5000, and Shairport Sync 5.5 always uses that port for AirPlay 1.
-
-Use `--no-realtime` whenever Shairport (or any live source) already emits PCM in real time. `cat file.pcm | …` still needs pacing (the default).
-
-## AirPlay 2 (Phase 4)
-
-Official Shairport Sync AirPlay 2 uses **NQPTP** on UDP **319/320**. macOS already owns those ports, so AP2 **cannot run on this Mac**. Stay on `./scripts/run-airplay.sh` here.
-
-On a Linux host (Pi, NUC, etc.):
-
-```bash
-./scripts/build-airplay2.sh
-./scripts/run-airplay2.sh
-```
-
-Or:
+Or Docker with host networking:
 
 ```bash
 WLEDPLAY_DESTINATION=10.11.1.124 \
@@ -54,7 +41,11 @@ docker compose up -d --build
 
 On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin — HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus + Avahi; if the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
 
-Then group **WLEDPlay** with a HomePod / Apple TV and measure visual vs audible sync (`docs/SYNC_MEASUREMENT.md`). AP2 PCM is pinned to **48000 Hz S16LE**.
+Group **WLEDPlay** with a HomePod / Apple TV and measure visual vs audible sync ([`docs/SYNC_MEASUREMENT.md`](docs/SYNC_MEASUREMENT.md)). AirPlay PCM is pinned to **48000 Hz S16LE**.
+
+Docker Desktop for Mac cannot advertise AirPlay on the LAN (`network_mode: host` is a Linux feature).
+
+Use `--no-realtime` whenever Shairport (or any live source) already emits PCM in real time. `cat file.pcm | …` still needs pacing (the default).
 
 ## Configuration
 

@@ -6,7 +6,7 @@ This measurement **requires a Linux (or FreeBSD) host**. Official AP2 + NQPTP ca
 
 ## Procedure
 
-1. On Linux: `./scripts/run-airplay2.sh` or `docker compose up -d --build` with host networking.
+1. On Linux: `./scripts/run-airplay.sh` or `docker compose up -d --build` with host networking.
 2. Confirm `shairport-sync -V` contains `AirPlay2` and `nqptp -V` reports the same SMI version (`smi10` for 5.5.1 / 1.2.8).
 3. In Control Center, start a group that includes **WLEDPlay** and a known-good speaker.
 4. Play a track with sharp transients (metronome, clap, kick).
@@ -24,4 +24,4 @@ Record the chosen offset once it looks right.
 | `audio_backend_latency_offset_in_seconds` (AP2) | `-1.2` | Shairport write vs presentation time (more negative = earlier visuals) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | unset | Docker override for the Shairport offset, seconds |
 
-AirPlay 2 stdout still often lands ~1–1.5 s late versus grouped speakers. Start at `-1.2` and trim by ~0.1 s. The AirPlay 1 macOS `-1.0` was a different buffer; do not assume they stay equal.
+AirPlay 2 stdout often lands ~1–1.5 s late versus grouped speakers on first connect. Start at `-1.2` and trim by ~0.1 s.

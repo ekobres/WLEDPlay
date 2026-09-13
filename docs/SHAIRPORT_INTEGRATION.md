@@ -1,6 +1,8 @@
 # Shairport Sync Integration
 
-WLEDPlay uses upstream **Shairport Sync** and **NQPTP** as replaceable external processes. WLEDPlay reads decoded PCM only; it does not implement AirPlay.
+WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceable external processes. WLEDPlay reads decoded PCM only; it does not implement AirPlay.
+
+**AirPlay 1 is deliberately not supported.** Classic AirPlay cannot join a live speaker group with correct presentation-time sync. WLEDPlay targets AirPlay 2 multi-room grouping with HomePods, Apple TVs, and other synchronized receivers.
 
 ---
 
@@ -8,42 +10,28 @@ WLEDPlay uses upstream **Shairport Sync** and **NQPTP** as replaceable external 
 
 | Component | Recommendation | Notes |
 |-----------|----------------|-------|
-| Shairport Sync | Latest stable **4.x** release from [mikebrady/shairport-sync](https://github.com/mikebrady/shairport-sync) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr` or `--with-sw-resample` |
-| NQPTP | Latest from [mikebrady/nqptp](https://github.com/mikebrady/nqptp) | Required for AirPlay 2 timing |
+| Shairport Sync | **5.5.1** (pinned in Docker) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr`, `--with-metadata` |
+| NQPTP | **1.2.8** (pinned in Docker) | Required for AirPlay 2 timing (`smi10`) |
 
 Pin exact versions in Docker image tags for reproducibility.
 
 ---
 
-## AirPlay 1 vs AirPlay 2
+## Platform requirements
 
-| Feature | AirPlay 1 | AirPlay 2 |
-|---------|-----------|-----------|
-| Timing | Shairport Sync internal | NQPTP PTP clock |
-| Default PCM (stdout) | S16_LE, **44100 Hz**, stereo | S32_LE, **48000 Hz**, stereo (transcode configurable) |
-| Multi-room | Limited | Native synchronized groups |
-| Build flags | Base shairport-sync | `--with-airplay-2` + run **nqptp** |
+| Platform | Supported |
+|----------|-----------|
+| Linux (Docker, bare metal, LXC, Pi) | Yes — Shairport Sync + NQPTP |
+| macOS | No — NQPTP needs exclusive UDP 319/320, which the OS already uses ([AIRPLAY2.md](https://github.com/mikebrady/shairport-sync/blob/master/AIRPLAY2.md)) |
 
-Phase 3 is AirPlay 1 on macOS. Phase 4 is AirPlay 2 + NQPTP on **Linux**.
-
-### macOS (AirPlay 1 only)
-
-Homebrew `shairport-sync` is **AirPlay 1** (`--with-stdout`, `--with-dns_sd`). Use [`scripts/run-airplay.sh`](../scripts/run-airplay.sh).
-
-macOS **AirPlay Receiver** listens on TCP **5000** — turn it off before the AP1 runner.
-
-**AirPlay 2 cannot run on macOS.** NQPTP needs exclusive UDP 319/320, which the OS already uses ([AIRPLAY2.md](https://github.com/mikebrady/shairport-sync/blob/master/AIRPLAY2.md)).
-
-### Linux (AirPlay 2)
-
-Pinned versions: Shairport Sync **5.5.1** + NQPTP **1.2.8** (`smi10`).
+Native Linux:
 
 ```bash
-./scripts/build-airplay2.sh
-./scripts/run-airplay2.sh
+./scripts/build-airplay.sh
+./scripts/run-airplay.sh
 ```
 
-Config: [`config/shairport-sync-airplay2.conf`](../config/shairport-sync-airplay2.conf) (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker uses the same pairing with `network_mode: host`.
+Config: [`config/shairport-sync.conf`](../config/shairport-sync.conf) (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker uses [`docker/shairport-sync.conf`](../docker/shairport-sync.conf) with `network_mode: host`.
 
 ---
 
@@ -52,7 +40,7 @@ Config: [`config/shairport-sync-airplay2.conf`](../config/shairport-sync-airplay
 Build Shairport Sync with stdout backend:
 
 ```bash
-./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl
+./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata
 make
 ```
 
@@ -62,15 +50,13 @@ Configuration (`/etc/shairport-sync.conf` or `docker/shairport-sync.conf`):
 general = {
   name = "WLEDPlay";
   output_backend = "stdout";
-  // AirPlay 2: ensure nqptp is running
+  service_type = "airplay2";
 };
 
 stdout = {
-  output_rate = 44100;
+  output_rate = 48000;
   output_format = "S16_LE";
   output_channels = 2;
-  audio_backend_buffer_desired_length = 1.0;
-  audio_backend_latency_offset = 0.0;
 };
 ```
 
@@ -78,24 +64,25 @@ Run pipeline:
 
 ```bash
 nqptp &
-shairport-sync -c /etc/shairport-sync.conf | wledplay --input stdin \
-  --pcm-rate 44100 --pcm-channels 2 --pcm-format s16le
+shairport-sync -c /etc/shairport-sync.conf --service-type=airplay2 -o stdout | \
+  wledplay --input stdin --no-realtime \
+    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le
 ```
 
-For AirPlay 2, set stdout to fixed **48000 / S16_LE / 2** (or S32 with WLEDPlay format support) to avoid silent format changes mid-stream.
+Pin stdout to fixed **48000 / S16_LE / 2** to avoid silent format changes mid-stream.
 
 ---
 
 ## PCM format handed to WLEDPlay
 
-| Parameter | AirPlay 1 default | AirPlay 2 default | WLEDPlay internal |
-|-----------|-------------------|-------------------|-------------------|
-| Rate | 44100 | 48000 | **22050** (WLED analysis rate) |
-| Channels | 2 interleaved | 2 | **1** (mono downmix) |
-| Format | S16_LE | S32_LE (configurable) | float analysis |
-| Frame order | LRLRLR… | LRLRLR… | mono samples |
+| Parameter | AirPlay 2 (stdout) | WLEDPlay internal |
+|-----------|-------------------|-------------------|
+| Rate | 48000 | **22050** (WLED analysis rate) |
+| Channels | 2 interleaved | **1** (mono downmix) |
+| Format | S16_LE (configured) | float analysis |
+| Frame order | LRLRLR… | mono samples |
 
-WLEDPlay resamples and downmixes before analysis.
+WLEDPlay resamples and downmixes before analysis. The `--pcm-rate 44100` default applies only to file/stdin test input, not the AirPlay path.
 
 ---
 
@@ -154,25 +141,19 @@ To look like a HomePod you would rebuild Shairport Sync and set `config.model` t
 
 ## Presentation timing
 
-Shairport Sync tracks playout timing for synchronized AirPlay 2 output. For stdout backend:
+Shairport Sync tracks playout timing for synchronized AirPlay 2 output via NQPTP. For stdout backend:
 
 - PCM is written when decoded for playout
-- `audio_backend_latency_offset` adjusts backend timing
-- WLEDPlay should measure visual vs audible sync in multi-room tests before applying `audio.sync_offset_ms`
+- `audio_backend_latency_offset_in_seconds` adjusts backend timing (negative = earlier PCM)
+- WLEDPlay exposes a unified **visual delay** control that maps to live send offset and/or Shairport offset
 
 Distinguish:
 
 ```text
-audio received → decoded → analyzed → (AirPlay presentation time on speakers)
+audio received → decoded → analyzed → (AirPlay 2 presentation time on grouped speakers)
 ```
 
-Initial implementation: analyze and transmit immediately; document measured offset.
-
-For AirPlay 1 on macOS we shrink Shairport’s decoded/backend buffers and set
-`audio_backend_latency_offset_in_seconds = -1.0` so PCM is written ~1 s before
-presentation time. Tune that value (more negative = earlier visuals) if the
-matrix still lags the speakers. WLEDPlay also drops stdin backlog older than
-~80 ms so a pause does not keep draining seconds of queued audio.
+Default Shairport offset in Docker is `-1.2` seconds. Tune in ~0.1 s steps after grouping with a reference speaker ([`SYNC_MEASUREMENT.md`](SYNC_MEASUREMENT.md)). WLEDPlay drops stdin backlog older than ~80 ms so a pause does not keep draining seconds of queued audio.
 
 ---
 
@@ -204,6 +185,8 @@ Use **`network_mode: host`** because WLEDPlay requires:
 - AirPlay 2 PTP (NQPTP)
 
 No `- /dev/snd` mount required.
+
+Per-traffic NIC selection (HTTP, AirPlay/mDNS, unicast, multicast) is configured via `network.*` in YAML or the matching `WLEDPLAY_*_INTERFACE` env vars.
 
 ---
 

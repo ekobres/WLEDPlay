@@ -71,8 +71,8 @@ WLEDPlay should:
 2. Require no microphone or physical audio interface.
 3. Analyze the original digital audio stream rather than room audio.
 4. Support multiple WLED controllers simultaneously.
-5. Support AirPlay 2 where practical.
-6. Work as an AirPlay destination in a multi-room AirPlay configuration.
+5. Support **AirPlay 2** with NQPTP as the only AirPlay receiver mode.
+6. Work as an AirPlay 2 destination in a multi-room AirPlay group alongside live speakers.
 7. Produce WLED Audio Sync data closely equivalent to WLED's native audio-reactive analysis.
 8. Run headlessly.
 9. Be easy to deploy using Docker.
@@ -89,6 +89,7 @@ The initial implementation should NOT attempt to:
 - implement AirPlay/AirPlay 2 from scratch;
 - replace Shairport Sync;
 - implement an AirPlay sender;
+- support **AirPlay 1** (classic AirPlay without NQPTP). AirPlay 1 is deliberately excluded because WLEDPlay cannot join a live speaker group with correct presentation-time sync; the primary use case requires AirPlay 2 multi-room grouping with HomePods, Apple TVs, and other synchronized receivers;
 - act as a general-purpose media server;
 - provide whole-home audio distribution;
 - control WLED effects;
@@ -107,21 +108,22 @@ WLEDPlay supplies only the audio-analysis information consumed by WLED Audio Rea
 
 # 5. AirPlay Receiver
 
-## 5.1 Shairport Sync
+## 5.1 Shairport Sync and NQPTP
 
-The preferred AirPlay implementation is **Shairport Sync**.
+The AirPlay implementation is **Shairport Sync** built with AirPlay 2 support, plus **NQPTP** for synchronized multi-room timing.
 
-WLEDPlay should use an upstream Shairport Sync release rather than fork or embed substantial portions of its AirPlay implementation.
+WLEDPlay must use an upstream Shairport Sync release rather than fork or embed substantial portions of its AirPlay implementation.
 
-Shairport Sync should:
+Shairport Sync must:
 
 - advertise the configured WLEDPlay receiver through Bonjour/mDNS;
-- receive AirPlay audio;
+- receive AirPlay 2 audio;
 - decode the stream to PCM;
-- expose PCM to the WLEDPlay analyzer through stdout, FIFO, pipe, or another efficient local IPC mechanism;
-- support AirPlay 2 when available and properly configured.
+- expose PCM to the WLEDPlay analyzer through stdout, FIFO, pipe, or another efficient local IPC mechanism.
 
-WLEDPlay should treat Shairport Sync as a replaceable external component.
+NQPTP must run alongside Shairport Sync on the same host (UDP ports 319/320). macOS cannot host this stack; deployment targets Linux (Docker, bare metal, LXC, Pi).
+
+WLEDPlay must treat Shairport Sync and NQPTP as replaceable external components.
 
 The analyzer architecture must not depend unnecessarily on Shairport-specific internal APIs.
 
@@ -339,37 +341,39 @@ Do not transmit packets unnecessarily faster than WLED can consume them.
 
 # 13. Synchronization
 
-AirPlay introduces buffering and presentation timing.
+AirPlay 2 introduces buffering and presentation timing shared with grouped speakers via NQPTP.
 
-WLEDPlay should investigate whether Shairport Sync exposes sufficient timing information to align WLED visualization with the actual AirPlay presentation time.
+WLEDPlay compensates using two stored values:
 
-The system should distinguish between:
+- `audio.sync_offset_ms` — live delay applied in the WLEDPlay send loop (positive = later visuals);
+- `audio.shairport_latency_offset_s` — Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM from Shairport).
+
+The operator console presents a single **visual delay** control that maps onto these fields: positive delay adjusts live send offset immediately; delay earlier than the current Shairport compensation requires a stack restart so Shairport can pull PCM earlier.
+
+The system distinguishes:
 
 ```text
 audio received
 audio decoded
 audio analyzed
-audio presentation time
+audio presentation time (AirPlay 2 group clock)
 ```
 
 The ideal behavior is:
 
 > WLED effects react when the corresponding audio is actually heard from synchronized AirPlay speakers.
 
-Do not artificially delay visualization unless timing information demonstrates that doing so improves synchronization.
-
-For the initial implementation, synchronization accuracy should be measured and documented.
-
-Configurable timing compensation is required.
+Synchronization accuracy must be measured and documented (`docs/SYNC_MEASUREMENT.md`).
 
 Example:
 
 ```yaml
 audio:
   sync_offset_ms: 0
+  shairport_latency_offset_s: -1.2
 ```
 
-Positive and negative offsets must be supported. The operator should be able to adjust delay from the web UI while a stream is active (see §22.2). The UI may present a single “visual delay” control rather than separate Shairport and WLEDPlay knobs, as long as the stored configuration remains explicit.
+Positive and negative combined delay must be supported. The operator must be able to adjust delay from the web UI while a stream is active (see §22.2).
 
 ---
 
@@ -385,11 +389,11 @@ iPhone
   └── WLEDPlay
 ```
 
-WLEDPlay should participate as an AirPlay receiver while intentionally producing no audible output.
+WLEDPlay must participate as an AirPlay 2 receiver while intentionally producing no audible output.
 
-The implementation should be tested as part of an AirPlay multi-room group.
+The implementation must be tested as part of an AirPlay 2 multi-room group with at least one audible AirPlay 2 speaker.
 
-Synchronization with other AirPlay 2 receivers is highly desirable.
+Synchronization with other AirPlay 2 receivers in the group is required for the primary use case.
 
 ---
 
@@ -411,6 +415,8 @@ airplay:
 ```
 
 The operator must be able to rename the instance from the web UI. Changing the advertised AirPlay name may restart Shairport Sync so Bonjour re-publishes the new name. An in-progress AirPlay session may drop; that is acceptable if the UI warns before applying.
+
+Multiple independent WLEDPlay instances (e.g. Living Room, Patio) are supported by running separate processes or containers with distinct `airplay.name` values and WLED destination lists.
 
 ---
 
@@ -453,7 +459,9 @@ Host networking is acceptable and likely preferable because WLEDPlay depends on:
 - Bonjour/mDNS;
 - AirPlay;
 - UDP multicast;
-- AirPlay timing services.
+- AirPlay 2 timing services.
+
+Multiple independent instances (different `airplay.name` and WLED destinations) are supported by running separate containers or processes.
 
 The container should NOT require:
 
@@ -559,7 +567,7 @@ Normal startup should report approximately:
 WLEDPlay 0.x.x
 
 AirPlay receiver: WLEDPlay
-PCM: 44100 Hz / stereo / 16-bit
+PCM: 48000 Hz / stereo / 16-bit
 Analyzer: initialized
 WLED Audio Sync: protocol vN
 Destination: 239.0.0.1:11988
@@ -573,7 +581,7 @@ On connection:
 ```text
 AirPlay stream connected
 Source: <if available>
-Sample rate: 44100 Hz
+Sample rate: 48000 Hz
 Channels: 2
 Audio analysis started
 ```
@@ -616,7 +624,7 @@ GET /config
     "receiver_name": "WLEDPlay"
   },
   "audio": {
-    "sample_rate": 44100,
+    "sample_rate": 48000,
     "channels": 2,
     "rms": 0.42,
     "peak": false,
@@ -731,24 +739,16 @@ Successful `PATCH /config` writes the new values to the configured YAML file whe
 
 # 23. Metadata
 
-If Shairport Sync provides metadata, WLEDPlay may expose:
+When Shairport Sync is built with metadata support and a metadata pipe is configured, WLEDPlay must expose:
 
 - artist;
 - album;
 - track;
-- album artwork.
+- album artwork (`GET /artwork`, UI display).
 
-Metadata is not required for audio-reactive operation.
+Metadata is not required for audio-reactive operation but is implemented in v1.
 
-Design the metadata interface so future functionality could use it.
-
-Potential future features include:
-
-- WLED palette derived from album artwork;
-- track-dependent presets;
-- artist/genre-dependent visualization.
-
-These are explicitly outside the initial release.
+Future metadata-driven features (WLED palette from artwork, track-dependent presets) remain in §39.
 
 ---
 
@@ -1117,109 +1117,20 @@ Prometheus metrics may be added later but are not required for v1.
 
 ---
 
-# 37. Release Phases
+# 37. v1 Scope (implemented)
 
-## Phase 1 — Protocol Proof of Concept
+The v1 product includes everything specified in the body of this document:
 
-Goal:
+- PCM stdin/FIFO and file input for development (§6);
+- WLED-compatible analysis and Audio Sync V2 transmission (§7–§12);
+- AirPlay 2 receiver via Shairport Sync + NQPTP (§5, §14);
+- Docker host-network deployment (§17);
+- HTTP status, debug UI, and operator console (§21–§22);
+- Shairport metadata and artwork (§23);
+- Per-traffic network interface selection (§22.2);
+- Research and integration docs (§40).
 
-```text
-PCM file/stdin
-    ↓
-WLEDPlay
-    ↓
-WLED Audio Sync
-    ↓
-real WLED controller
-```
-
-No AirPlay.
-
-Success criterion:
-
-Known audio produces correct Audio Reactive behavior on WLED.
-
----
-
-## Phase 2 — Analysis Compatibility
-
-Implement and validate:
-
-- WLED frequency bands;
-- AGC;
-- smoothing;
-- peak detection;
-- dominant frequency.
-
-Compare against WLED's native analysis.
-
----
-
-## Phase 3 — AirPlay 1 Integration
-
-Integrate Shairport Sync PCM output.
-
-Goal:
-
-```text
-iPhone → AirPlay → WLEDPlay → WLED
-```
-
-Validate basic end-to-end operation before adding AirPlay 2 complexity.
-
----
-
-## Phase 4 — AirPlay 2
-
-Add:
-
-- NQPTP;
-- AirPlay 2 configuration;
-- multi-room testing;
-- synchronization measurement.
-
----
-
-## Phase 5 — Docker
-
-Produce a self-contained container containing:
-
-```text
-Shairport Sync
-NQPTP
-WLEDPlay
-```
-
-No audio device required.
-
----
-
-## Phase 6 — Status/API
-
-Implement:
-
-```text
-/health
-/status
-```
-
-Add visualization/debugging UI if useful.
-
----
-
-## Phase 7 — Live operator console
-
-Add the §22.2 control surface:
-
-- visual delay while streaming;
-- AirPlay rename;
-- per-traffic interface selection on multi-homed hosts (HTTP, AirPlay/mDNS, unicast, multicast);
-- multicast enable/disable;
-- unicast destination edit;
-- persist-to-config;
-- orderly restart.
-
-The audio pipeline must keep working if the UI is closed or disabled.
+Deferred work is listed in §39. Operational acceptance criteria remain in §38.
 
 ---
 
@@ -1297,18 +1208,6 @@ Publish stream and metadata information.
 
 Expose operational metrics.
 
-### Multiple independent AirPlay receivers
-
-Example:
-
-```text
-WLEDPlay - Living Room
-WLEDPlay - Patio
-WLEDPlay - Basement
-```
-
-each broadcasting to a different WLED Audio Sync multicast/unicast group.
-
 ### Audio passthrough
 
 Optionally reproduce or forward received audio.
@@ -1317,11 +1216,9 @@ This should not compromise synchronization or the headless analyzer-only use cas
 
 ---
 
-# 40. Initial Development Task for Cursor
+# 40. Documentation
 
-Do **not** begin by implementing the entire system.
-
-Start by researching the current upstream implementations and produce:
+Upstream research and integration notes live in:
 
 ```text
 docs/
@@ -1331,57 +1228,7 @@ docs/
 └── LICENSING.md
 ```
 
-### WLED_AUDIO_SYNC.md
-
-Document the current WLED Audio Sync packet format byte-for-byte, including:
-
-- protocol/version identification;
-- field offsets;
-- data types;
-- endianness;
-- packet size;
-- multicast defaults;
-- transmission frequency;
-- compatibility/version handling.
-
-Cite exact upstream source files/functions/commits.
-
-### WLED_AUDIO_ANALYSIS.md
-
-Document exactly how current WLED converts PCM/microphone samples into Audio Reactive data:
-
-```text
-samples
-→ preprocessing
-→ FFT
-→ bands
-→ AGC
-→ smoothing
-→ peak
-→ network representation
-```
-
-Include constants and equations where applicable.
-
-### SHAIRPORT_INTEGRATION.md
-
-Determine:
-
-- recommended Shairport Sync release;
-- AirPlay 1 versus AirPlay 2 configuration;
-- raw PCM output mechanism;
-- PCM format;
-- startup/shutdown behavior;
-- NQPTP requirements;
-- metadata interface;
-- presentation timing information;
-- Docker networking requirements.
-
-### LICENSING.md
-
-Determine license compatibility among all contemplated components.
-
-Only after these documents are complete should implementation begin.
+These documents record byte-level protocol details, WLED analysis behavior, Shairport/NQPTP integration, and license compatibility. They are the authoritative reference for protocol and stack decisions.
 
 ---
 

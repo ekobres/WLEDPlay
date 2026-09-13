@@ -194,7 +194,7 @@ Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit.
 | `micLev` DC tracker | Retained (handles DC offset in stream) |
 | `useMicFilter` default on | **Off** by default for digital (configurable) |
 
-Document any measurable deviation during Phase 2 integration tests.
+Document any measurable deviation during integration tests.
 
 ---
 

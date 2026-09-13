@@ -1,11 +1,38 @@
 #!/usr/bin/env bash
-# Phase 3: Shairport Sync (AirPlay 1) → WLEDPlay → WLED
+# NQPTP + Shairport Sync (AirPlay 2) → WLEDPlay → WLED
+# Requires Linux (or FreeBSD/OpenBSD). macOS cannot host official AP2.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-SHAIRPORT_BIN="${SHAIRPORT_BIN:-shairport-sync}"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  cat <<'EOF'
+WLEDPlay requires AirPlay 2 with NQPTP for synchronized multi-room grouping.
+
+Official AirPlay 2 cannot run on macOS (UDP ports 319/320 belong to the OS).
+AirPlay 1 is deliberately not supported — it cannot join a live speaker group
+with correct presentation-time sync.
+
+Run WLEDPlay on a Linux host instead:
+  ./scripts/build-airplay.sh
+  ./scripts/run-airplay.sh
+
+Or:
+  WLEDPLAY_DESTINATION=10.11.1.124 docker compose up -d --build
+EOF
+  exit 1
+fi
+
+SHAIRPORT_BIN="${SHAIRPORT_BIN:-$ROOT/vendor/bin/shairport-sync}"
+NQPTP_BIN="${NQPTP_BIN:-$ROOT/vendor/bin/nqptp}"
+if [[ ! -x "$SHAIRPORT_BIN" ]] && command -v shairport-sync >/dev/null 2>&1; then
+  SHAIRPORT_BIN="$(command -v shairport-sync)"
+fi
+if [[ ! -x "$NQPTP_BIN" ]] && command -v nqptp >/dev/null 2>&1; then
+  NQPTP_BIN="$(command -v nqptp)"
+fi
+
 WLEDPLAY_BIN="${WLEDPLAY_BIN:-$ROOT/target/release/wledplay}"
 CONFIG="${WLEDPLAY_CONFIG:-$ROOT/config/config.yaml}"
 SHAIRPORT_CONF="${SHAIRPORT_CONF:-$ROOT/config/shairport-sync.conf}"
@@ -17,24 +44,30 @@ if [[ ! -x "$WLEDPLAY_BIN" ]]; then
   WLEDPLAY_BIN="$ROOT/target/release/wledplay"
 fi
 
-if ! command -v "$SHAIRPORT_BIN" >/dev/null 2>&1; then
-  echo "shairport-sync not found."
-  echo "Install AirPlay 1 (Homebrew includes the stdout backend):"
-  echo "  brew install shairport-sync"
+if [[ ! -x "$SHAIRPORT_BIN" ]] || ! "$SHAIRPORT_BIN" -V 2>/dev/null | grep -Eqi 'AirPlay2|airplay-2'; then
+  echo "Need an AirPlay 2 shairport-sync (version string contains AirPlay2)."
+  echo "Build it with: ./scripts/build-airplay.sh"
+  echo "Current binary: ${SHAIRPORT_BIN}"
+  "$SHAIRPORT_BIN" -V 2>/dev/null || true
+  exit 1
+fi
+
+if [[ ! -x "$NQPTP_BIN" ]]; then
+  echo "nqptp not found. Build it with: ./scripts/build-airplay.sh"
   exit 1
 fi
 
 if ! "$SHAIRPORT_BIN" -V 2>/dev/null | grep -q stdout; then
-  echo "This shairport-sync build has no stdout backend (need --with-stdout)."
-  echo "Homebrew's formula includes it. Check: $SHAIRPORT_BIN -V"
+  echo "This shairport-sync build has no stdout backend."
   exit 1
 fi
 
 TMP_CONF="$(mktemp -t wledplay-shairport.XXXXXX.conf)"
+NQPTP_PID=""
 cleanup() {
   rm -f "$TMP_CONF"
-  if [[ -n "${SHAIRPORT_PID:-}" ]]; then
-    kill "$SHAIRPORT_PID" 2>/dev/null || true
+  if [[ -n "${NQPTP_PID}" ]]; then
+    kill "$NQPTP_PID" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -54,26 +87,18 @@ p.write_text(text)
 PY
 fi
 
-echo "Advertising AirPlay receiver: ${AIRPLAY_NAME}"
-echo "WLEDPlay config: ${CONFIG}"
-echo "Select this destination in Apple Music / Control Center, then play."
-
-# Homebrew shairport-sync 5.5.x always binds classic AirPlay on TCP 5000
-# (CLI --port and general.port are overwritten). macOS AirPlay Receiver
-# uses that port — turn it off in System Settings → General → AirDrop & Handoff.
-if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:5000 -sTCP:LISTEN >/dev/null 2>&1; then
-  echo
-  echo "TCP port 5000 is already in use (usually macOS Control Center AirPlay Receiver)."
-  echo "Shairport Sync 5.5 cannot use another port for AirPlay 1."
-  echo
-  echo "Turn off AirPlay Receiver:"
-  echo "  System Settings → General → AirDrop & Handoff → AirPlay Receiver → Off"
-  echo
-  echo "Then re-run: $0"
+echo "Starting nqptp (${NQPTP_BIN})..."
+"$NQPTP_BIN" &
+NQPTP_PID=$!
+sleep 0.4
+if ! kill -0 "$NQPTP_PID" 2>/dev/null; then
+  echo "nqptp exited immediately. It needs UDP 319/320 (often root or cap_net_bind_service)."
   exit 1
 fi
 
-# Shairport writes PCM in real time; do not pace again.
+echo "Advertising AirPlay 2 receiver: ${AIRPLAY_NAME}"
+echo "PCM: 48000 Hz S16LE stereo (pinned). Group this destination with HomePods to measure sync."
+
 if [[ -n "${WLEDPLAY_AIRPLAY_INTERFACE:-}" ]]; then
   echo "AirPlay/mDNS interface: ${WLEDPLAY_AIRPLAY_INTERFACE}"
 fi
@@ -83,6 +108,7 @@ rm -f "$META_PIPE"
 mkfifo "$META_PIPE"
 echo "Metadata pipe: ${META_PIPE}"
 
-"$SHAIRPORT_BIN" -c "$TMP_CONF" -o stdout | \
+"$SHAIRPORT_BIN" -c "$TMP_CONF" --service-type=airplay2 -o stdout | \
   "$WLEDPLAY_BIN" --config "$CONFIG" --input stdin --no-realtime \
+    --pcm-rate 48000 --pcm-channels 2 --pcm-format s16le \
     --metadata-pipe "$META_PIPE"
