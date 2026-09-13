@@ -30,27 +30,23 @@ impl WledSender {
         let unicast_socket = bind_udp(unicast)?;
         let multicast_socket = bind_udp(multicast_bind)?;
 
-        if let Err(e) = multicast_socket.set_multicast_ttl_v4(20) {
-            tracing::warn!("IP_MULTICAST_TTL: {e}");
-        }
+        log_socket_result(
+            multicast_socket.set_multicast_ttl_v4(20),
+            "IP_MULTICAST_TTL",
+        );
         if let Some((_, ip)) = multicast_bind {
-            if let Err(e) = multicast_socket.set_multicast_if_v4(&ip) {
-                tracing::warn!("IP_MULTICAST_IF {ip}: {e}");
-            } else {
-                tracing::info!("WLED multicast egress {ip} ttl=20");
-            }
+            log_multicast_if(multicast_socket.set_multicast_if_v4(&ip), ip);
         } else {
-            tracing::warn!(
-                "WLED multicast has no egress NIC (set network.multicast); kernel default route will be used"
-            );
+            warn_no_multicast_nic();
         }
         if let IpAddr::V4(addr) = multicast {
             let join_if = multicast_bind
                 .map(|(_, ip)| ip)
                 .unwrap_or(Ipv4Addr::UNSPECIFIED);
-            if let Err(e) = multicast_socket.join_multicast_v4(&addr, &join_if) {
-                tracing::warn!("join {addr} on {join_if}: {e}");
-            }
+            log_socket_result(
+                multicast_socket.join_multicast_v4(&addr, &join_if),
+                &format!("join {addr} on {join_if}"),
+            );
         }
         if let Some((name, ip)) = unicast {
             tracing::info!("WLED unicast egress {name} ({ip})");
@@ -78,21 +74,20 @@ impl WledSender {
     pub fn send(&mut self, packet: &AudioSyncPacket) -> Result<(), SendError> {
         let bytes = packet.encode();
         if self.multicast_enabled {
-            match self.multicast_socket.send_to(&bytes, self.multicast_addr) {
-                Ok(_) => self.packets_sent += 1,
-                Err(e) => {
-                    self.udp_errors += 1;
-                    tracing::warn!("multicast send failed: {e}");
-                }
-            }
+            record_send(
+                &mut self.packets_sent,
+                &mut self.udp_errors,
+                self.multicast_socket.send_to(&bytes, self.multicast_addr),
+                "multicast send failed",
+            );
         }
         for dest in &self.unicast_destinations.clone() {
-            if let Err(e) = self.unicast_socket.send_to(&bytes, dest) {
-                self.udp_errors += 1;
-                tracing::warn!("unicast send to {dest} failed: {e}");
-            } else {
-                self.packets_sent += 1;
-            }
+            record_send(
+                &mut self.packets_sent,
+                &mut self.udp_errors,
+                self.unicast_socket.send_to(&bytes, dest),
+                &format!("unicast send to {dest} failed"),
+            );
         }
         Ok(())
     }
@@ -121,6 +116,38 @@ impl WledSender {
     }
 }
 
+fn log_multicast_if(result: std::io::Result<()>, ip: Ipv4Addr) {
+    match result {
+        Ok(()) => tracing::info!("WLED multicast egress {ip} ttl=20"),
+        Err(e) => tracing::warn!("IP_MULTICAST_IF {ip}: {e}"),
+    }
+}
+
+fn warn_no_multicast_nic() {
+    tracing::warn!("WLED multicast has no egress NIC (set network.multicast); kernel default route will be used");
+}
+
+fn log_socket_result(result: std::io::Result<()>, label: &str) {
+    if let Err(e) = result {
+        tracing::warn!("{label}: {e}");
+    }
+}
+
+fn record_send(
+    packets_sent: &mut u64,
+    udp_errors: &mut u64,
+    result: std::io::Result<usize>,
+    warn: &str,
+) {
+    match result {
+        Ok(_) => *packets_sent += 1,
+        Err(e) => {
+            *udp_errors += 1;
+            tracing::warn!("{warn}: {e}");
+        }
+    }
+}
+
 fn bind_udp(bind: Option<(&str, Ipv4Addr)>) -> Result<Socket, SendError> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
@@ -143,3 +170,95 @@ fn bind_udp_device(socket: &Socket, name: &str, local: Ipv4Addr) {
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn bind_udp_device(_socket: &Socket, _name: &str, _local: Ipv4Addr) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wled::protocol::AudioSyncPacket;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn destination_string_reflects_multicast_and_unicast() {
+        let mut sender = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec!["10.11.1.124:11988".parse().unwrap()],
+            None,
+            None,
+        )
+        .unwrap();
+        let dest = sender.destination();
+        assert!(dest.contains("239.0.0.1"));
+        assert!(dest.contains("10.11.1.124"));
+
+        sender.set_multicast_enabled(false);
+        assert_eq!(sender.destination(), "10.11.1.124");
+
+        sender.set_unicast(vec![]);
+        assert_eq!(sender.destination(), "none");
+    }
+
+    #[test]
+    fn send_to_unicast_increments_counter() {
+        let mut sender = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec!["127.0.0.1:9".parse().unwrap()],
+            None,
+            None,
+        )
+        .unwrap();
+        sender.set_multicast_enabled(false);
+        sender.send(&AudioSyncPacket::silence()).unwrap();
+        assert_eq!(sender.packets_sent(), 1);
+        assert_eq!(sender.udp_errors(), 0);
+    }
+
+    #[test]
+    fn multicast_and_bound_sockets() {
+        let mut sender = WledSender::new(
+            IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+            11988,
+            vec![],
+            Some(("lo0", Ipv4Addr::LOCALHOST)),
+            Some(("lo0", Ipv4Addr::LOCALHOST)),
+        )
+        .unwrap();
+        sender.set_multicast_enabled(true);
+        sender.send(&AudioSyncPacket::silence()).unwrap();
+        assert!(sender.packets_sent() + sender.udp_errors() >= 1);
+
+        let mut v4 = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec!["127.0.0.1:9".parse().unwrap()],
+            None,
+            Some(("lo0", Ipv4Addr::LOCALHOST)),
+        )
+        .unwrap();
+        v4.send(&AudioSyncPacket::silence()).unwrap();
+        assert!(v4.packets_sent() + v4.udp_errors() >= 1);
+
+        let mut sent = 0;
+        let mut errors = 0;
+        record_send(&mut sent, &mut errors, Ok(4), "ok");
+        record_send(
+            &mut sent,
+            &mut errors,
+            Err(std::io::Error::other("fail")),
+            "failed",
+        );
+        assert_eq!(sent, 1);
+        assert_eq!(errors, 1);
+
+        log_socket_result(Ok(()), "ok");
+        log_socket_result(Err(std::io::Error::other("ttl")), "IP_MULTICAST_TTL");
+        log_socket_result(
+            Err(std::io::Error::other("join")),
+            "join 239.0.0.1 on 0.0.0.0",
+        );
+        log_multicast_if(Ok(()), Ipv4Addr::LOCALHOST);
+        log_multicast_if(Err(std::io::Error::other("if")), Ipv4Addr::LOCALHOST);
+        warn_no_multicast_nic();
+    }
+}

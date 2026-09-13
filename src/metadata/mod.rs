@@ -236,6 +236,85 @@ mod tests {
         buf.push_str(b);
         let items = drain_items(&mut buf);
         assert_eq!(items.len(), 1);
-        assert_eq!(String::from_utf8(items[0].data.clone()).unwrap(), "Helter Skelter");
+        assert_eq!(
+            String::from_utf8(items[0].data.clone()).unwrap(),
+            "Helter Skelter"
+        );
+    }
+
+    #[test]
+    fn decode_fourcc_rejects_invalid() {
+        assert!(decode_fourcc("short").is_none());
+        assert!(decode_fourcc("gggggggg").is_none());
+    }
+
+    #[test]
+    fn sniff_image_detects_png_and_unknown() {
+        assert_eq!(sniff_image(&[0x89, 0x50, 0x4E, 0x47, 0]), "image/png");
+        assert_eq!(sniff_image(&[0x00, 0x01]), "application/octet-stream");
+    }
+
+    #[test]
+    fn oversized_artwork_is_ignored() {
+        let huge = vec![0xFF, 0xD8, 0xFF];
+        let mut data = huge;
+        data.resize(MAX_ARTWORK_BYTES + 1, 0);
+        let item = MetaItem {
+            type_code: "ssnc".into(),
+            code: "PICT".into(),
+            data,
+        };
+        let mut meta = TrackMetadata::default();
+        let mut art = None;
+        assert!(!apply_item(&mut meta, &mut art, &item));
+        assert!(!meta.has_artwork);
+    }
+
+    #[test]
+    fn parse_and_apply_remaining_codes() {
+        assert!(parse_item("not xml").is_none());
+        assert!(decode_fourcc("zzzzzzzz").is_none());
+
+        let mut buf = String::from("garbage<item><type>xx</type></item>");
+        assert!(drain_items(&mut buf).is_empty());
+
+        let mut incomplete = String::from("<item><type>636f7265</type>");
+        assert!(drain_items(&mut incomplete).is_empty());
+        assert!(incomplete.starts_with("<item>"));
+
+        let mut meta = TrackMetadata::default();
+        let mut art = Some(Artwork {
+            bytes: vec![1],
+            content_type: "image/png".into(),
+        });
+        let clip = MetaItem {
+            type_code: "ssnc".into(),
+            code: "clip".into(),
+            data: b"iPhone".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &clip));
+        assert_eq!(meta.source.as_deref(), Some("iPhone"));
+
+        let mdst = MetaItem {
+            type_code: "ssnc".into(),
+            code: "mdst".into(),
+            data: vec![],
+        };
+        meta.title = Some("x".into());
+        assert!(apply_item(&mut meta, &mut art, &mdst));
+        assert!(meta.title.is_none());
+
+        let pfls = MetaItem {
+            type_code: "ssnc".into(),
+            code: "pfls".into(),
+            data: vec![],
+        };
+        assert!(apply_item(&mut meta, &mut art, &pfls));
+        assert!(art.is_none());
+
+        assert!(utf8_opt(b"   ").is_none());
+        assert_eq!(utf8_opt(b" hi ").as_deref(), Some("hi"));
+        assert!(tag_value("<x>", "data").is_none());
+        assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 1]), "image/jpeg");
     }
 }

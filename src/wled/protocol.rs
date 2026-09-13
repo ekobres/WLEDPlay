@@ -122,6 +122,54 @@ mod tests {
 
     #[test]
     fn rejects_wrong_size() {
-        assert!(AudioSyncPacket::decode(&[0u8; 43]).is_err());
+        assert!(matches!(
+            AudioSyncPacket::decode(&[0u8; 43]),
+            Err(ProtocolError::InvalidSize(43))
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_header() {
+        let mut buf = [0u8; PACKET_SIZE];
+        buf[0..6].copy_from_slice(b"00001\0");
+        assert!(matches!(
+            AudioSyncPacket::decode(&buf),
+            Err(ProtocolError::InvalidHeader)
+        ));
+    }
+
+    #[test]
+    fn encode_clamps_major_peak() {
+        let mut pkt = AudioSyncPacket::default();
+        pkt.fft_major_peak = 50_000.0;
+        let encoded = pkt.encode();
+        let decoded = AudioSyncPacket::decode(&encoded).unwrap();
+        assert_eq!(decoded.fft_major_peak, 11025.0);
+    }
+
+    #[test]
+    fn silence_packet_has_expected_defaults() {
+        let p = AudioSyncPacket::silence();
+        assert_eq!(p.sample_peak, 0);
+        assert_eq!(p.fft_magnitude, 0.001);
+        assert_eq!(p.fft_major_peak, 1.0);
+    }
+
+    #[test]
+    fn encoded_layout_matches_v2_offsets() {
+        let pkt = AudioSyncPacket {
+            sample_raw: 1.0,
+            sample_smth: 2.0,
+            sample_peak: 3,
+            fft_result: [4; 16],
+            fft_magnitude: 5.0,
+            fft_major_peak: 440.0,
+        };
+        let b = pkt.encode();
+        assert_eq!(&b[0..6], UDP_SYNC_HEADER_V2);
+        assert_eq!(f32::from_le_bytes(b[8..12].try_into().unwrap()), 1.0);
+        assert_eq!(f32::from_le_bytes(b[12..16].try_into().unwrap()), 2.0);
+        assert_eq!(b[16], 3);
+        assert_eq!(&b[18..34], &[4; 16]);
     }
 }

@@ -88,3 +88,43 @@ pub fn fft_add_avg(mags: &[f32], from: usize, to: usize) -> f32 {
     result *= 0.0625;
     result / (to - from + 1) as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn fft_add_avg_sums_bin_range() {
+        let mags = [0.0f32; SAMPLES_FFT_2];
+        let mut mags = mags;
+        mags[5] = 16.0;
+        mags[6] = 32.0;
+        mags[7] = 48.0;
+        // (16+32+48) * 0.0625 / 3 = 2.0
+        assert_relative_eq!(fft_add_avg(&mags, 5, 7), 2.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn fft_detects_dominant_tone() {
+        let mut engine = FftEngine::new();
+        let mut samples = [0.0f32; SAMPLES_FFT];
+        let hz = 440.0f32;
+        for (i, s) in samples.iter_mut().enumerate() {
+            let t = i as f32 / SAMPLE_RATE as f32;
+            *s = (2.0 * std::f32::consts::PI * hz * t).sin();
+        }
+        let (peak, mag) = engine.analyze(&samples);
+        assert!((peak - hz).abs() < 50.0, "peak {peak} not near {hz}");
+        assert!(mag > 0.0);
+    }
+
+    #[test]
+    fn silence_has_low_magnitude() {
+        let mut engine = FftEngine::new();
+        let samples = [0.0f32; SAMPLES_FFT];
+        let (peak, mag) = engine.analyze(&samples);
+        assert_eq!(peak, 1.0);
+        assert_relative_eq!(mag, 0.001, epsilon = 1e-6);
+    }
+}

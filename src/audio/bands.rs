@@ -3,8 +3,7 @@ use crate::audio::fft::{fft_add_avg, FFT_DOWNSCALE, SAMPLES_FFT_2};
 pub const NUM_GEQ_CHANNELS: usize = 16;
 
 pub const FFT_RESULT_PINK: [f32; 16] = [
-    1.70, 1.71, 1.73, 1.78, 1.68, 1.56, 1.55, 1.63, 1.79, 1.62, 1.80, 2.06, 2.47, 3.35, 6.83,
-    9.55,
+    1.70, 1.71, 1.73, 1.78, 1.68, 1.56, 1.55, 1.63, 1.79, 1.62, 1.80, 2.06, 2.47, 3.35, 6.83, 9.55,
 ];
 
 pub fn map_bands(mags: &[f32], sample_avg: f32, fft_calc: &mut [f32; NUM_GEQ_CHANNELS]) {
@@ -109,4 +108,118 @@ fn mapf(x: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
         return out_min;
     }
     (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::fft::SAMPLES_FFT_2;
+
+    #[test]
+    fn map_bands_populates_sixteen_channels_when_loud() {
+        let mut mags = vec![0.0f32; SAMPLES_FFT_2];
+        for (i, m) in mags.iter_mut().enumerate().take(100) {
+            *m = i as f32 + 1.0;
+        }
+        let mut fft_calc = [0.0f32; NUM_GEQ_CHANNELS];
+        map_bands(&mags, 1.0, &mut fft_calc);
+        assert!(fft_calc.iter().filter(|&&v| v > 0.0).count() >= 12);
+    }
+
+    #[test]
+    fn map_bands_decays_when_quiet() {
+        let mags = [0.0f32; SAMPLES_FFT_2];
+        let mut fft_calc = [100.0f32; NUM_GEQ_CHANNELS];
+        map_bands(&mags, 0.1, &mut fft_calc);
+        assert!(fft_calc.iter().all(|&v| v <= 85.0));
+    }
+
+    #[test]
+    fn post_process_clamps_to_byte_range() {
+        let mut fft_calc = [500.0f32; NUM_GEQ_CHANNELS];
+        let mut fft_avg = [0.0f32; NUM_GEQ_CHANNELS];
+        let mut fft_result = [0u8; NUM_GEQ_CHANNELS];
+        post_process(
+            &mut fft_calc,
+            &mut fft_avg,
+            &mut fft_result,
+            true,
+            1.0,
+            false,
+            60,
+            128,
+            true,
+            1400,
+        );
+        assert!(fft_result.iter().any(|&b| b > 0));
+    }
+
+    #[test]
+    fn map_bands_zeros_faded_bins() {
+        let mags = [0.0f32; SAMPLES_FFT_2];
+        let mut fft_calc = [3.0f32; NUM_GEQ_CHANNELS];
+        map_bands(&mags, 0.1, &mut fft_calc);
+        assert!(fft_calc.iter().all(|&v| v == 0.0));
+    }
+
+    fn run_post(
+        use_agc: bool,
+        limiter_on: bool,
+        decay_time: u16,
+        input_level: u8,
+        calc: f32,
+        avg: f32,
+    ) -> [u8; NUM_GEQ_CHANNELS] {
+        let mut fft_calc = [calc; NUM_GEQ_CHANNELS];
+        let mut fft_avg = [avg; NUM_GEQ_CHANNELS];
+        let mut fft_result = [0u8; NUM_GEQ_CHANNELS];
+        post_process(
+            &mut fft_calc,
+            &mut fft_avg,
+            &mut fft_result,
+            true,
+            2.0,
+            use_agc,
+            60,
+            input_level,
+            limiter_on,
+            decay_time,
+        );
+        fft_result
+    }
+
+    #[test]
+    fn post_process_decay_and_gain_branches() {
+        let _ = run_post(true, false, 500, 64, 10.0, 20.0);
+        let _ = run_post(true, true, 1500, 200, 80.0, 10.0);
+        let _ = run_post(false, true, 2500, 128, 5.0, 50.0);
+        let _ = run_post(false, true, 3500, 128, 5.0, 50.0);
+        let mut neg = [-3.0f32; NUM_GEQ_CHANNELS];
+        let mut avg = [0.0f32; NUM_GEQ_CHANNELS];
+        let mut out = [0u8; NUM_GEQ_CHANNELS];
+        post_process(
+            &mut neg, &mut avg, &mut out, true, 1.0, false, 60, 128, true, 1400,
+        );
+        assert!(mapf(1.0, 0.0, 0.0, 3.0, 9.0) == 3.0);
+        assert!(mapf(8.0, 0.0, 16.0, 0.0, 255.0) > 0.0);
+        let gated = {
+            let mut fft_calc = [9.0f32; NUM_GEQ_CHANNELS];
+            let mut fft_avg = [0.0; NUM_GEQ_CHANNELS];
+            let mut fft_result = [0u8; NUM_GEQ_CHANNELS];
+            post_process(
+                &mut fft_calc,
+                &mut fft_avg,
+                &mut fft_result,
+                false,
+                1.0,
+                false,
+                60,
+                128,
+                true,
+                1400,
+            );
+            fft_result
+        };
+        let _ = gated;
+    }
 }

@@ -30,7 +30,7 @@ pub struct SampleProcessor {
     pub max_vol: u8,
     pub bin_num: u8,
     pub sim_time_ms: u64,
-    last_agc_ms: u64,
+    pub(crate) last_agc_ms: u64,
 }
 
 impl SampleProcessor {
@@ -91,8 +91,8 @@ impl SampleProcessor {
         let tmp_sample = exp_adj;
         self.sample_real = tmp_sample;
 
-        let sample_adj = tmp_sample * self.sample_gain as f32 / 40.0
-            * self.input_level as f32 / 128.0
+        let sample_adj = tmp_sample * self.sample_gain as f32 / 40.0 * self.input_level as f32
+            / 128.0
             + tmp_sample / 16.0;
         let sample_adj = sample_adj.clamp(0.0, 255.0);
         self.sample_raw = sample_adj;
@@ -125,7 +125,7 @@ impl SampleProcessor {
         self.update_max_sample_5sec(now_ms);
     }
 
-    fn update_max_sample_5sec(&mut self, now_ms: u64) {
+    pub(crate) fn update_max_sample_5sec(&mut self, now_ms: u64) {
         const CYCLE: u64 = 3500;
         if now_ms.saturating_sub(self.sample_max_timer_ms) > CYCLE {
             self.sample_max_timer_ms = now_ms;
@@ -166,7 +166,6 @@ impl SampleProcessor {
             self.last_agc_ms = now_ms;
 
             if self.sample_real.abs() < 2.0 || self.sample_max < 1.0 {
-                tmp_agc = 0.0;
                 if self.control_integrated.abs() < 0.01 {
                     self.control_integrated = 0.0;
                 } else {
@@ -193,13 +192,17 @@ impl SampleProcessor {
             if tmp_agc > agc_zone_high(preset)
                 || tmp_agc < self.sound_squelch as f32 + agc_zone_low(preset)
             {
-                mult_temp = last_mult
-                    + agc_follow_fast(preset) * agc_control_kp(preset) * control_error;
-                mult_temp += agc_follow_fast(preset) * agc_control_ki(preset) * self.control_integrated as f32;
+                mult_temp =
+                    last_mult + agc_follow_fast(preset) * agc_control_kp(preset) * control_error;
+                mult_temp += agc_follow_fast(preset)
+                    * agc_control_ki(preset)
+                    * self.control_integrated as f32;
             } else {
-                mult_temp = last_mult
-                    + agc_follow_slow(preset) * agc_control_kp(preset) * control_error;
-                mult_temp += agc_follow_slow(preset) * agc_control_ki(preset) * self.control_integrated as f32;
+                mult_temp =
+                    last_mult + agc_follow_slow(preset) * agc_control_kp(preset) * control_error;
+                mult_temp += agc_follow_slow(preset)
+                    * agc_control_ki(preset)
+                    * self.control_integrated as f32;
             }
             mult_temp = mult_temp.clamp(1.0 / 64.0, 32.0);
         }
@@ -291,4 +294,157 @@ fn agc_control_ki(p: usize) -> f32 {
 }
 fn agc_sample_smooth(p: usize) -> f32 {
     [1.0 / 12.0, 1.0 / 6.0, 1.0 / 16.0][p]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn squelch_zeros_quiet_samples() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        for ms in 0..100 {
+            p.process_sample(0.001, ms);
+        }
+        assert!(p.sample_raw < 1.0);
+    }
+
+    #[test]
+    fn loud_sample_increases_averaged_level() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        for ms in 0..200 {
+            p.process_sample(5000.0, ms);
+        }
+        assert!(p.sample_avg > 10.0);
+    }
+
+    #[test]
+    fn agc_off_uses_raw_and_avg_volumes() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        p.sample_raw = 42.0;
+        p.sample_avg = 40.0;
+        assert_eq!(p.volume_raw(), 42.0);
+        assert_eq!(p.volume_smth(), 40.0);
+    }
+
+    #[test]
+    fn take_udp_peak_is_one_shot() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        p.udp_sample_peak = true;
+        assert_eq!(p.take_udp_peak(), 1);
+        assert_eq!(p.take_udp_peak(), 0);
+    }
+
+    #[test]
+    fn reset_clears_levels() {
+        let mut p = SampleProcessor::new(AgcMode::Normal);
+        p.sample_avg = 100.0;
+        p.sample_peak = true;
+        p.reset();
+        assert_eq!(p.sample_avg, 0.0);
+        assert!(!p.sample_peak);
+    }
+
+    #[test]
+    fn squelch_zero_gates_tiny_energy() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        p.sound_squelch = 0;
+        p.process_sample(0.01, 1);
+        assert_eq!(p.sample_real, 0.0);
+    }
+
+    #[test]
+    fn peak_flags_when_level_rises() {
+        let mut p = SampleProcessor::new(AgcMode::Off);
+        p.bin_num = 8;
+        p.max_vol = 31;
+        for ms in 0..120 {
+            p.process_sample(8000.0, ms);
+        }
+        assert!(p.sample_peak || p.udp_sample_peak || p.sample_avg > 1.0);
+        p.auto_reset_peak(50);
+        p.sim_time_ms = p.time_of_peak_ms + 200;
+        p.auto_reset_peak(50);
+        assert!(!p.sample_peak);
+    }
+
+    #[test]
+    fn agc_paths_and_volume_getters() {
+        for mode in [AgcMode::Normal, AgcMode::Vivid, AgcMode::Lazy] {
+            let mut p = SampleProcessor::new(mode);
+            for ms in (0..400).step_by(3) {
+                p.process_sample(6000.0, ms);
+            }
+            p.process_sample(0.0, 500);
+            p.sound_agc = AgcMode::Vivid;
+            p.agc_avg(520);
+            assert!(p.volume_raw() >= 0.0);
+            assert!(p.volume_smth() >= 0.0);
+            p.process_sample(4000.0, 4000);
+            p.sample_avg = 0.1;
+            p.process_sample(0.2, 8000);
+        }
+
+        let mut quiet = SampleProcessor::new(AgcMode::Normal);
+        quiet.agc_avg(10);
+        quiet.control_integrated = 0.5;
+        quiet.sample_real = 0.1;
+        quiet.sample_max = 0.1;
+        quiet.last_agc_ms = 0;
+        quiet.agc_avg(20);
+
+        let mut target0 = SampleProcessor::new(AgcMode::Normal);
+        target0.agc_avg(10);
+        target0.sample_real = 10.0;
+        target0.sample_max = 8.0;
+        target0.mult_agc = 1.0;
+        target0.last_agc_ms = 0;
+        target0.agc_avg(20);
+
+        let mut hot = SampleProcessor::new(AgcMode::Normal);
+        hot.sample_real = 250.0;
+        hot.sample_max = 8.0;
+        hot.mult_agc = 8.0;
+        hot.agc_avg(10);
+        hot.agc_avg(20);
+        assert!(hot.raw_sample_agc <= 255.0);
+
+        let mut off = SampleProcessor::new(AgcMode::Off);
+        for ms in 0..80 {
+            off.process_sample(3000.0, ms);
+        }
+        off.process_sample(3000.0, 4000);
+    }
+
+    #[test]
+    fn sample_max_decay_and_agc_follow() {
+        let mut p = SampleProcessor::new(AgcMode::Normal);
+        p.sample_max = 400.0;
+        p.mult_agc = 2.0;
+        p.sample_real = 1.0;
+        p.process_sample(1.0, 90);
+        let _ = p.sample_max;
+
+        let mut fade = SampleProcessor::new(AgcMode::Off);
+        fade.sample_avg = 0.2;
+        fade.sample_max_timer_ms = 0;
+        fade.update_max_sample_5sec(4000);
+        assert_eq!(fade.max_sample_5sec, 0.0);
+
+        let helpers = [
+            agc_sample_decay(0),
+            agc_zone_low(1),
+            agc_zone_high(2),
+            agc_zone_stop(0),
+            agc_target0(1),
+            agc_target0_up(2),
+            agc_target1(0),
+            agc_follow_fast(1),
+            agc_follow_slow(2),
+            agc_control_kp(0),
+            agc_control_ki(1),
+            agc_sample_smooth(2),
+        ];
+        assert!(helpers.iter().all(|v| v.is_finite()));
+    }
 }

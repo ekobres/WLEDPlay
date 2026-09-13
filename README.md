@@ -75,6 +75,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 - `GET /` — debug UI and operator controls
 - `GET /health` — liveness
 - `GET /status` — JSON runtime state (default `:8080`)
+- `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) for the UI poll
 - `GET /artwork` — current cover art (404 if none)
 - `GET /config` / `PATCH /config` — live settings
 - `GET /interfaces` — usable IPv4 NICs
@@ -129,7 +130,23 @@ Research docs (authoritative upstream analysis):
 ## Development
 
 ```bash
-cargo test
+cargo fmt           # format (uses rustfmt.toml)
+cargo fmt --check   # CI: fail if formatting differs
+cargo clippy        # lint
+cargo test          # unit tests (src/**) + integration tests (tests/**)
+cargo test --lib    # library unit tests only
+cargo test --test analysis_tests
+
+# Line coverage (Homebrew rustc: point llvm-cov at LLVM)
+export LLVM_COV="$(brew --prefix llvm)/bin/llvm-cov"
+export LLVM_PROFDATA="$(brew --prefix llvm)/bin/llvm-profdata"
+cargo llvm-cov --html --output-dir /tmp/wledplay-html
+cargo llvm-cov report --fail-under-lines 100
+```
+
+Unit tests live next to the code they cover (`#[cfg(test)] mod tests` in each module). Integration tests in `tests/` exercise YAML loading, protocol roundtrips, and end-to-end analyzer behavior.
+
+```bash
 cargo run -- --input stdin --pcm-rate 44100 --pcm-channels 2 < /tmp/test.pcm
 ```
 

@@ -79,9 +79,30 @@
       padding: 8px 14px; font: inherit; cursor: pointer;
     }
     button.danger { background: #5a2433; }
+    button:disabled { opacity: 0.4; cursor: default; }
     .hint { color: var(--muted); font-size: 0.85rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     .check input { width: auto; }
+    .viz-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .switch {
+      display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+      color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em;
+      user-select: none;
+    }
+    .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .switch-track {
+      position: relative; width: 40px; height: 22px; border-radius: 999px;
+      background: #1d243c; border: 1px solid var(--line); flex-shrink: 0;
+      transition: background 0.15s ease;
+    }
+    .switch-track::after {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 16px; height: 16px; border-radius: 50%; background: var(--muted);
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .switch input:checked + .switch-track { background: #143528; border-color: #1f6b4a; }
+    .switch input:checked + .switch-track::after { transform: translateX(18px); background: var(--ok); }
+    .switch input:focus-visible + .switch-track { outline: 2px solid var(--bar); outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -130,7 +151,14 @@
       </div>
     </div>
     <div class="card" style="margin-top:12px">
-      <div class="label">16 FFT bands</div>
+      <div class="viz-head">
+        <div class="label">16 FFT bands</div>
+        <label class="switch">
+          <span>Visualizer</span>
+          <input type="checkbox" id="viz-toggle" role="switch" checked aria-label="Live visualizer">
+          <span class="switch-track"></span>
+        </label>
+      </div>
       <div class="bands" id="bands"></div>
       <pre id="counters"></pre>
     </div>
@@ -155,7 +183,8 @@
       <label for="ctl-dest">Unicast destinations (one IP per line)</label>
       <textarea id="ctl-dest"></textarea>
       <div class="row">
-        <button id="ctl-save" type="button">Save</button>
+        <button id="ctl-save" type="button" disabled>Save</button>
+        <button id="ctl-cancel" type="button" disabled>Cancel</button>
         <button id="ctl-restart" class="danger" type="button">Restart stack</button>
         <span class="hint" id="ctl-msg"></span>
       </div>
@@ -168,22 +197,27 @@
     const bars = [...bandsEl.children];
 
     let updateHz = 50;
-    let lastMeta = 0;
+    let vizOn = true;
+    let levelsTimer = 0;
+    let statusTimer = 0;
 
-    function paintSpectrum(s) {
-      const live = !!s.airplay.connected;
+    function paintConn(live) {
       $("conn").textContent = live ? "live" : "idle";
       $("conn").className = "pill" + (live ? " live" : "");
-      const rms = Number(s.audio.rms || 0);
-      $("level").textContent = Math.round(rms * 100) + "%" + (s.audio.peak ? "  peak" : "");
-      $("level").className = "value" + (s.audio.peak ? " peak" : "");
+    }
+
+    function paintSpectrum(s) {
+      paintConn(!!s.connected);
+      const rms = Number(s.rms || 0);
+      $("level").textContent = Math.round(rms * 100) + "%" + (s.peak ? "  peak" : "");
+      $("level").className = "value" + (s.peak ? " peak" : "");
       $("levelbar").style.width = Math.min(100, rms * 100) + "%";
-      const hz = Number(s.audio.dominant_frequency || 0);
+      const hz = Number(s.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1) + " Hz" : "—";
-      (s.audio.bands || []).forEach((v, i) => {
+      (s.bands || []).forEach((v, i) => {
         if (bars[i]) bars[i].style.height = Math.max(2, (v / 255) * 100) + "%";
       });
-      if (s.audio.update_hz > 0) updateHz = s.audio.update_hz;
+      if (s.update_hz > 0) updateHz = s.update_hz;
     }
 
     function paintMeta(s) {
@@ -222,41 +256,125 @@
         + "  overrun " + (c.analysis_overruns || 0);
     }
 
-    async function tick() {
-      const started = performance.now();
-      let s;
-      try { s = await fetch("/status").then((r) => r.json()); }
-      catch { s = null; }
-      if (s) {
-        paintSpectrum(s);
-        if (started - lastMeta >= 1000) {
-          paintMeta(s);
-          lastMeta = started;
-        }
-      }
-      const period = 1000 / Math.max(1, updateHz);
-      setTimeout(tick, Math.max(0, period - (performance.now() - started)));
+    function levelsActive() {
+      return vizOn && !document.hidden;
     }
 
-    function fillConfig(c) {
-      lastConfig = c;
-      const v = c.values || {};
-      if (document.activeElement !== $("ctl-delay")) $("ctl-delay").value = v.visual_delay_ms ?? 0;
-      if (document.activeElement !== $("ctl-name")) $("ctl-name").value = v.airplay_name || "";
-      if (document.activeElement !== $("ctl-dest")) $("ctl-dest").value = (v.destinations || []).join("\n");
-      $("ctl-mcast").checked = !!v.multicast_enabled;
-      fillIfaceSelect("ctl-http", v.http_interface || "", c.interfaces);
-      fillIfaceSelect("ctl-airplay", v.airplay_interface || "", c.interfaces);
-      fillIfaceSelect("ctl-unicast", v.unicast_interface || "", c.interfaces);
-      fillIfaceSelect("ctl-multicast", v.multicast_interface || "", c.interfaces);
+    async function levelsTick() {
+      if (!levelsActive()) return;
+      const started = performance.now();
+      try {
+        paintSpectrum(await fetch("/levels").then((r) => r.json()));
+      } catch { /* ignore */ }
+      if (!levelsActive()) return;
+      const period = 1000 / Math.max(1, updateHz);
+      levelsTimer = setTimeout(levelsTick, Math.max(0, period - (performance.now() - started)));
+    }
+
+    function startLevels() {
+      clearTimeout(levelsTimer);
+      if (levelsActive()) levelsTick();
+    }
+
+    function stopLevels() {
+      clearTimeout(levelsTimer);
+    }
+
+    async function statusTick() {
+      if (document.hidden) return;
+      try {
+        const s = await fetch("/status").then((r) => r.json());
+        paintMeta(s);
+        if (!vizOn) paintConn(!!s.airplay.connected);
+      } catch { /* ignore */ }
+      if (!document.hidden) statusTimer = setTimeout(statusTick, 1000);
+    }
+
+    function setViz(on) {
+      vizOn = on;
+      $("viz-toggle").checked = on;
+      if (on) startLevels();
+      else stopLevels();
+    }
+
+    const FIELD_IDS = [
+      "ctl-delay", "ctl-name", "ctl-http", "ctl-airplay",
+      "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest"
+    ];
+
+    function destLines() {
+      return $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
+    }
+
+    function formSnapshot() {
+      return {
+        visual_delay_ms: Number($("ctl-delay").value),
+        airplay_name: $("ctl-name").value.trim(),
+        http_interface: $("ctl-http").value,
+        airplay_interface: $("ctl-airplay").value,
+        unicast_interface: $("ctl-unicast").value,
+        multicast_interface: $("ctl-multicast").value,
+        multicast_enabled: $("ctl-mcast").checked,
+        destinations: destLines()
+      };
+    }
+
+    function savedSnapshot() {
+      const v = lastConfig.values || {};
+      return {
+        visual_delay_ms: Number(v.visual_delay_ms ?? 0),
+        airplay_name: (v.airplay_name || "").trim(),
+        http_interface: v.http_interface || "",
+        airplay_interface: v.airplay_interface || "",
+        unicast_interface: v.unicast_interface || "",
+        multicast_interface: v.multicast_interface || "",
+        multicast_enabled: !!v.multicast_enabled,
+        destinations: v.destinations || []
+      };
+    }
+
+    function isDirty() {
+      return JSON.stringify(formSnapshot()) !== JSON.stringify(savedSnapshot());
+    }
+
+    function syncActionButtons() {
+      const dirty = isDirty();
+      $("ctl-save").disabled = !dirty;
+      $("ctl-cancel").disabled = !dirty;
+    }
+
+    function paintHint(c) {
       const bits = [];
+      if (isDirty()) bits.push("unsaved changes");
       if (c.needs_restart) bits.push("restart needed");
-      if (c.persisted) bits.push("saved");
+      if (!isDirty() && c.persisted) bits.push("saved");
       else if (c.config_writable === false) bits.push("config not writable");
       if (c.persist_error) bits.push(c.persist_error);
-      if (c.persisted || c.needs_restart || c.persist_error || c.config_writable === false) {
-        $("ctl-msg").textContent = bits.join(" · ");
+      $("ctl-msg").textContent = bits.join(" · ");
+    }
+
+    function fillConfig(c, force) {
+      const dirty = !force && isDirty();
+      if (c) lastConfig = c;
+      const cfg = lastConfig;
+      const v = cfg.values || {};
+      if (force || !dirty) {
+        $("ctl-delay").value = v.visual_delay_ms ?? 0;
+        $("ctl-name").value = v.airplay_name || "";
+        $("ctl-dest").value = (v.destinations || []).join("\n");
+        $("ctl-mcast").checked = !!v.multicast_enabled;
+        fillIfaceSelect("ctl-http", v.http_interface || "", cfg.interfaces);
+        fillIfaceSelect("ctl-airplay", v.airplay_interface || "", cfg.interfaces);
+        fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
+        fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
+      } else {
+        fillIfaceSelect("ctl-http", $("ctl-http").value, cfg.interfaces);
+        fillIfaceSelect("ctl-airplay", $("ctl-airplay").value, cfg.interfaces);
+        fillIfaceSelect("ctl-unicast", $("ctl-unicast").value, cfg.interfaces);
+        fillIfaceSelect("ctl-multicast", $("ctl-multicast").value, cfg.interfaces);
       }
+      paintHint(cfg);
+      syncActionButtons();
     }
 
     async function loadConfig() {
@@ -268,7 +386,7 @@
 
     function fillIfaceSelect(id, current, interfaces) {
       const sel = $(id);
-      if (document.activeElement === sel) return;
+      const keep = current;
       sel.innerHTML = "";
       const any = document.createElement("option");
       any.value = "";
@@ -280,36 +398,34 @@
         o.textContent = i.name + " (" + i.ipv4 + ")";
         sel.appendChild(o);
       });
-      sel.value = current;
+      sel.value = keep;
     }
 
     function nicsChanged(prev) {
-      return $("ctl-http").value !== (prev.http_interface || "")
-        || $("ctl-airplay").value !== (prev.airplay_interface || "")
-        || $("ctl-unicast").value !== (prev.unicast_interface || "")
-        || $("ctl-multicast").value !== (prev.multicast_interface || "");
+      const now = formSnapshot();
+      return now.http_interface !== (prev.http_interface || "")
+        || now.airplay_interface !== (prev.airplay_interface || "")
+        || now.unicast_interface !== (prev.unicast_interface || "")
+        || now.multicast_interface !== (prev.multicast_interface || "");
     }
 
+    FIELD_IDS.forEach((id) => {
+      $(id).addEventListener("input", () => { paintHint(lastConfig); syncActionButtons(); });
+      $(id).addEventListener("change", () => { paintHint(lastConfig); syncActionButtons(); });
+    });
+
+    $("ctl-cancel").onclick = () => fillConfig(lastConfig, true);
+
     $("ctl-save").onclick = async () => {
-      const dest = $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
-      const name = $("ctl-name").value.trim();
+      if (!isDirty()) return;
+      const body = formSnapshot();
       const prev = lastConfig.values || {};
       if (Object.prototype.hasOwnProperty.call(prev, "airplay_name")
-          && ((name && name !== prev.airplay_name) || nicsChanged(prev))) {
+          && ((body.airplay_name && body.airplay_name !== prev.airplay_name) || nicsChanged(prev))) {
         if (!confirm("Name or interface changes need a restart and may drop AirPlay. Save anyway?")) {
           return;
         }
       }
-      const body = {
-        visual_delay_ms: Number($("ctl-delay").value),
-        airplay_name: name,
-        http_interface: $("ctl-http").value,
-        airplay_interface: $("ctl-airplay").value,
-        unicast_interface: $("ctl-unicast").value,
-        multicast_interface: $("ctl-multicast").value,
-        multicast_enabled: $("ctl-mcast").checked,
-        destinations: dest
-      };
       const r = await fetch("/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -319,7 +435,7 @@
         $("ctl-msg").textContent = await r.text();
         return;
       }
-      fillConfig(await r.json());
+      fillConfig(await r.json(), true);
     };
 
     $("ctl-restart").onclick = async () => {
@@ -328,12 +444,23 @@
       $("ctl-msg").textContent = r.ok ? "Restarting…" : "Restart failed";
     };
 
-    $("ctl-delay").addEventListener("change", () => $("ctl-save").click());
-    $("ctl-mcast").addEventListener("change", () => $("ctl-save").click());
+    $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
 
-    tick();
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopLevels();
+        clearTimeout(statusTimer);
+      } else {
+        startLevels();
+        clearTimeout(statusTimer);
+        statusTick();
+      }
+    });
+
+    setViz(true);
+    statusTick();
     loadConfig();
-    setInterval(loadConfig, 4000);
+    setInterval(() => { if (!document.hidden) loadConfig(); }, 4000);
   </script>
 </body>
 </html>

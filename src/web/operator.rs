@@ -1,0 +1,252 @@
+use crate::control::ConfigValues;
+
+/// Embedded operator UI (switch + pending Save/Cancel).
+pub fn operator_ui() -> &'static str {
+    include_str!("index.html")
+}
+
+/// Live form values the operator page compares against the last saved config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorSnapshot {
+    pub visual_delay_ms: i32,
+    pub airplay_name: String,
+    pub http_interface: String,
+    pub airplay_interface: String,
+    pub unicast_interface: String,
+    pub multicast_interface: String,
+    pub multicast_enabled: bool,
+    pub destinations: Vec<String>,
+}
+
+pub fn dest_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn parse_delay_ms(raw: &str) -> i32 {
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .map(|n| n as i32)
+        .unwrap_or(0)
+}
+
+impl OperatorSnapshot {
+    pub fn from_values(v: &ConfigValues) -> Self {
+        Self {
+            visual_delay_ms: v.visual_delay_ms,
+            airplay_name: v.airplay_name.trim().to_string(),
+            http_interface: v.http_interface.clone(),
+            airplay_interface: v.airplay_interface.clone(),
+            unicast_interface: v.unicast_interface.clone(),
+            multicast_interface: v.multicast_interface.clone(),
+            multicast_enabled: v.multicast_enabled,
+            destinations: v.destinations.clone(),
+        }
+    }
+
+    pub fn is_dirty(&self, saved: &Self) -> bool {
+        self != saved
+    }
+
+    pub fn nics_changed(&self, saved: &Self) -> bool {
+        self.http_interface != saved.http_interface
+            || self.airplay_interface != saved.airplay_interface
+            || self.unicast_interface != saved.unicast_interface
+            || self.multicast_interface != saved.multicast_interface
+    }
+
+    /// Mirrors the UI confirm: name/NIC edits need a restart warning.
+    pub fn needs_restart_confirm(&self, saved: &Self, saved_has_name: bool) -> bool {
+        saved_has_name
+            && ((!self.airplay_name.is_empty() && self.airplay_name != saved.airplay_name)
+                || self.nics_changed(saved))
+    }
+}
+
+/// Overwrite inputs from the server only when forced or the form is clean.
+pub fn should_overwrite_fields(force: bool, dirty: bool) -> bool {
+    force || !dirty
+}
+
+pub fn action_buttons_enabled(dirty: bool) -> bool {
+    dirty
+}
+
+pub fn operator_hint(
+    dirty: bool,
+    needs_restart: bool,
+    persisted: bool,
+    config_writable: bool,
+    persist_error: Option<&str>,
+) -> String {
+    let mut bits = Vec::new();
+    if dirty {
+        bits.push("unsaved changes".to_string());
+    }
+    if needs_restart {
+        bits.push("restart needed".to_string());
+    }
+    if !dirty && persisted {
+        bits.push("saved".to_string());
+    } else if !config_writable {
+        bits.push("config not writable".to_string());
+    }
+    if let Some(err) = persist_error {
+        bits.push(err.to_string());
+    }
+    bits.join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn values(name: &str, dest: &[&str]) -> ConfigValues {
+        ConfigValues {
+            airplay_name: name.into(),
+            visual_delay_ms: -1200,
+            shairport_latency_offset_s: -1.2,
+            multicast_enabled: true,
+            multicast_address: "239.0.0.1".into(),
+            port: 11988,
+            destinations: dest.iter().map(|s| (*s).to_string()).collect(),
+            http_interface: String::new(),
+            airplay_interface: String::new(),
+            unicast_interface: String::new(),
+            multicast_interface: String::new(),
+        }
+    }
+
+    fn base() -> OperatorSnapshot {
+        OperatorSnapshot::from_values(&values("WLEDPlay", &["10.11.1.124"]))
+    }
+
+    #[test]
+    fn operator_ui_switch_and_pending_edits() {
+        let html = operator_ui();
+        assert!(html.contains("role=\"switch\""));
+        assert!(html.contains("id=\"viz-toggle\""));
+        assert!(html.contains("class=\"switch\""));
+        assert!(html.contains("aria-label=\"Live visualizer\""));
+        assert!(html.contains("id=\"ctl-cancel\""));
+        assert!(html.contains("disabled>Save</button>"));
+        assert!(html.contains("disabled>Cancel</button>"));
+        assert!(html.contains("function isDirty()"));
+        assert!(html.contains("function syncActionButtons()"));
+        assert!(html.contains("unsaved changes"));
+        assert!(html.contains("const dirty = !force && isDirty()"));
+        assert!(html.contains("fillConfig(lastConfig, true)"));
+        assert!(html.contains("$(\"viz-toggle\").addEventListener(\"change\""));
+        assert!(!html.contains("Visualizer on"));
+        assert!(!html.contains("$(\"ctl-save\").click()"));
+    }
+
+    #[test]
+    fn dest_lines_and_delay_parse() {
+        assert!(dest_lines("").is_empty());
+        assert!(dest_lines("  \n  ").is_empty());
+        assert_eq!(
+            dest_lines(" 10.0.0.1 \n\n10.0.0.2\n"),
+            ["10.0.0.1", "10.0.0.2"]
+        );
+        assert_eq!(parse_delay_ms(""), 0);
+        assert_eq!(parse_delay_ms("  -1200 "), -1200);
+        assert_eq!(parse_delay_ms("100.9"), 100);
+        assert_eq!(parse_delay_ms("nope"), 0);
+    }
+
+    #[test]
+    fn snapshots_dirty_and_nics() {
+        let saved = base();
+        let form = OperatorSnapshot {
+            visual_delay_ms: parse_delay_ms("-1200"),
+            airplay_name: "  WLEDPlay  ".trim().to_string(),
+            http_interface: String::new(),
+            airplay_interface: String::new(),
+            unicast_interface: String::new(),
+            multicast_interface: String::new(),
+            multicast_enabled: true,
+            destinations: dest_lines("10.11.1.124\n"),
+        };
+        assert!(!form.is_dirty(&saved));
+        assert!(!action_buttons_enabled(false));
+        assert!(action_buttons_enabled(true));
+
+        let mut dirty = form.clone();
+        dirty.http_interface = "en0".into();
+        assert!(dirty.is_dirty(&saved));
+        assert!(dirty.nics_changed(&saved));
+        dirty.http_interface.clear();
+        dirty.airplay_interface = "en0".into();
+        assert!(dirty.nics_changed(&saved));
+        dirty.airplay_interface.clear();
+        dirty.unicast_interface = "en0".into();
+        assert!(dirty.nics_changed(&saved));
+        dirty.unicast_interface.clear();
+        dirty.multicast_interface = "en0".into();
+        assert!(dirty.nics_changed(&saved));
+        dirty.multicast_interface.clear();
+        assert!(!dirty.nics_changed(&saved));
+
+        dirty.destinations = vec!["10.11.1.200".into()];
+        assert!(dirty.is_dirty(&saved));
+        assert!(!dirty.nics_changed(&saved));
+    }
+
+    #[test]
+    fn restart_confirm_and_overwrite() {
+        let saved = base();
+        let mut form = saved.clone();
+        assert!(!form.needs_restart_confirm(&saved, true));
+        assert!(!form.needs_restart_confirm(&saved, false));
+
+        form.airplay_name = "Room".into();
+        assert!(form.needs_restart_confirm(&saved, true));
+        assert!(!form.needs_restart_confirm(&saved, false));
+
+        form.airplay_name.clear();
+        assert!(!form.needs_restart_confirm(&saved, true));
+        form.http_interface = "en0".into();
+        assert!(form.needs_restart_confirm(&saved, true));
+
+        assert!(should_overwrite_fields(true, true));
+        assert!(should_overwrite_fields(true, false));
+        assert!(should_overwrite_fields(false, false));
+        assert!(!should_overwrite_fields(false, true));
+    }
+
+    #[test]
+    fn hint_branches() {
+        assert_eq!(operator_hint(false, false, false, true, None), "");
+        assert_eq!(
+            operator_hint(true, false, true, true, None),
+            "unsaved changes"
+        );
+        assert_eq!(
+            operator_hint(false, true, true, true, None),
+            "restart needed · saved"
+        );
+        assert_eq!(
+            operator_hint(true, true, false, false, Some("disk full")),
+            "unsaved changes · restart needed · config not writable · disk full"
+        );
+        assert_eq!(
+            operator_hint(false, false, false, false, None),
+            "config not writable"
+        );
+        assert_eq!(operator_hint(false, false, true, false, None), "saved");
+    }
+
+    #[test]
+    fn from_values_trims_name() {
+        let v = values("  padded  ", &[]);
+        let snap = OperatorSnapshot::from_values(&v);
+        assert_eq!(snap.airplay_name, "padded");
+        assert!(snap.destinations.is_empty());
+        assert!(snap.multicast_enabled);
+    }
+}

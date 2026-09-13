@@ -7,7 +7,7 @@ use crate::wled::protocol::AudioSyncPacket;
 pub struct Analyzer {
     pub samples: SampleProcessor,
     fft: FftEngine,
-    sample_buffer: Vec<f32>,
+    pub(crate) sample_buffer: Vec<f32>,
     fft_calc: [f32; NUM_GEQ_CHANNELS],
     fft_avg: [f32; NUM_GEQ_CHANNELS],
     fft_result: [u8; NUM_GEQ_CHANNELS],
@@ -64,19 +64,19 @@ impl Analyzer {
         if self.samples.sample_avg > 0.25 {
             self.sample_buffer.push(sample);
         }
-        if self.sample_buffer.len() >= SAMPLES_FFT
-            && now_ms.saturating_sub(self.last_fft_ms) >= 21
+        if self.sample_buffer.len() >= SAMPLES_FFT && now_ms.saturating_sub(self.last_fft_ms) >= 21
         {
             self.run_fft(now_ms);
         }
     }
 
-    fn run_fft(&mut self, now_ms: u64) {
+    pub(crate) fn run_fft(&mut self, now_ms: u64) {
         self.last_fft_ms = now_ms;
         let mut batch = [0.0f32; SAMPLES_FFT];
         let start = self.sample_buffer.len() - SAMPLES_FFT;
         batch.copy_from_slice(&self.sample_buffer[start..]);
-        self.sample_buffer.drain(0..start.min(self.sample_buffer.len()));
+        self.sample_buffer
+            .drain(0..start.min(self.sample_buffer.len()));
 
         let (peak, mag) = self.fft.analyze(&batch);
         self.fft_major_peak = peak;
@@ -113,7 +113,7 @@ impl Analyzer {
         self.fft_frames += 1;
     }
 
-    fn detect_fft_peak(&mut self) {
+    pub(crate) fn detect_fft_peak(&mut self) {
         let mags = self.fft.magnitudes();
         let bin = self.samples.bin_num as usize;
         if self.samples.sample_avg > 1.0
@@ -121,7 +121,11 @@ impl Analyzer {
             && bin > 4
             && bin < mags.len()
             && mags[bin] > self.samples.max_vol as f32
-            && self.samples.sim_time_ms.saturating_sub(self.samples.time_of_peak_ms) > 100
+            && self
+                .samples
+                .sim_time_ms
+                .saturating_sub(self.samples.time_of_peak_ms)
+                > 100
         {
             self.samples.sample_peak = true;
             self.samples.time_of_peak_ms = self.samples.sim_time_ms;
@@ -178,6 +182,7 @@ pub fn hz_to_bin(hz: f32) -> usize {
 mod tests {
     use super::Analyzer;
     use crate::config::AgcMode;
+    use crate::wled::protocol::AudioSyncPacket;
 
     #[test]
     fn silence_clears_stuck_peak_and_level() {
@@ -188,5 +193,58 @@ mod tests {
         a.set_stream_active(false);
         assert!(!a.samples.sample_peak);
         assert!(a.rms_proxy() < 0.01);
+    }
+
+    #[test]
+    fn hz_to_bin_maps_frequency_to_fft_index() {
+        assert_eq!(super::hz_to_bin(0.0), 0);
+        let bin = super::hz_to_bin(440.0);
+        assert!((5..=12).contains(&bin));
+    }
+
+    #[test]
+    fn build_packet_caps_fft_bytes_at_254() {
+        let mut a = Analyzer::new(AgcMode::Off);
+        a.fft_result = [255; 16];
+        let pkt = a.build_packet();
+        assert!(pkt.fft_result.iter().all(|&b| b <= 254));
+    }
+
+    #[test]
+    fn silence_packet_matches_default() {
+        let a = Analyzer::new(AgcMode::Off);
+        assert_eq!(a.silence_packet(), AudioSyncPacket::silence());
+    }
+
+    #[test]
+    fn ingest_tone_runs_fft_and_getters() {
+        let mut a = Analyzer::new(AgcMode::Normal);
+        a.set_stream_active(true);
+        for i in 0..900 {
+            let t = i as f32 / 22050.0;
+            let s = (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 14000.0;
+            a.ingest_mono_sample(s, i as u64 * 22);
+        }
+        assert!(a.fft_frames() > 0);
+        assert!(a.dominant_frequency() >= 1.0);
+        let _ = a.fft_bands();
+        let _ = a.rms_proxy();
+        let pkt = a.build_packet();
+        assert!(pkt.fft_major_peak >= 1.0);
+
+        a.samples.bin_num = super::hz_to_bin(440.0) as u8;
+        a.samples.max_vol = 1;
+        a.samples.sample_avg = 10.0;
+        a.samples.time_of_peak_ms = 0;
+        a.samples.sim_time_ms = 250;
+        a.detect_fft_peak();
+
+        a.sample_buffer = vec![0.2; crate::audio::fft::SAMPLES_FFT];
+        a.samples.sample_avg = 0.4;
+        a.samples.sample_agc = 0.2;
+        a.samples.sound_agc = AgcMode::Normal;
+        a.samples.mult_agc = 1.5;
+        a.run_fft(10_000);
+        a.set_stream_active(true);
     }
 }

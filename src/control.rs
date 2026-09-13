@@ -372,4 +372,230 @@ mod tests {
         assert!(cfg.network.unicast.is_empty());
         assert!(cfg.network.multicast.is_empty());
     }
+
+    #[test]
+    fn rejects_empty_airplay_name() {
+        let mut cfg = Config::default();
+        let err = super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                airplay_name: Some("   ".into()),
+                ..Default::default()
+            },
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_non_multicast_address() {
+        let mut cfg = Config::default();
+        let err = super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                multicast_address: Some("10.0.0.1".into()),
+                ..Default::default()
+            },
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_port_zero() {
+        let mut cfg = Config::default();
+        let err = super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                port: Some(0),
+                ..Default::default()
+            },
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_network_interface() {
+        let mut cfg = Config::default();
+        let err = super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                unicast_interface: Some("wledplay-nonexistent-nic-xyz".into()),
+                ..Default::default()
+            },
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn visual_delay_ms_roundtrip() {
+        let mut cfg = Config::default();
+        cfg.audio.sync_offset_ms = 150;
+        cfg.audio.shairport_latency_offset_s = -0.5;
+        assert_eq!(super::visual_delay_ms(&cfg), 150 - 500);
+    }
+
+    #[test]
+    fn needs_restart_when_applied_settings_diverge() {
+        use crate::wled::WledSender;
+        use std::net::{IpAddr, Ipv4Addr};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let cfg = Config::default();
+        let sender = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+        let control = super::Control {
+            config: Arc::new(Mutex::new(cfg.clone())),
+            sender: Arc::new(Mutex::new(sender)),
+            config_path: None,
+            applied_name: cfg.airplay.name.clone(),
+            applied_http: cfg.network.http.clone(),
+            applied_airplay: cfg.network.airplay.clone(),
+            applied_unicast: cfg.network.unicast.clone(),
+            applied_multicast: cfg.network.multicast.clone(),
+            applied_shairport: cfg.audio.shairport_latency_offset_s,
+            restart: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(!control.view().needs_restart);
+
+        let mut changed = cfg.clone();
+        changed.network.http = "lo0".into();
+        assert!(control.needs_restart(&changed));
+        control.request_restart();
+        assert!(control.restart.load(std::sync::atomic::Ordering::SeqCst));
+
+        let view = control.view();
+        assert!(!view.config_writable);
+        assert_eq!(view.values.airplay_name, cfg.airplay.name);
+    }
+
+    fn test_control(path: Option<std::path::PathBuf>) -> super::Control {
+        use crate::wled::WledSender;
+        use std::net::{IpAddr, Ipv4Addr};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let cfg = Config::default();
+        let sender = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec![],
+            None,
+            None,
+        )
+        .unwrap();
+        super::Control {
+            config: Arc::new(Mutex::new(cfg.clone())),
+            sender: Arc::new(Mutex::new(sender)),
+            config_path: path,
+            applied_name: cfg.airplay.name.clone(),
+            applied_http: cfg.network.http.clone(),
+            applied_airplay: cfg.network.airplay.clone(),
+            applied_unicast: cfg.network.unicast.clone(),
+            applied_multicast: cfg.network.multicast.clone(),
+            applied_shairport: cfg.audio.shairport_latency_offset_s,
+            restart: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn apply_patch_persists_and_rejects_ranges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cfg.yaml");
+        std::fs::write(&path, "").unwrap();
+        let control = test_control(Some(path.clone()));
+
+        let view = control
+            .apply_patch(super::ConfigPatch {
+                airplay_name: Some("Living Room".into()),
+                visual_delay_ms: Some(80),
+                shairport_latency_offset_s: Some(-0.5),
+                multicast_enabled: Some(false),
+                multicast_address: Some("239.1.1.1".into()),
+                port: Some(12001),
+                destinations: Some(vec!["10.0.0.8".into(), "  ".into()]),
+                http_interface: Some("".into()),
+                airplay_interface: Some("".into()),
+                unicast_interface: Some("".into()),
+                multicast_interface: Some("".into()),
+            })
+            .unwrap();
+        assert!(view.persisted);
+        assert_eq!(view.values.airplay_name, "Living Room");
+        assert_eq!(view.values.port, 12001);
+        assert_eq!(view.values.destinations, vec!["10.0.0.8".to_string()]);
+        assert!(!view.values.multicast_enabled);
+        assert!(view.needs_restart);
+
+        let err = control
+            .apply_patch(super::ConfigPatch {
+                airplay_name: Some("x".repeat(65)),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.contains("airplay_name"));
+
+        let mut cfg = Config::default();
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                visual_delay_ms: Some(5001),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                visual_delay_ms: Some(-5001),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                shairport_latency_offset_s: Some(3.0),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                multicast_address: Some("nope".into()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                multicast_address: Some("ff02::1".into()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn apply_patch_save_error_is_reported() {
+        let control = test_control(Some(std::path::PathBuf::from(
+            "/no/such/wledplay-dir/cfg.yaml",
+        )));
+        let view = control
+            .apply_patch(super::ConfigPatch {
+                visual_delay_ms: Some(10),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!view.persisted);
+        assert!(view.persist_error.is_some());
+        assert!(!view.config_writable);
+    }
 }
