@@ -16,6 +16,9 @@ pub const PCM_IDLE_START: Duration = Duration::from_millis(2000);
 pub const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 /// Keep at most this much unread stdin PCM when not realtime-pacing (AirPlay).
 pub const STDIN_KEEP_MS: u64 = 80;
+/// Poll interval while a persistent FIFO has no writer (AirPlay session gap).
+/// Must not busy-spin: a pegged core lets the pipe fill and wrecks delay calibration.
+pub const PCM_FIFO_IDLE_POLL: Duration = Duration::from_millis(20);
 /// Count an underrun only after PCM has been silent this long.
 pub const PCM_UNDERRUN_AFTER: Duration = Duration::from_millis(80);
 /// Max queued Audio Sync packets for live send delay (5s at 50 Hz, plus slack).
@@ -79,6 +82,19 @@ pub fn enqueue_packet(
     while queue.len() > DELAY_QUEUE_MAX {
         queue.pop_front();
     }
+}
+
+/// After PCM EOF on a FIFO/stdin, wait for the next AirPlay writer instead of spinning.
+pub fn pcm_session_gap_wait(persistent: bool, sleeper: &mut dyn FnMut(Duration)) -> bool {
+    if !persistent {
+        return false;
+    }
+    sleeper(PCM_FIFO_IDLE_POLL);
+    true
+}
+
+pub fn stdin_keep_bytes(bytes_per_second: u64) -> u64 {
+    (bytes_per_second * STDIN_KEEP_MS / 1000).max(4096)
 }
 
 pub fn discard_reader_backlog(
@@ -396,6 +412,24 @@ mod tests {
             pcm_idle_timeout(Some(now - Duration::from_secs(3)), now),
             PCM_IDLE_PLAY
         );
+    }
+
+    #[test]
+    fn pcm_session_gap_wait_sleeps_only_when_persistent() {
+        let mut calls = 0u8;
+        let mut sleeper = |d: Duration| {
+            calls += 1;
+            assert_eq!(d, PCM_FIFO_IDLE_POLL);
+        };
+        assert!(!pcm_session_gap_wait(false, &mut sleeper));
+        assert!(pcm_session_gap_wait(true, &mut sleeper));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn stdin_keep_bytes_is_80ms_or_4k() {
+        assert_eq!(stdin_keep_bytes(0), 4096);
+        assert_eq!(stdin_keep_bytes(192_000), 15_360);
     }
 
     #[test]

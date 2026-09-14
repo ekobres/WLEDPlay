@@ -6,7 +6,7 @@ use crate::pcm::PcmDecoder;
 use crate::runtime::{
     self, drain_due_packets, http_listen, mark_stream_connected, mark_stream_ended,
     resolve_optional_nic, start_ms, stdin_available_bytes, step_send_deadline, update_status,
-    LoopAction, PcmRuntime, SendLoop, STDIN_KEEP_MS,
+    LoopAction, PcmRuntime, SendLoop,
 };
 use crate::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use crate::wled::WledSender;
@@ -434,7 +434,7 @@ pub fn read_pcm(
 
     loop {
         if discard_backlog_ok && !pace_realtime && bytes_per_second > 0 {
-            let keep = (bytes_per_second * STDIN_KEEP_MS / 1000).max(4096);
+            let keep = runtime::stdin_keep_bytes(bytes_per_second);
             if let Some(skipped) = runtime::discard_reader_backlog(reader, available(), keep) {
                 runtime.lock().unwrap().analysis_overruns += 1;
                 if should_log_skip(last_skip_log, Instant::now(), Duration::from_secs(2)) {
@@ -447,7 +447,8 @@ pub fn read_pcm(
             Ok(0) => {
                 let mut rt = runtime.lock().unwrap();
                 mark_stream_ended(&mut rt, &status, discard_backlog_ok);
-                if discard_backlog_ok {
+                drop(rt);
+                if runtime::pcm_session_gap_wait(discard_backlog_ok, &mut |d| thread::sleep(d)) {
                     decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
                     playback_clock = Instant::now();
                     bytes_played = 0;
@@ -804,13 +805,35 @@ mod tests {
         assert!(!guard.stream_active);
     }
 
+    struct EofThenClose<R: Read> {
+        inner: R,
+        eofs: u8,
+    }
+    impl<R: Read> Read for EofThenClose<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            if n > 0 {
+                return Ok(n);
+            }
+            self.eofs = self.eofs.saturating_add(1);
+            if self.eofs >= 2 {
+                Err(io::Error::other("pipe closed"))
+            } else {
+                Ok(0)
+            }
+        }
+    }
+
     #[test]
     fn read_pcm_discards_backlog_and_handles_errors() {
         let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
         let status = status();
         let pcm = PcmFormat::default();
         read_pcm(
-            &mut Cursor::new(vec![0u8; 16]),
+            &mut EofThenClose {
+                inner: Cursor::new(vec![0u8; 16]),
+                eofs: 0,
+            },
             true,
             &|| 50_000,
             rt.clone(),
@@ -822,7 +845,10 @@ mod tests {
 
         let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
         read_pcm(
-            &mut Cursor::new(vec![0u8; 80_000]),
+            &mut EofThenClose {
+                inner: Cursor::new(vec![0u8; 80_000]),
+                eofs: 0,
+            },
             true,
             &|| 80_000,
             rt.clone(),
