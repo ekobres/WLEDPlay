@@ -343,12 +343,12 @@ Do not transmit packets unnecessarily faster than WLED can consume them.
 
 AirPlay 2 introduces buffering and presentation timing shared with grouped speakers via NQPTP.
 
-WLEDPlay compensates using two stored values:
+WLEDPlay compensates using two independent operator settings:
 
-- `audio.sync_offset_ms` — live delay applied in the WLEDPlay send loop (positive = later visuals);
-- `audio.shairport_latency_offset_s` — Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM from Shairport).
+- `audio.shairport_latency_offset_s` — Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM from Shairport). **Restart** to apply. The absolute value is the early-PCM margin (e.g. `-1.2` → 1200 ms lead).
+- `audio.sync_offset_ms` — unsigned hold after decode before each WLED UDP packet (**live**). `0` = send as soon as PCM arrives (up to the Shairport lead early). Matching the lead in ms (e.g. `1200` when lead is `-1.2`) = on time at presentation. Higher = later LEDs.
 
-The operator console presents a single **visual delay** control that maps onto these fields: positive delay adjusts live send offset immediately; delay earlier than the current Shairport compensation requires a stack restart so Shairport can pull PCM earlier.
+The operator console exposes both fields separately in yaml and the web UI.
 
 The system distinguishes:
 
@@ -369,11 +369,11 @@ Example:
 
 ```yaml
 audio:
-  sync_offset_ms: 0
+  sync_offset_ms: 1200
   shairport_latency_offset_s: -1.2
 ```
 
-Positive and negative combined delay must be supported. The operator must be able to adjust delay from the web UI while a stream is active (see §22.2).
+Send delay is adjustable live while a stream is active; Shairport lead changes require restart (see §22.2).
 
 ---
 
@@ -662,7 +662,7 @@ The UI should display:
 - WLED destinations;
 - multicast on/off;
 - current HTTP, AirPlay/mDNS, unicast, and multicast interfaces;
-- synchronization / visual delay;
+- synchronization (Shairport lead + send delay);
 - AirPlay receiver name.
 
 ## 22.2 Live control
@@ -687,7 +687,8 @@ The UI is the primary operator console for a running instance. To the extent a s
 
 - WLED UDP port
 - Multicast group address
-- Shairport latency offset, if exposed separately from the unified visual-delay control
+- Shairport lead (`shairport_latency_offset_s`)
+- send delay (`sync_offset_ms`)
 - AGC / gain, if changing it does not require rebuilding the analyzer mid-buffer
 
 ### Apply vs restart
@@ -701,9 +702,9 @@ restart  — requires process or Shairport restart
 
 `GET /config` must mark each field with that classification.
 
-Live examples: visual delay, multicast enable, destination list.
+Live examples: send delay, multicast enable, destination list.
 
-Restart examples: AirPlay name, any of the four network interfaces, HTTP listen address (do not offer HTTP bind/port changes that would disconnect the UI without a warning).
+Restart examples: Shairport lead, AirPlay name, any of the four network interfaces, HTTP listen address (do not offer HTTP bind/port changes that would disconnect the UI without a warning).
 
 ### Control API
 

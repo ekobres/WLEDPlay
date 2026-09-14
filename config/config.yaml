@@ -2,7 +2,7 @@ airplay:
   name: "WLEDPlay"
 
 audio:
-  sync_offset_ms: 0
+  sync_offset_ms: 1200
   shairport_latency_offset_s: -1.2
   gain: auto
   update_hz: 50

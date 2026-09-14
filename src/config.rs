@@ -281,8 +281,8 @@ impl Config {
             }
         }
         if let Ok(v) = std::env::var("WLEDPLAY_SYNC_OFFSET_MS") {
-            if let Ok(p) = v.parse() {
-                self.audio.sync_offset_ms = p;
+            if let Ok(p) = v.parse::<i32>() {
+                self.audio.sync_offset_ms = p.max(0);
             }
         }
         if let Ok(v) = std::env::var("WLEDPLAY_LOG_LEVEL") {
@@ -616,7 +616,7 @@ mod tests {
         std::env::set_var("WLEDPLAY_MULTICAST_ENABLED", "true");
         cfg.apply_env();
         assert_eq!(cfg.wled.port, 12121);
-        assert_eq!(cfg.audio.sync_offset_ms, -25);
+        assert_eq!(cfg.audio.sync_offset_ms, 0);
         assert_eq!(cfg.wled.destinations, vec!["10.0.0.8".to_string()]);
         assert_eq!(cfg.network.http, "eth0");
         assert_eq!(cfg.web.port, 9090);

@@ -6,9 +6,10 @@ pub fn operator_ui() -> &'static str {
 }
 
 /// Live form values the operator page compares against the last saved config.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct OperatorSnapshot {
-    pub visual_delay_ms: i32,
+    pub sync_offset_ms: i32,
+    pub shairport_latency_offset_s: f64,
     pub airplay_name: String,
     pub http_interface: String,
     pub airplay_interface: String,
@@ -26,18 +27,37 @@ pub fn dest_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn parse_delay_ms(raw: &str) -> i32 {
+pub fn parse_send_delay_ms(raw: &str) -> i32 {
     raw.trim()
         .parse::<f64>()
         .ok()
-        .map(|n| n as i32)
+        .map(|n| n.max(0.0) as i32)
         .unwrap_or(0)
+}
+
+pub fn parse_shairport_s(raw: &str) -> f64 {
+    raw.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+impl PartialEq for OperatorSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.sync_offset_ms == other.sync_offset_ms
+            && (self.shairport_latency_offset_s - other.shairport_latency_offset_s).abs() < 0.0001
+            && self.airplay_name == other.airplay_name
+            && self.http_interface == other.http_interface
+            && self.airplay_interface == other.airplay_interface
+            && self.unicast_interface == other.unicast_interface
+            && self.multicast_interface == other.multicast_interface
+            && self.multicast_enabled == other.multicast_enabled
+            && self.destinations == other.destinations
+    }
 }
 
 impl OperatorSnapshot {
     pub fn from_values(v: &ConfigValues) -> Self {
         Self {
-            visual_delay_ms: v.visual_delay_ms,
+            sync_offset_ms: v.sync_offset_ms,
+            shairport_latency_offset_s: v.shairport_latency_offset_s,
             airplay_name: v.airplay_name.trim().to_string(),
             http_interface: v.http_interface.clone(),
             airplay_interface: v.airplay_interface.clone(),
@@ -57,6 +77,10 @@ impl OperatorSnapshot {
             || self.airplay_interface != saved.airplay_interface
             || self.unicast_interface != saved.unicast_interface
             || self.multicast_interface != saved.multicast_interface
+    }
+
+    pub fn shairport_changed(&self, saved: &Self) -> bool {
+        (self.shairport_latency_offset_s - saved.shairport_latency_offset_s).abs() > 0.0001
     }
 
     /// Mirrors the UI confirm: name/NIC edits need a restart warning.
@@ -108,8 +132,9 @@ mod tests {
     fn values(name: &str, dest: &[&str]) -> ConfigValues {
         ConfigValues {
             airplay_name: name.into(),
-            visual_delay_ms: -1200,
+            sync_offset_ms: 1200,
             shairport_latency_offset_s: -1.2,
+            on_time_send_delay_ms: 1200,
             multicast_enabled: true,
             multicast_address: "239.0.0.1".into(),
             port: 11988,
@@ -126,23 +151,22 @@ mod tests {
     }
 
     #[test]
-    fn operator_ui_switch_and_pending_edits() {
+    fn operator_ui_split_delay_controls() {
         let html = operator_ui();
+        assert!(html.contains("id=\"ctl-shairport\""));
+        assert!(html.contains("id=\"ctl-delay\""));
+        assert!(html.contains("id=\"ctl-delay-hint\""));
+        assert!(html.contains("Shairport lead (s)"));
+        assert!(html.contains("Send delay (ms)"));
+        assert!(html.contains("sync_offset_ms"));
+        assert!(html.contains("shairport_latency_offset_s"));
+        assert!(html.contains("on_time_send_delay_ms"));
+        assert!(html.contains("function shairportChanged"));
+        assert!(!html.contains("visual_delay_ms"));
         assert!(html.contains("role=\"switch\""));
-        assert!(html.contains("id=\"viz-toggle\""));
-        assert!(html.contains("class=\"switch\""));
-        assert!(html.contains("aria-label=\"Live visualizer\""));
         assert!(html.contains("id=\"ctl-cancel\""));
-        assert!(html.contains("disabled>Save</button>"));
-        assert!(html.contains("disabled>Cancel</button>"));
         assert!(html.contains("function isDirty()"));
-        assert!(html.contains("function syncActionButtons()"));
-        assert!(html.contains("unsaved changes"));
-        assert!(html.contains("const dirty = !force && isDirty()"));
-        assert!(html.contains("fillConfig(lastConfig, true)"));
-        assert!(html.contains("$(\"viz-toggle\").addEventListener(\"change\""));
         assert!(!html.contains("Visualizer on"));
-        assert!(!html.contains("$(\"ctl-save\").click()"));
     }
 
     #[test]
@@ -153,17 +177,20 @@ mod tests {
             dest_lines(" 10.0.0.1 \n\n10.0.0.2\n"),
             ["10.0.0.1", "10.0.0.2"]
         );
-        assert_eq!(parse_delay_ms(""), 0);
-        assert_eq!(parse_delay_ms("  -1200 "), -1200);
-        assert_eq!(parse_delay_ms("100.9"), 100);
-        assert_eq!(parse_delay_ms("nope"), 0);
+        assert_eq!(parse_send_delay_ms(""), 0);
+        assert_eq!(parse_send_delay_ms("1200"), 1200);
+        assert_eq!(parse_send_delay_ms("-50"), 0);
+        assert_eq!(parse_send_delay_ms("100.9"), 100);
+        assert_eq!(parse_send_delay_ms("nope"), 0);
+        assert!((parse_shairport_s("-1.2") - -1.2).abs() < 1e-9);
     }
 
     #[test]
     fn snapshots_dirty_and_nics() {
         let saved = base();
         let form = OperatorSnapshot {
-            visual_delay_ms: parse_delay_ms("-1200"),
+            sync_offset_ms: 1200,
+            shairport_latency_offset_s: -1.2,
             airplay_name: "  WLEDPlay  ".trim().to_string(),
             http_interface: String::new(),
             airplay_interface: String::new(),
@@ -177,6 +204,14 @@ mod tests {
         assert!(action_buttons_enabled(true));
 
         let mut dirty = form.clone();
+        dirty.sync_offset_ms = 800;
+        assert!(dirty.is_dirty(&saved));
+        assert!(!dirty.shairport_changed(&saved));
+
+        dirty.shairport_latency_offset_s = -2.0;
+        assert!(dirty.shairport_changed(&saved));
+
+        dirty = form.clone();
         dirty.http_interface = "en0".into();
         assert!(dirty.is_dirty(&saved));
         assert!(dirty.nics_changed(&saved));
@@ -246,6 +281,8 @@ mod tests {
         let v = values("  padded  ", &[]);
         let snap = OperatorSnapshot::from_values(&v);
         assert_eq!(snap.airplay_name, "padded");
+        assert_eq!(snap.sync_offset_ms, 1200);
+        assert!((snap.shairport_latency_offset_s - -1.2).abs() < 1e-9);
         assert!(snap.destinations.is_empty());
         assert!(snap.multicast_enabled);
     }

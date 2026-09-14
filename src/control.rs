@@ -23,7 +23,7 @@ pub struct Control {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ConfigPatch {
     pub airplay_name: Option<String>,
-    pub visual_delay_ms: Option<i32>,
+    pub sync_offset_ms: Option<i32>,
     pub shairport_latency_offset_s: Option<f64>,
     pub multicast_enabled: Option<bool>,
     pub multicast_address: Option<String>,
@@ -49,8 +49,10 @@ pub struct ConfigView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigValues {
     pub airplay_name: String,
-    pub visual_delay_ms: i32,
+    pub sync_offset_ms: i32,
     pub shairport_latency_offset_s: f64,
+    /// Send delay (ms) that aligns UDP with presentation for the current Shairport lead.
+    pub on_time_send_delay_ms: u32,
     pub multicast_enabled: bool,
     pub multicast_address: String,
     pub port: u16,
@@ -63,7 +65,7 @@ pub struct ConfigValues {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigFields {
-    pub visual_delay_ms: &'static str,
+    pub sync_offset_ms: &'static str,
     pub multicast_enabled: &'static str,
     pub destinations: &'static str,
     pub airplay_name: &'static str,
@@ -79,7 +81,7 @@ pub struct ConfigFields {
 impl ConfigFields {
     fn standard() -> Self {
         Self {
-            visual_delay_ms: "live",
+            sync_offset_ms: "live",
             multicast_enabled: "live",
             destinations: "live",
             airplay_name: "restart",
@@ -171,9 +173,9 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             return Err("airplay_name must be 1–64 characters".into());
         }
     }
-    if let Some(ms) = patch.visual_delay_ms {
-        if !(-5_000..=5_000).contains(&ms) {
-            return Err("visual_delay_ms must be between -5000 and 5000".into());
+    if let Some(ms) = patch.sync_offset_ms {
+        if !(0..=5_000).contains(&ms) {
+            return Err("sync_offset_ms must be between 0 and 5000".into());
         }
     }
     if let Some(off) = patch.shairport_latency_offset_s {
@@ -214,8 +216,8 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
     if let Some(name) = patch.airplay_name {
         cfg.airplay.name = name.trim().to_string();
     }
-    if let Some(ms) = patch.visual_delay_ms {
-        apply_visual_delay(cfg, ms);
+    if let Some(ms) = patch.sync_offset_ms {
+        cfg.audio.sync_offset_ms = ms;
     }
     if let Some(off) = patch.shairport_latency_offset_s {
         cfg.audio.shairport_latency_offset_s = off;
@@ -261,30 +263,18 @@ fn validate_iface(name: &Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// Map the unified operator delay onto live send offset and/or Shairport offset.
-/// Extra lateness is applied immediately (`sync_offset_ms`). Going earlier than
-/// the current Shairport compensation requires a restart.
-fn apply_visual_delay(cfg: &mut Config, ms: i32) {
-    let shairport_ms = (cfg.audio.shairport_latency_offset_s * 1000.0).round() as i32;
-    let live = ms - shairport_ms;
-    if live >= 0 {
-        cfg.audio.sync_offset_ms = live;
-    } else {
-        cfg.audio.sync_offset_ms = 0;
-        cfg.audio.shairport_latency_offset_s = f64::from(ms) / 1000.0;
-    }
-}
-
-fn visual_delay_ms(cfg: &Config) -> i32 {
-    cfg.audio.sync_offset_ms + (cfg.audio.shairport_latency_offset_s * 1000.0).round() as i32
+/// Presentation-aligned send delay for the current Shairport lead (`|offset|` in ms).
+pub fn on_time_send_delay_ms(shairport_s: f64) -> u32 {
+    (-shairport_s * 1000.0).round().max(0.0) as u32
 }
 
 fn values_from(cfg: &Config) -> ConfigValues {
-    let visual_delay_ms = visual_delay_ms(cfg);
+    let shairport = cfg.audio.shairport_latency_offset_s;
     ConfigValues {
         airplay_name: cfg.airplay.name.clone(),
-        visual_delay_ms,
-        shairport_latency_offset_s: cfg.audio.shairport_latency_offset_s,
+        sync_offset_ms: cfg.audio.sync_offset_ms,
+        shairport_latency_offset_s: shairport,
+        on_time_send_delay_ms: on_time_send_delay_ms(shairport),
         multicast_enabled: cfg.wled.multicast_enabled,
         multicast_address: cfg.wled.multicast_address.clone(),
         port: cfg.wled.port,
@@ -298,42 +288,51 @@ fn values_from(cfg: &Config) -> ConfigValues {
 
 #[cfg(test)]
 mod tests {
-    use super::apply_visual_delay;
     use crate::config::Config;
 
     #[test]
-    fn positive_delay_is_send_offset() {
+    fn on_time_send_delay_ms_matches_shairport_lead() {
+        assert_eq!(super::on_time_send_delay_ms(-1.2), 1200);
+        assert_eq!(super::on_time_send_delay_ms(-2.0), 2000);
+        assert_eq!(super::on_time_send_delay_ms(0.0), 0);
+        assert_eq!(super::on_time_send_delay_ms(0.5), 0);
+    }
+
+    #[test]
+    fn sync_and_shairport_patches_are_independent() {
         let mut cfg = Config::default();
-        apply_visual_delay(&mut cfg, 250);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                sync_offset_ms: Some(250),
+                shairport_latency_offset_s: Some(-1.2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(cfg.audio.sync_offset_ms, 250);
-        assert_eq!(cfg.audio.shairport_latency_offset_s, 0.0);
-    }
+        assert!((cfg.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
 
-    #[test]
-    fn negative_delay_sets_shairport_offset() {
-        let mut cfg = Config::default();
-        apply_visual_delay(&mut cfg, -1200);
-        assert_eq!(cfg.audio.sync_offset_ms, 0);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                sync_offset_ms: Some(80),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.sync_offset_ms, 80);
         assert!((cfg.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
     }
 
     #[test]
-    fn later_than_current_shairport_is_live_send_offset() {
+    fn values_from_includes_on_time_send_delay() {
         let mut cfg = Config::default();
+        cfg.audio.sync_offset_ms = 1200;
         cfg.audio.shairport_latency_offset_s = -1.2;
-        apply_visual_delay(&mut cfg, -1000);
-        assert_eq!(cfg.audio.sync_offset_ms, 200);
-        assert!((cfg.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
-        assert_eq!(super::visual_delay_ms(&cfg), -1000);
-    }
-
-    #[test]
-    fn earlier_than_current_shairport_updates_offset() {
-        let mut cfg = Config::default();
-        cfg.audio.shairport_latency_offset_s = -1.2;
-        apply_visual_delay(&mut cfg, -1400);
-        assert_eq!(cfg.audio.sync_offset_ms, 0);
-        assert!((cfg.audio.shairport_latency_offset_s - -1.4).abs() < 1e-9);
+        let values = super::values_from(&cfg);
+        assert_eq!(values.sync_offset_ms, 1200);
+        assert_eq!(values.on_time_send_delay_ms, 1200);
     }
 
     #[test]
@@ -426,11 +425,24 @@ mod tests {
     }
 
     #[test]
-    fn visual_delay_ms_roundtrip() {
+    fn rejects_sync_offset_out_of_range() {
         let mut cfg = Config::default();
-        cfg.audio.sync_offset_ms = 150;
-        cfg.audio.shairport_latency_offset_s = -0.5;
-        assert_eq!(super::visual_delay_ms(&cfg), 150 - 500);
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                sync_offset_ms: Some(5001),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                sync_offset_ms: Some(-1),
+                ..Default::default()
+            }
+        )
+        .is_err());
     }
 
     #[test]
@@ -513,7 +525,7 @@ mod tests {
         let view = control
             .apply_patch(super::ConfigPatch {
                 airplay_name: Some("Living Room".into()),
-                visual_delay_ms: Some(80),
+                sync_offset_ms: Some(80),
                 shairport_latency_offset_s: Some(-0.5),
                 multicast_enabled: Some(false),
                 multicast_address: Some("239.1.1.1".into()),
@@ -544,7 +556,7 @@ mod tests {
         assert!(super::apply_patch_to(
             &mut cfg,
             super::ConfigPatch {
-                visual_delay_ms: Some(5001),
+                sync_offset_ms: Some(5001),
                 ..Default::default()
             }
         )
@@ -552,7 +564,7 @@ mod tests {
         assert!(super::apply_patch_to(
             &mut cfg,
             super::ConfigPatch {
-                visual_delay_ms: Some(-5001),
+                sync_offset_ms: Some(-1),
                 ..Default::default()
             }
         )
@@ -590,7 +602,7 @@ mod tests {
         )));
         let view = control
             .apply_patch(super::ConfigPatch {
-                visual_delay_ms: Some(10),
+                sync_offset_ms: Some(10),
                 ..Default::default()
             })
             .unwrap();

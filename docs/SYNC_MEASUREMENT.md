@@ -1,8 +1,22 @@
 # AirPlay 2 synchronization measurement
 
-WLEDPlay transmits analysis as soon as Shairport writes PCM to stdout. In AirPlay 2 mode, Shairport + NQPTP delay that write to the shared presentation time, so the matrix should line up with HomePods / Apple TVs in the same group.
+WLEDPlay transmits analysis as soon as Shairport writes PCM to stdout, then optionally holds each UDP packet for `audio.sync_offset_ms` before send. In AirPlay 2 mode, Shairport + NQPTP target the shared presentation time; the Shairport lead sets how early stdout arrives.
 
 This measurement **requires a Linux (or FreeBSD) host**. Official AP2 + NQPTP cannot run on macOS (UDP 319/320).
+
+## Two knobs
+
+| Setting | yaml | UI | Apply |
+|---------|------|-----|-------|
+| **Shairport lead** | `audio.shairport_latency_offset_s` (e.g. `-1.2`) | Shairport lead (s) | Restart |
+| **Send delay** | `audio.sync_offset_ms` (unsigned ms) | Send delay (ms) | Live |
+
+Send delay semantics (for lead `-1.2` → on-time = `1200` ms):
+
+- `0` — AFAP after decode (up to 1.2 s early vs presentation)
+- `1200` — on time (matches presentation)
+- `< 1200` — compensate downstream latency (send early)
+- `> 1200` — hold past presentation (LEDs late vs heard audio)
 
 ## Procedure
 
@@ -11,17 +25,19 @@ This measurement **requires a Linux (or FreeBSD) host**. Official AP2 + NQPTP ca
 3. In Control Center, start a group that includes **WLEDPlay** and a known-good speaker.
 4. Play a track with sharp transients (metronome, clap, kick).
 5. Watch WLED (PS GEQ 2D) vs the speaker.
-6. If the matrix is **late** (behind the speakers), make `audio_backend_latency_offset_in_seconds` more negative (or set `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET`). That writes PCM earlier.
-7. If the matrix is **early**, move that offset back toward `0`. Do not raise `audio.sync_offset_ms` to fix a late matrix — that value only adds more delay.
+6. If the matrix is **late** (behind the speakers), make `shairport_latency_offset_s` more negative (restart). That writes PCM earlier and increases the hold margin.
+7. If the matrix is **early**, move Shairport lead back toward `0` (restart), or raise `sync_offset_ms` in small steps (live, no restart).
+8. Do **not** use large `sync_offset_ms` values to fix a matrix that is still late at send delay `0` — that means you need more Shairport lead, not more hold.
 
-Record the chosen offset once it looks right.
+Record both values once alignment looks right.
 
 ## Defaults
 
 | Knob | Default | Meaning |
 |------|---------|---------|
-| `audio.sync_offset_ms` | `0` | Extra delay inside WLEDPlay before each UDP packet (late-only) |
-| `audio_backend_latency_offset_in_seconds` (AP2) | `-1.2` | Shairport write vs presentation time (more negative = earlier visuals) |
+| `audio.sync_offset_ms` | `1200` | On-time send delay for the default `-1.2` s Shairport lead |
+| `audio.shairport_latency_offset_s` | `-1.2` | Shairport stdout ~1.2 s early vs presentation (restart) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | unset | Docker override for the Shairport offset, seconds |
+| `WLEDPLAY_SYNC_OFFSET_MS` | unset | Live send delay override (negative env values clamp to `0`) |
 
-AirPlay 2 stdout often lands ~1–1.5 s late versus grouped speakers on first connect. Start at `-1.2` and trim by ~0.1 s.
+AirPlay 2 stdout often lands ~1–1.5 s late versus grouped speakers on first connect if Shairport lead is `0`. Start Shairport lead at `-1.2` and trim by ~0.1 s; fine-tune with send delay in tens of ms while streaming.

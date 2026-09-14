@@ -145,7 +145,7 @@ Shairport Sync tracks playout timing for synchronized AirPlay 2 output via NQPTP
 
 - PCM is written when decoded for playout
 - `audio_backend_latency_offset_in_seconds` adjusts backend timing (negative = earlier PCM)
-- WLEDPlay exposes a unified **visual delay** control that maps to live send offset and/or Shairport offset
+- WLEDPlay exposes **Shairport lead** (restart) and **send delay** (live) as separate yaml/UI controls
 
 Distinguish:
 
@@ -153,7 +153,7 @@ Distinguish:
 audio received → decoded → analyzed → (AirPlay 2 presentation time on grouped speakers)
 ```
 
-Default Shairport offset in Docker is `-1.2` seconds. Tune in ~0.1 s steps after grouping with a reference speaker ([`SYNC_MEASUREMENT.md`](SYNC_MEASUREMENT.md)). WLEDPlay drops stdin backlog older than ~80 ms so a pause does not keep draining seconds of queued audio.
+Default Shairport lead in Docker is `-1.2` seconds with send delay `1200` ms (on time). Tune Shairport lead in ~0.1 s steps after grouping with a reference speaker ([`SYNC_MEASUREMENT.md`](SYNC_MEASUREMENT.md)); trim send delay live in tens of ms. WLEDPlay drops stdin backlog older than ~80 ms so a pause does not keep draining seconds of queued audio.
 
 ---
 

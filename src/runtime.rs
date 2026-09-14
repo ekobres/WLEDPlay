@@ -18,7 +18,7 @@ pub const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 pub const STDIN_KEEP_MS: u64 = 80;
 /// Count an underrun only after PCM has been silent this long.
 pub const PCM_UNDERRUN_AFTER: Duration = Duration::from_millis(80);
-/// Max queued Audio Sync packets for live visual delay (5s at 50 Hz, plus slack).
+/// Max queued Audio Sync packets for live send delay (5s at 50 Hz, plus slack).
 pub const DELAY_QUEUE_MAX: usize = 300;
 
 pub struct PcmRuntime {

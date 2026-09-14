@@ -164,8 +164,11 @@
     </div>
     <div class="card controls" style="margin-top:12px">
       <div class="label">Operator controls</div>
-      <label for="ctl-delay">Visual delay (ms) — live; negative pulls PCM earlier (restart)</label>
-      <input id="ctl-delay" type="number" step="50" min="-5000" max="5000">
+      <label for="ctl-shairport">Shairport lead (s) — restart; negative = PCM early (e.g. −1.2)</label>
+      <input id="ctl-shairport" type="number" step="0.1" min="-5" max="2">
+      <label for="ctl-delay">Send delay (ms) — live; hold after decode before UDP</label>
+      <input id="ctl-delay" type="number" step="10" min="0" max="5000">
+      <div class="hint" id="ctl-delay-hint"></div>
       <label for="ctl-name">AirPlay name — restart to re-advertise</label>
       <input id="ctl-name" type="text" maxlength="64">
       <label for="ctl-http">HTTP (management) — restart</label>
@@ -298,9 +301,20 @@
     }
 
     const FIELD_IDS = [
-      "ctl-delay", "ctl-name", "ctl-http", "ctl-airplay",
+      "ctl-shairport", "ctl-delay", "ctl-name", "ctl-http", "ctl-airplay",
       "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest"
     ];
+
+    function onTimeMs(shairportS) {
+      return Math.max(0, Math.round(-Number(shairportS) * 1000));
+    }
+
+    function updateSendDelayHint(v) {
+      const onTime = v.on_time_send_delay_ms ?? onTimeMs(v.shairport_latency_offset_s ?? 0);
+      $("ctl-delay-hint").textContent =
+        "0 = as soon as PCM arrives (up to Shairport lead early); "
+        + onTime + " ms = on time; higher = later LEDs";
+    }
 
     function destLines() {
       return $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
@@ -308,7 +322,8 @@
 
     function formSnapshot() {
       return {
-        visual_delay_ms: Number($("ctl-delay").value),
+        sync_offset_ms: Number($("ctl-delay").value),
+        shairport_latency_offset_s: Number($("ctl-shairport").value),
         airplay_name: $("ctl-name").value.trim(),
         http_interface: $("ctl-http").value,
         airplay_interface: $("ctl-airplay").value,
@@ -322,7 +337,8 @@
     function savedSnapshot() {
       const v = lastConfig.values || {};
       return {
-        visual_delay_ms: Number(v.visual_delay_ms ?? 0),
+        sync_offset_ms: Number(v.sync_offset_ms ?? 0),
+        shairport_latency_offset_s: Number(v.shairport_latency_offset_s ?? 0),
         airplay_name: (v.airplay_name || "").trim(),
         http_interface: v.http_interface || "",
         airplay_interface: v.airplay_interface || "",
@@ -359,7 +375,8 @@
       const cfg = lastConfig;
       const v = cfg.values || {};
       if (force || !dirty) {
-        $("ctl-delay").value = v.visual_delay_ms ?? 0;
+        $("ctl-shairport").value = v.shairport_latency_offset_s ?? 0;
+        $("ctl-delay").value = v.sync_offset_ms ?? 0;
         $("ctl-name").value = v.airplay_name || "";
         $("ctl-dest").value = (v.destinations || []).join("\n");
         $("ctl-mcast").checked = !!v.multicast_enabled;
@@ -367,11 +384,16 @@
         fillIfaceSelect("ctl-airplay", v.airplay_interface || "", cfg.interfaces);
         fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
         fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
+        updateSendDelayHint(v);
       } else {
         fillIfaceSelect("ctl-http", $("ctl-http").value, cfg.interfaces);
         fillIfaceSelect("ctl-airplay", $("ctl-airplay").value, cfg.interfaces);
         fillIfaceSelect("ctl-unicast", $("ctl-unicast").value, cfg.interfaces);
         fillIfaceSelect("ctl-multicast", $("ctl-multicast").value, cfg.interfaces);
+        updateSendDelayHint({
+          shairport_latency_offset_s: Number($("ctl-shairport").value),
+          on_time_send_delay_ms: onTimeMs($("ctl-shairport").value)
+        });
       }
       paintHint(cfg);
       syncActionButtons();
@@ -409,6 +431,11 @@
         || now.multicast_interface !== (prev.multicast_interface || "");
     }
 
+    function shairportChanged(prev) {
+      return Number($("ctl-shairport").value)
+        !== Number(prev.shairport_latency_offset_s ?? 0);
+    }
+
     FIELD_IDS.forEach((id) => {
       $(id).addEventListener("input", () => { paintHint(lastConfig); syncActionButtons(); });
       $(id).addEventListener("change", () => { paintHint(lastConfig); syncActionButtons(); });
@@ -423,6 +450,11 @@
       if (Object.prototype.hasOwnProperty.call(prev, "airplay_name")
           && ((body.airplay_name && body.airplay_name !== prev.airplay_name) || nicsChanged(prev))) {
         if (!confirm("Name or interface changes need a restart and may drop AirPlay. Save anyway?")) {
+          return;
+        }
+      }
+      if (shairportChanged(prev)) {
+        if (!confirm("Shairport lead changes need a restart and may drop AirPlay. Save anyway?")) {
           return;
         }
       }

@@ -1,8 +1,8 @@
 mod operator;
 
 pub use operator::{
-    action_buttons_enabled, dest_lines, operator_hint, operator_ui, parse_delay_ms,
-    should_overwrite_fields, OperatorSnapshot,
+    action_buttons_enabled, dest_lines, operator_hint, operator_ui, parse_send_delay_ms,
+    parse_shairport_s, should_overwrite_fields, OperatorSnapshot,
 };
 
 use crate::control::{ConfigPatch, Control};
@@ -452,7 +452,7 @@ mod tests {
                 .method("PATCH")
                 .uri("/config")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"visual_delay_ms":100}"#))
+                .body(Body::from(r#"{"sync_offset_ms":100}"#))
                 .unwrap(),
         )
         .await;
