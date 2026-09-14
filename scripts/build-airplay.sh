@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+"$ROOT/scripts/ensure-config.sh"
 PREFIX="${WLEDPLAY_PREFIX:-$ROOT/vendor}"
 SHAIRPORT_VERSION="${SHAIRPORT_VERSION:-5.5.1}"
 NQPTP_VERSION="${NQPTP_VERSION:-1.2.8}"

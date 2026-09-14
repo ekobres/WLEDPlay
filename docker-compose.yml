@@ -6,7 +6,9 @@ services:
     network_mode: host
     restart: unless-stopped
     volumes:
-      - ./config/config.yaml:/etc/wledplay/config.yaml
+      # Local yaml/conf are gitignored. ./scripts/ensure-config.sh copies examples
+      # if missing. Entrypoint prefers local files, then examples, then image defaults.
+      - ./config:/host-config
     environment:
       WLEDPLAY_AIRPLAY_NAME: "${WLEDPLAY_AIRPLAY_NAME:-}"
       WLEDPLAY_MULTICAST_ADDRESS: "${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"

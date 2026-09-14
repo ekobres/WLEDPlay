@@ -13,6 +13,7 @@ cargo build --release
 python3 scripts/gen_test_pcm.py -o /tmp/test.pcm
 
 # Set WLED Audio Reactive → Sync Mode = Receive, port 11988
+./scripts/ensure-config.sh
 cat /tmp/test.pcm | ./target/release/wledplay --config config/config.yaml --input stdin
 ```
 
@@ -32,6 +33,7 @@ On a Linux host:
 Or Docker with host networking:
 
 ```bash
+./scripts/ensure-config.sh
 WLEDPLAY_DESTINATION=10.11.1.124 \
 WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
 WLEDPLAY_UNICAST_INTERFACE=eth2 \
@@ -49,7 +51,15 @@ Use `--no-realtime` whenever Shairport (or any live source) already emits PCM in
 
 ## Configuration
 
-See [`config/config.yaml`](config/config.yaml). Environment overrides:
+Copy the examples to gitignored local files and edit. Pulls update the examples only; they never overwrite local destinations, NIC pins, delay, or Shairport buffers.
+
+```bash
+./scripts/ensure-config.sh
+```
+
+That copies [`config/config-example.yaml`](config/config-example.yaml) → `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) → `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, interface, Shairport lead, and the metadata pipe are still patched at start from yaml/env.
+
+Environment overrides:
 
 | Variable | Purpose |
 |----------|---------|
@@ -86,6 +96,7 @@ See [`config/config.yaml`](config/config.yaml). Environment overrides:
 Requires **host networking** (mDNS, multicast, AirPlay 2 PTP). This does not work as a LAN AirPlay receiver on Docker Desktop for Mac.
 
 ```bash
+./scripts/ensure-config.sh
 WLEDPLAY_DESTINATION=10.11.1.124 \
 WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
 WLEDPLAY_UNICAST_INTERFACE=eth2 \

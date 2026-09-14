@@ -58,8 +58,8 @@ COPY --from=shairport-build /usr/local/bin/shairport-sync /usr/local/bin/
 COPY --from=nqptp-build /usr/local/bin/nqptp /usr/local/bin/
 COPY --from=wledplay-build /src/target/release/wledplay /wledplay
 
-COPY config/config.yaml /etc/wledplay/config.yaml
-COPY docker/shairport-sync.conf /etc/shairport-sync.conf
+COPY config/config-example.yaml /etc/wledplay/config.yaml
+COPY config/shairport-sync-example.conf /etc/shairport-sync.conf
 COPY docker/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/NOTICE /NOTICE

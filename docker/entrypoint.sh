@@ -1,7 +1,17 @@
 #!/bin/sh
 set -eu
 
+HOST_CFG="/host-config"
 CFG_YAML="/etc/wledplay/config.yaml"
+if [ -f "$HOST_CFG/config.yaml" ]; then
+  CFG_YAML="$HOST_CFG/config.yaml"
+fi
+SHAIRPORT_SRC="/etc/shairport-sync.conf"
+if [ -f "$HOST_CFG/shairport-sync.conf" ]; then
+  SHAIRPORT_SRC="$HOST_CFG/shairport-sync.conf"
+elif [ -f "$HOST_CFG/shairport-sync-example.conf" ]; then
+  SHAIRPORT_SRC="$HOST_CFG/shairport-sync-example.conf"
+fi
 yaml_scalar() {
   key=$1
   [ -f "$CFG_YAML" ] || return 0
@@ -118,7 +128,7 @@ echo "Starting nqptp..."
 nqptp &
 NQPTP_PID=$!
 
-sed "s/WLEDPlay/${WLEDPLAY_AIRPLAY_NAME}/g" /etc/shairport-sync.conf > /tmp/shairport-sync.conf
+sed "s/WLEDPlay/${WLEDPLAY_AIRPLAY_NAME}/g" "$SHAIRPORT_SRC" > /tmp/shairport-sync.conf
 if [ -n "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
   if grep -q 'interface =' /tmp/shairport-sync.conf; then
     sed -i "s|^[[:space:]]*//[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_AIRPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf
@@ -134,6 +144,7 @@ if [ -n "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   sed -i "s|^[[:space:]]*audio_backend_latency_offset_in_seconds = .*|  audio_backend_latency_offset_in_seconds = ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET};|" /tmp/shairport-sync.conf
   echo "Shairport latency offset: ${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET}s"
 fi
+sed -i "s|^[[:space:]]*pipe_name = .*|  pipe_name = \"${META_FIFO}\";|" /tmp/shairport-sync.conf
 
 rm -f "$PCM_FIFO" "$META_FIFO"
 mkfifo "$PCM_FIFO"
@@ -153,7 +164,7 @@ fi
 echo "Starting wledplay..."
 # shellcheck disable=SC2086
 /wledplay \
-  --config /etc/wledplay/config.yaml \
+  --config "$CFG_YAML" \
   --input stdin \
   --no-realtime \
   --multicast "${WLEDPLAY_MULTICAST_ADDRESS}" \

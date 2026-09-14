@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+"$ROOT/scripts/ensure-config.sh"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   cat <<'EOF'
@@ -35,7 +36,15 @@ fi
 
 WLEDPLAY_BIN="${WLEDPLAY_BIN:-$ROOT/target/release/wledplay}"
 CONFIG="${WLEDPLAY_CONFIG:-$ROOT/config/config.yaml}"
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Missing $CONFIG (copy config/config-example.yaml)."
+  exit 1
+fi
 SHAIRPORT_CONF="${SHAIRPORT_CONF:-$ROOT/config/shairport-sync.conf}"
+if [[ ! -f "$SHAIRPORT_CONF" ]]; then
+  echo "Missing $SHAIRPORT_CONF (copy config/shairport-sync-example.conf)."
+  exit 1
+fi
 AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-WLEDPlay}"
 
 if [[ ! -x "$WLEDPLAY_BIN" ]]; then
@@ -73,19 +82,31 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sed "s/name = \"WLEDPlay\"/name = \"${AIRPLAY_NAME}\"/" "$SHAIRPORT_CONF" > "$TMP_CONF"
-if [[ -n "${WLEDPLAY_AIRPLAY_INTERFACE:-}" ]]; then
-  python3 - "$TMP_CONF" "$WLEDPLAY_AIRPLAY_INTERFACE" <<'PY'
+OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
+if [[ -z "$OFFSET" ]]; then
+  OFFSET="$(sed -n 's/^[[:space:]]*shairport_latency_offset_s:[[:space:]]*//p' "$CONFIG" 2>/dev/null | head -1 | tr -d '[:space:]')"
+fi
+META_PIPE="${WLEDPLAY_METADATA_PIPE:-/tmp/wledplay.meta}"
+python3 - "$TMP_CONF" "${WLEDPLAY_AIRPLAY_INTERFACE:-}" "$OFFSET" "$META_PIPE" <<'PY'
 import pathlib, re, sys
-p, iface = pathlib.Path(sys.argv[1]), sys.argv[2]
+p = pathlib.Path(sys.argv[1])
+iface, offset, pipe = sys.argv[2], sys.argv[3], sys.argv[4]
 text = p.read_text()
-if re.search(r"(?m)^[ \t]*//?[ \t]*interface\s*=", text) or re.search(r"(?m)^[ \t]*interface\s*=", text):
-    text = re.sub(r"(?m)^[ \t]*//[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
-    text = re.sub(r"(?m)^[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
-else:
-    text = text.replace("general = {", f'general = {{\n  interface = "{iface}";', 1)
+if iface:
+    if re.search(r"(?m)^[ \t]*//?[ \t]*interface\s*=", text) or re.search(r"(?m)^[ \t]*interface\s*=", text):
+        text = re.sub(r"(?m)^[ \t]*//[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+        text = re.sub(r"(?m)^[ \t]*interface\s*=.*$", f'  interface = "{iface}";', text)
+    else:
+        text = text.replace("general = {", f'general = {{\n  interface = "{iface}";', 1)
+if offset:
+    text = re.sub(
+        r"(?m)^[ \t]*audio_backend_latency_offset_in_seconds\s*=.*$",
+        f"  audio_backend_latency_offset_in_seconds = {offset};",
+        text,
+    )
+text = re.sub(r'(?m)^[ \t]*pipe_name\s*=.*$', f'  pipe_name = "{pipe}";', text)
 p.write_text(text)
 PY
-fi
 
 echo "Starting nqptp (${NQPTP_BIN})..."
 "$NQPTP_BIN" &
@@ -102,8 +123,10 @@ echo "PCM: 48000 Hz S16LE stereo (pinned). Group this destination with HomePods 
 if [[ -n "${WLEDPLAY_AIRPLAY_INTERFACE:-}" ]]; then
   echo "AirPlay/mDNS interface: ${WLEDPLAY_AIRPLAY_INTERFACE}"
 fi
+if [[ -n "$OFFSET" ]]; then
+  echo "Shairport latency offset: ${OFFSET}s"
+fi
 
-META_PIPE="${WLEDPLAY_METADATA_PIPE:-/tmp/wledplay.meta}"
 rm -f "$META_PIPE"
 mkfifo "$META_PIPE"
 echo "Metadata pipe: ${META_PIPE}"

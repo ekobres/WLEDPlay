@@ -31,7 +31,7 @@ Native Linux:
 ./scripts/run-airplay.sh
 ```
 
-Config: [`config/shairport-sync.conf`](../config/shairport-sync.conf) (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker uses [`docker/shairport-sync.conf`](../docker/shairport-sync.conf) with `network_mode: host`.
+Config: copy [`config/shairport-sync-example.conf`](../config/shairport-sync-example.conf) to gitignored `config/shairport-sync.conf` (`./scripts/ensure-config.sh`). Native Linux and Docker share that file (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker Compose mounts `./config` and falls back to the example if the local file is missing.
 
 ---
 
@@ -44,7 +44,7 @@ Build Shairport Sync with stdout backend:
 make
 ```
 
-Configuration (`/etc/shairport-sync.conf` or `docker/shairport-sync.conf`):
+Configuration (`config/shairport-sync.conf`, or `/etc/shairport-sync.conf` in the image):
 
 ```conf
 general = {
