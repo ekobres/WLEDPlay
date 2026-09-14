@@ -315,7 +315,7 @@ pub fn mark_stream_connected(rt: &mut PcmRuntime, status: &SharedStatus, now: In
     status.lock().unwrap().airplay.connected = true;
 }
 
-pub fn mark_stream_ended(rt: &mut PcmRuntime, status: &SharedStatus) {
+pub fn mark_stream_ended(rt: &mut PcmRuntime, status: &SharedStatus, keep_input_open: bool) {
     if rt.stream_active {
         tracing::info!("PCM stream ended");
         rt.stream_active = false;
@@ -323,7 +323,9 @@ pub fn mark_stream_ended(rt: &mut PcmRuntime, status: &SharedStatus) {
         rt.analyzer.set_stream_active(false);
         status.lock().unwrap().airplay.connected = false;
     }
-    rt.stdin_closed = true;
+    if !keep_input_open {
+        rt.stdin_closed = true;
+    }
 }
 
 pub fn http_listen(http_bind: Option<&crate::netif::InterfaceBind>, fallback: &str) -> String {
@@ -599,6 +601,16 @@ mod tests {
     }
 
     #[test]
+    fn mark_stream_end_keeps_stdin_open_for_persistent_input() {
+        let status = status();
+        let mut rt = PcmRuntime::new(AgcMode::Off);
+        mark_stream_connected(&mut rt, &status, Instant::now());
+        mark_stream_ended(&mut rt, &status, true);
+        assert!(!rt.stdin_closed);
+        assert!(!rt.stream_active);
+    }
+
+    #[test]
     fn mark_stream_helpers_are_idempotent() {
         let status = status();
         let mut rt = PcmRuntime::new(AgcMode::Off);
@@ -606,8 +618,8 @@ mod tests {
         mark_stream_connected(&mut rt, &status, now);
         mark_stream_connected(&mut rt, &status, now);
         assert_eq!(rt.connections, 1);
-        mark_stream_ended(&mut rt, &status);
-        mark_stream_ended(&mut rt, &status);
+        mark_stream_ended(&mut rt, &status, false);
+        mark_stream_ended(&mut rt, &status, false);
         assert!(rt.stdin_closed);
         assert!(!rt.stream_active);
     }

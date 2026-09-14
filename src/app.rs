@@ -425,7 +425,7 @@ pub fn read_pcm(
     pace_realtime: bool,
 ) {
     let bytes_per_second = pcm.rate as u64 * pcm.channels as u64 * pcm.bytes_per_sample() as u64;
-    let mut decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm);
+    let mut decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
     let mut read_buf = [0u8; 4096];
     let mut playback_clock = Instant::now();
     let mut bytes_played: u64 = 0;
@@ -446,7 +446,13 @@ pub fn read_pcm(
         match reader.read(&mut read_buf) {
             Ok(0) => {
                 let mut rt = runtime.lock().unwrap();
-                mark_stream_ended(&mut rt, &status);
+                mark_stream_ended(&mut rt, &status, discard_backlog_ok);
+                if discard_backlog_ok {
+                    decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
+                    playback_clock = Instant::now();
+                    bytes_played = 0;
+                    continue;
+                }
                 break;
             }
             Ok(n) => {
@@ -719,6 +725,55 @@ mod tests {
         log_startup(&cfg, false);
         cfg.wled.destinations = vec!["not-an-ip".into()];
         log_startup(&cfg, false);
+    }
+
+    #[test]
+    fn read_pcm_persistent_reopens_after_eof() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ReconnectOnce {
+            reads: AtomicUsize,
+            sample: [u8; 2],
+        }
+        impl io::Read for ReconnectOnce {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                match self.reads.fetch_add(1, Ordering::SeqCst) {
+                    0 => {
+                        buf[..2].copy_from_slice(&self.sample);
+                        Ok(2)
+                    }
+                    1 => Ok(0),
+                    2 => {
+                        buf[..2].copy_from_slice(&self.sample);
+                        Ok(2)
+                    }
+                    _ => Err(io::Error::new(io::ErrorKind::Interrupted, "done")),
+                }
+            }
+        }
+
+        let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
+        let status = status();
+        let pcm = PcmFormat {
+            rate: 22050,
+            channels: 1,
+            format: "s16le".into(),
+        };
+        read_pcm(
+            &mut ReconnectOnce {
+                reads: AtomicUsize::new(0),
+                sample: 1000i16.to_le_bytes(),
+            },
+            true,
+            &|| 0,
+            rt.clone(),
+            status,
+            pcm,
+            false,
+        );
+        let guard = rt.lock().unwrap();
+        assert_eq!(guard.connections, 2);
+        assert!(guard.stdin_closed);
     }
 
     #[test]
