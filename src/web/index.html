@@ -83,7 +83,13 @@
     .hint { color: var(--muted); font-size: 0.85rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     .check input { width: auto; }
-    .viz-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .viz-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .viz-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .viz-source {
+      width: auto; max-width: 220px; background: #0e1424; color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
+      font: inherit; font-size: 0.78rem;
+    }
     .switch {
       display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
       color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em;
@@ -153,11 +159,17 @@
     <div class="card" style="margin-top:12px">
       <div class="viz-head">
         <div class="label">16 FFT bands</div>
-        <label class="switch">
-          <span>Visualizer</span>
-          <input type="checkbox" id="viz-toggle" role="switch" checked aria-label="Live visualizer">
-          <span class="switch-track"></span>
-        </label>
+        <div class="viz-controls">
+          <select id="viz-source" aria-label="Spectrum source">
+            <option value="tx" selected>On LEDs (sent)</option>
+            <option value="rx">Received (early)</option>
+          </select>
+          <label class="switch">
+            <span>Visualizer</span>
+            <input type="checkbox" id="viz-toggle" role="switch" checked aria-label="Live visualizer">
+            <span class="switch-track"></span>
+          </label>
+        </div>
       </div>
       <div class="bands" id="bands"></div>
       <pre id="counters"></pre>
@@ -207,6 +219,20 @@
     function paintConn(live) {
       $("conn").textContent = live ? "live" : "idle";
       $("conn").className = "pill" + (live ? " live" : "");
+    }
+
+    function sourceMeters(s) {
+      if ($("viz-source").value === "rx") {
+        return s;
+      }
+      return {
+        connected: !!s.tx_connected,
+        rms: Number(s.tx_rms || 0),
+        peak: !!s.tx_peak,
+        dominant_frequency: Number(s.tx_dominant_frequency || 0),
+        bands: s.tx_bands || [],
+        update_hz: s.update_hz
+      };
     }
 
     function paintSpectrum(s) {
@@ -263,11 +289,18 @@
       return vizOn && !document.hidden;
     }
 
+    let lastLevels = null;
+
+    function paintFromLevels(s) {
+      lastLevels = s;
+      paintSpectrum(sourceMeters(s));
+    }
+
     async function levelsTick() {
       if (!levelsActive()) return;
       const started = performance.now();
       try {
-        paintSpectrum(await fetch("/levels").then((r) => r.json()));
+        paintFromLevels(await fetch("/levels").then((r) => r.json()));
       } catch { /* ignore */ }
       if (!levelsActive()) return;
       const period = 1000 / Math.max(1, updateHz);
@@ -477,6 +510,10 @@
     };
 
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
+    $("viz-source").addEventListener("change", () => {
+      if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
+      if (vizOn) startLevels();
+    });
 
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {

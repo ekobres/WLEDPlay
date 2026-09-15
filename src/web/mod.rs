@@ -55,6 +55,12 @@ pub struct AudioStatus {
     pub bands: [u8; 16],
     pub sync_offset_ms: i32,
     pub update_hz: u32,
+    /// Last UDP Audio Sync packet actually sent (after send delay).
+    pub tx_connected: bool,
+    pub tx_rms: f32,
+    pub tx_peak: bool,
+    pub tx_dominant_frequency: f32,
+    pub tx_bands: [u8; 16],
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -168,6 +174,11 @@ pub struct LiveLevels {
     pub dominant_frequency: f32,
     pub bands: [u8; 16],
     pub update_hz: u32,
+    pub tx_connected: bool,
+    pub tx_rms: f32,
+    pub tx_peak: bool,
+    pub tx_dominant_frequency: f32,
+    pub tx_bands: [u8; 16],
 }
 
 pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
@@ -178,6 +189,11 @@ pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
         dominant_frequency: status.audio.dominant_frequency,
         bands: status.audio.bands,
         update_hz: status.audio.update_hz,
+        tx_connected: status.audio.tx_connected,
+        tx_rms: status.audio.tx_rms,
+        tx_peak: status.audio.tx_peak,
+        tx_dominant_frequency: status.audio.tx_dominant_frequency,
+        tx_bands: status.audio.tx_bands,
     }
 }
 
@@ -321,6 +337,7 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(html.contains("WLEDPlay"));
         assert!(html.contains("id=\"viz-toggle\""));
+        assert!(html.contains("id=\"viz-source\""));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("function isDirty()"));
@@ -347,6 +364,11 @@ mod tests {
         state.status.lock().unwrap().audio.rms = 0.42;
         state.status.lock().unwrap().audio.bands[0] = 200;
         state.status.lock().unwrap().airplay.connected = true;
+        state.status.lock().unwrap().audio.tx_rms = 0.25;
+        state.status.lock().unwrap().audio.tx_peak = true;
+        state.status.lock().unwrap().audio.tx_dominant_frequency = 880.0;
+        state.status.lock().unwrap().audio.tx_bands[2] = 90;
+        state.status.lock().unwrap().audio.tx_connected = true;
         let (status, body) = send(
             router(state.clone()),
             Request::builder()
@@ -360,6 +382,11 @@ mod tests {
         assert!(levels.connected);
         assert!((levels.rms - 0.42).abs() < 1e-6);
         assert_eq!(levels.bands[0], 200);
+        assert!(levels.tx_connected);
+        assert!(levels.tx_peak);
+        assert!((levels.tx_rms - 0.25).abs() < 1e-6);
+        assert!((levels.tx_dominant_frequency - 880.0).abs() < 1e-6);
+        assert_eq!(levels.tx_bands[2], 90);
         assert!(!String::from_utf8_lossy(&body).contains("receiver_name"));
 
         let (status, body) = send(

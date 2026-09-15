@@ -167,6 +167,10 @@ mod tests {
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("function isDirty()"));
         assert!(!html.contains("Visualizer on"));
+        assert!(html.contains("id=\"viz-source\""));
+        assert!(html.contains("On LEDs (sent)"));
+        assert!(html.contains("Received (early)"));
+        assert!(html.contains("function sourceMeters"));
     }
 
     #[test]

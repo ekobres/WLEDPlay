@@ -2,7 +2,7 @@
 
 use crate::audio::Analyzer;
 use crate::config::{AgcMode, Config};
-use crate::web::SharedStatus;
+use crate::web::{AudioStatus, SharedStatus};
 use crate::wled::AudioSyncPacket;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -391,6 +391,18 @@ pub fn update_status(
         .stream_since
         .map(|t| now.saturating_duration_since(t).as_secs_f32())
         .unwrap_or(0.0);
+}
+
+pub fn apply_transmitted_packet(audio: &mut AudioStatus, pkt: &AudioSyncPacket) {
+    audio.tx_rms = (pkt.sample_smth / 255.0).clamp(0.0, 1.0);
+    audio.tx_peak = pkt.sample_peak != 0;
+    audio.tx_dominant_frequency = pkt.fft_major_peak;
+    audio.tx_bands = pkt.fft_result;
+    audio.tx_connected = pkt.sample_smth > 1.0 || pkt.fft_result.iter().any(|&b| b > 0);
+}
+
+pub fn record_transmitted(status: &SharedStatus, pkt: &AudioSyncPacket) {
+    apply_transmitted_packet(&mut status.lock().unwrap().audio, pkt);
 }
 
 pub fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config) {
@@ -832,6 +844,45 @@ mod tests {
         assert_eq!(s.counters.airplay_connections, 3);
         assert_eq!(s.wled.packets_per_second, 7.0);
         assert!(s.airplay.stream_duration_s >= 2.0);
+    }
+
+    #[test]
+    fn transmitted_meters_follow_last_udp_packet() {
+        let status = status();
+        record_transmitted(&status, &AudioSyncPacket::silence());
+        {
+            let a = &status.lock().unwrap().audio;
+            assert!(!a.tx_connected);
+            assert!(!a.tx_peak);
+            assert_eq!(a.tx_bands, [0; 16]);
+        }
+
+        let mut pkt = AudioSyncPacket::silence();
+        pkt.sample_smth = 128.0;
+        pkt.sample_peak = 1;
+        pkt.fft_major_peak = 440.0;
+        pkt.fft_result[3] = 200;
+        record_transmitted(&status, &pkt);
+        let a = status.lock().unwrap().audio.clone();
+        assert!(a.tx_connected);
+        assert!(a.tx_peak);
+        assert!((a.tx_rms - 128.0 / 255.0).abs() < 1e-6);
+        assert!((a.tx_dominant_frequency - 440.0).abs() < 1e-6);
+        assert_eq!(a.tx_bands[3], 200);
+
+        let mut smth_only = AudioSyncPacket::silence();
+        smth_only.sample_smth = 2.0;
+        apply_transmitted_packet(&mut status.lock().unwrap().audio, &smth_only);
+        assert!(status.lock().unwrap().audio.tx_connected);
+        assert!(!status.lock().unwrap().audio.tx_peak);
+
+        let mut bands_only = AudioSyncPacket::silence();
+        bands_only.fft_result[0] = 1;
+        apply_transmitted_packet(&mut status.lock().unwrap().audio, &bands_only);
+        assert!(status.lock().unwrap().audio.tx_connected);
+
+        apply_transmitted_packet(&mut status.lock().unwrap().audio, &AudioSyncPacket::silence());
+        assert!(!status.lock().unwrap().audio.tx_connected);
     }
 
     #[test]

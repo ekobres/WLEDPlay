@@ -5,9 +5,9 @@ use crate::netif::InterfaceBind;
 use crate::pcm::PcmDecoder;
 use crate::runtime::{
     self, event_loop_wait, http_listen, mark_stream_connected, mark_stream_ended, next_due_at,
-    open_pcm_input, path_is_fifo, pcm_file_pump, pop_due_packet, resolve_optional_nic, start_ms,
-    stdin_available_bytes, step_send_deadline, update_status, LoopAction, PcmRuntime,
-    PcmSessionGap, SendLoop,
+    open_pcm_input, path_is_fifo, pcm_file_pump, pop_due_packet, record_transmitted,
+    resolve_optional_nic, start_ms, stdin_available_bytes, step_send_deadline, update_status,
+    LoopAction, PcmRuntime, PcmSessionGap, SendLoop,
 };
 use crate::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use crate::wled::WledSender;
@@ -341,6 +341,7 @@ pub fn event_loop_tick(
         let mut snd = sender.lock().unwrap();
         while let Some(pkt) = pop_due_packet(&mut loop_state.delay_q, now) {
             let _ = snd.send(&pkt);
+            record_transmitted(status, &pkt);
             *packets_last_sec += 1;
         }
     }
@@ -1322,6 +1323,12 @@ mod tests {
             LoopAction::Continue
         );
         assert!(sender.lock().unwrap().packets_sent() >= 1);
+        assert!(!status.lock().unwrap().audio.tx_connected);
+
+        let mut live = crate::wled::AudioSyncPacket::silence();
+        live.sample_smth = 90.0;
+        live.fft_result[1] = 40;
+        crate::runtime::enqueue_packet(&mut loop_state.delay_q, live, 0, now);
 
         let mut last_send = now;
         let mut last_status = now;
@@ -1342,6 +1349,8 @@ mod tests {
             ),
             LoopAction::Continue
         );
+        assert!(status.lock().unwrap().audio.tx_connected);
+        assert_eq!(status.lock().unwrap().audio.tx_bands[1], 40);
 
         let mut last_send = now - Duration::from_millis(50);
         let mut last_status = now;
