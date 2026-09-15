@@ -4,9 +4,10 @@ use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceBind;
 use crate::pcm::PcmDecoder;
 use crate::runtime::{
-    self, drain_due_packets, http_listen, mark_stream_connected, mark_stream_ended,
-    resolve_optional_nic, start_ms, stdin_available_bytes, step_send_deadline, update_status,
-    LoopAction, PcmRuntime, SendLoop,
+    self, event_loop_wait, http_listen, mark_stream_connected, mark_stream_ended, next_due_at,
+    open_pcm_input, path_is_fifo, pcm_file_pump, pop_due_packet, resolve_optional_nic, start_ms,
+    stdin_available_bytes, step_send_deadline, update_status, LoopAction, PcmRuntime,
+    PcmSessionGap, SendLoop,
 };
 use crate::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use crate::wled::WledSender;
@@ -145,7 +146,10 @@ pub fn pcm_input_path(input: &str) -> Option<PathBuf> {
 }
 
 pub fn finite_pcm_input(path: Option<&PathBuf>, stdin_is_pipe: bool) -> bool {
-    path.is_some() || stdin_is_pipe
+    match path {
+        Some(p) => !path_is_fifo(p),
+        None => stdin_is_pipe,
+    }
 }
 
 pub fn instant_or_now(ts: Option<Instant>) -> Instant {
@@ -290,7 +294,14 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
         if action == LoopAction::Exit {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        let wait = event_loop_wait(
+            Instant::now(),
+            last_send,
+            last_status,
+            update_interval,
+            next_due_at(&loop_state.delay_q),
+        );
+        tokio::time::sleep(wait).await;
     }
 
     Ok(())
@@ -316,8 +327,9 @@ pub fn event_loop_tick(
     }
     if now.saturating_duration_since(*last_send) >= update_interval {
         let mut rt = runtime.lock().unwrap();
-        let live = live_cfg.lock().unwrap().clone();
+        let live = live_cfg.lock().unwrap();
         let action = loop_state.on_update(&mut rt, status, &live, finite_input, now);
+        drop(live);
         drop(rt);
         *last_send = step_send_deadline(*last_send, update_interval, now);
         if action == LoopAction::Exit {
@@ -325,9 +337,12 @@ pub fn event_loop_tick(
         }
     }
 
-    for pkt in drain_due_packets(&mut loop_state.delay_q, now) {
-        let _ = sender.lock().unwrap().send(&pkt);
-        *packets_last_sec += 1;
+    {
+        let mut snd = sender.lock().unwrap();
+        while let Some(pkt) = pop_due_packet(&mut loop_state.delay_q, now) {
+            let _ = snd.send(&pkt);
+            *packets_last_sec += 1;
+        }
     }
 
     if now.saturating_duration_since(*last_status) >= Duration::from_secs(1) {
@@ -390,15 +405,33 @@ pub fn spawn_pcm_reader(
         .name("pcm-input".into())
         .spawn(move || {
             if let Some(path) = input_path {
-                match File::open(&path) {
-                    Ok(mut file) => {
-                        read_pcm(&mut file, false, &|| 0, runtime, status, pcm, pace_realtime)
-                    }
-                    Err(e) => {
+                let fifo = path_is_fifo(&path);
+                let held = std::cell::RefCell::new(None);
+                let runtime_read = runtime.clone();
+                let status_read = status.clone();
+                let pcm_read = pcm.clone();
+                pcm_file_pump(
+                    &mut || {
+                        *held.borrow_mut() = Some(open_pcm_input(&path)?);
+                        Ok(())
+                    },
+                    &mut || {
+                        read_pcm(
+                            held.borrow_mut().as_mut().unwrap(),
+                            false,
+                            &|| 0,
+                            runtime_read.clone(),
+                            status_read.clone(),
+                            pcm_read.clone(),
+                            pace_realtime,
+                            fifo,
+                        )
+                    },
+                    &mut |e| {
                         tracing::error!("PCM input {}: {e}", path.display());
                         runtime.lock().unwrap().stdin_closed = true;
-                    }
-                }
+                    },
+                );
             } else {
                 let mut stdin = io::stdin();
                 read_pcm(
@@ -409,6 +442,7 @@ pub fn spawn_pcm_reader(
                     status,
                     pcm,
                     pace_realtime,
+                    false,
                 );
             }
         })
@@ -423,7 +457,9 @@ pub fn read_pcm(
     status: SharedStatus,
     pcm: PcmFormat,
     pace_realtime: bool,
-) {
+    reopenable: bool,
+) -> bool {
+    let persistent = discard_backlog_ok || reopenable;
     let bytes_per_second = pcm.rate as u64 * pcm.channels as u64 * pcm.bytes_per_sample() as u64;
     let mut decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
     let mut read_buf = [0u8; 4096];
@@ -446,15 +482,19 @@ pub fn read_pcm(
         match reader.read(&mut read_buf) {
             Ok(0) => {
                 let mut rt = runtime.lock().unwrap();
-                mark_stream_ended(&mut rt, &status, discard_backlog_ok);
+                mark_stream_ended(&mut rt, &status, persistent);
                 drop(rt);
-                if runtime::pcm_session_gap_wait(discard_backlog_ok, &mut |d| thread::sleep(d)) {
-                    decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
-                    playback_clock = Instant::now();
-                    bytes_played = 0;
-                    continue;
+                match runtime::pcm_session_gap(persistent, reopenable) {
+                    PcmSessionGap::Exit => return false,
+                    PcmSessionGap::Reopen => return true,
+                    PcmSessionGap::Wait(d) => {
+                        thread::sleep(d);
+                        decoder = PcmDecoder::new(pcm.rate, pcm.channels, pcm.clone());
+                        playback_clock = Instant::now();
+                        bytes_played = 0;
+                        continue;
+                    }
                 }
-                break;
             }
             Ok(n) => {
                 let now_ms = start_ms(origin, Instant::now());
@@ -490,7 +530,7 @@ pub fn read_pcm(
             Err(e) => {
                 tracing::error!("PCM read error: {e}");
                 runtime.lock().unwrap().stdin_closed = true;
-                break;
+                return false;
             }
         }
     }
@@ -692,6 +732,14 @@ mod tests {
         assert!(finite_pcm_input(Some(&PathBuf::from("/tmp/a.pcm")), false));
         assert!(finite_pcm_input(None, true));
         assert!(!finite_pcm_input(None, false));
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let fifo = dir.path().join("a.fifo");
+            let cstr = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(cstr.as_ptr(), 0o644) }, 0);
+            assert!(!finite_pcm_input(Some(&fifo), true));
+        }
         let now = Instant::now();
         assert_eq!(instant_or_now(Some(now)), now);
         let fallback = instant_or_now(None);
@@ -771,6 +819,7 @@ mod tests {
             status,
             pcm,
             false,
+            false,
         );
         let guard = rt.lock().unwrap();
         assert_eq!(guard.connections, 2);
@@ -798,10 +847,37 @@ mod tests {
             status,
             pcm,
             false,
+            false,
         );
         let guard = rt.lock().unwrap();
         assert!(guard.pcm_frames > 0);
         assert!(guard.stdin_closed);
+        assert!(!guard.stream_active);
+    }
+
+    #[test]
+    fn read_pcm_reopenable_fifo_returns_on_eof() {
+        let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
+        let status = status();
+        let pcm = PcmFormat {
+            rate: 22050,
+            channels: 1,
+            format: "s16le".into(),
+        };
+        let again = read_pcm(
+            &mut Cursor::new(1000i16.to_le_bytes().to_vec()),
+            false,
+            &|| 0,
+            rt.clone(),
+            status,
+            pcm,
+            false,
+            true,
+        );
+        assert!(again);
+        let guard = rt.lock().unwrap();
+        assert!(!guard.stdin_closed);
+        assert_eq!(guard.connections, 1);
         assert!(!guard.stream_active);
     }
 
@@ -840,6 +916,7 @@ mod tests {
             status.clone(),
             pcm.clone(),
             false,
+            false,
         );
         assert!(rt.lock().unwrap().analysis_overruns >= 1);
 
@@ -855,6 +932,7 @@ mod tests {
             status.clone(),
             PcmFormat::default(),
             false,
+            false,
         );
         assert!(rt.lock().unwrap().analysis_overruns >= 1);
 
@@ -865,7 +943,16 @@ mod tests {
             }
         }
         let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
-        read_pcm(&mut Boom, false, &|| 0, rt.clone(), status, pcm, false);
+        read_pcm(
+            &mut Boom,
+            false,
+            &|| 0,
+            rt.clone(),
+            status,
+            pcm,
+            false,
+            false,
+        );
         assert!(rt.lock().unwrap().stdin_closed);
     }
 
@@ -1006,7 +1093,16 @@ mod tests {
             bytes.extend_from_slice(&1i16.to_le_bytes());
         }
         let start = Instant::now();
-        read_pcm(&mut Cursor::new(bytes), false, &|| 0, rt, status, pcm, true);
+        read_pcm(
+            &mut Cursor::new(bytes),
+            false,
+            &|| 0,
+            rt,
+            status,
+            pcm,
+            true,
+            false,
+        );
         assert!(start.elapsed() >= Duration::from_millis(1));
     }
 
@@ -1028,6 +1124,7 @@ mod tests {
             status,
             pcm,
             true,
+            false,
         );
         assert!(rt.lock().unwrap().stdin_closed);
     }
@@ -1275,6 +1372,25 @@ mod tests {
         let status = status();
         spawn_pcm_reader(rt.clone(), status, PcmFormat::default(), false, None);
         thread::sleep(Duration::from_millis(20));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_pcm_reader_fifo_opens_without_busy_spin() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pcm.fifo");
+        let cstr = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cstr.as_ptr(), 0o644) }, 0);
+        let rt = Arc::new(Mutex::new(PcmRuntime::new(AgcMode::Off)));
+        spawn_pcm_reader(
+            rt.clone(),
+            status(),
+            PcmFormat::default(),
+            false,
+            Some(fifo),
+        );
+        thread::sleep(Duration::from_millis(20));
+        assert!(!rt.lock().unwrap().stdin_closed);
     }
 
     #[tokio::test]

@@ -165,7 +165,7 @@ echo "Starting wledplay..."
 # shellcheck disable=SC2086
 /wledplay \
   --config "$CFG_YAML" \
-  --input stdin \
+  --input "$PCM_FIFO" \
   --no-realtime \
   --multicast "${WLEDPLAY_MULTICAST_ADDRESS}" \
   --port "${WLEDPLAY_PORT}" \
@@ -173,8 +173,7 @@ echo "Starting wledplay..."
   --pcm-channels "${WLEDPLAY_PCM_CHANNELS}" \
   --pcm-format "${WLEDPLAY_PCM_FORMAT}" \
   $DEST_ARGS \
-  --metadata-pipe "$META_FIFO" \
-  < "$PCM_FIFO" &
+  --metadata-pipe "$META_FIFO" &
 WLEDPLAY_PID=$!
 
 echo "Starting shairport-sync -> FIFO -> wledplay..."

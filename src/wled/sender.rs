@@ -81,7 +81,8 @@ impl WledSender {
                 "multicast send failed",
             );
         }
-        for dest in &self.unicast_destinations.clone() {
+        for i in 0..self.unicast_destinations.len() {
+            let dest = self.unicast_destinations[i];
             record_send(
                 &mut self.packets_sent,
                 &mut self.udp_errors,
@@ -212,6 +213,21 @@ mod tests {
         sender.send(&AudioSyncPacket::silence()).unwrap();
         assert_eq!(sender.packets_sent(), 1);
         assert_eq!(sender.udp_errors(), 0);
+
+        let mut two = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec![
+                "127.0.0.1:9".parse().unwrap(),
+                "127.0.0.1:19".parse().unwrap(),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        two.set_multicast_enabled(false);
+        two.send(&AudioSyncPacket::silence()).unwrap();
+        assert_eq!(two.packets_sent(), 2);
     }
 
     #[test]

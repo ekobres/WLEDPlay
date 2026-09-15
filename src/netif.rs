@@ -286,7 +286,7 @@ mod tests {
             super::egress_ipv4_from(Ipv4Addr::new(10, 11, 1, 124), &addrs),
             Some(Ipv4Addr::new(10, 11, 1, 10))
         );
-        assert!(super::egress_ipv4_from(Ipv4Addr::new(192, 168, 1, 1), &[]).is_none());
+        assert!(super::egress_ipv4_from(Ipv4Addr::new(192, 168, 1, 1), &addrs).is_none());
 
         assert_eq!(
             super::resolve_from_listed("eth0", Ok(addrs.clone()))

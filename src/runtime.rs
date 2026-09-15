@@ -5,8 +5,13 @@ use crate::config::{AgcMode, Config};
 use crate::web::SharedStatus;
 use crate::wled::AudioSyncPacket;
 use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::path::Path;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 
 /// Silence packets sent after stream end before stopping UDP (SRS §34).
 pub const IDLE_GRACE_PACKETS: u64 = 10;
@@ -16,9 +21,14 @@ pub const PCM_IDLE_START: Duration = Duration::from_millis(2000);
 pub const PCM_IDLE_PLAY: Duration = Duration::from_millis(400);
 /// Keep at most this much unread stdin PCM when not realtime-pacing (AirPlay).
 pub const STDIN_KEEP_MS: u64 = 80;
-/// Poll interval while a persistent FIFO has no writer (AirPlay session gap).
+/// Poll interval while a persistent non-FIFO stdin has no writer (AirPlay session gap).
 /// Must not busy-spin: a pegged core lets the pipe fill and wrecks delay calibration.
+/// FIFO paths open RDWR so `read` blocks in the kernel instead.
 pub const PCM_FIFO_IDLE_POLL: Duration = Duration::from_millis(20);
+/// `/status` refresh cadence used to schedule the event loop.
+pub const STATUS_INTERVAL: Duration = Duration::from_secs(1);
+/// Cap idle sleeps so `POST /restart` is noticed without a 500 Hz poll.
+pub const EVENT_LOOP_WAKE_CAP: Duration = Duration::from_millis(50);
 /// Count an underrun only after PCM has been silent this long.
 pub const PCM_UNDERRUN_AFTER: Duration = Duration::from_millis(80);
 /// Max queued Audio Sync packets for live send delay (5s at 50 Hz, plus slack).
@@ -84,13 +94,66 @@ pub fn enqueue_packet(
     }
 }
 
-/// After PCM EOF on a FIFO/stdin, wait for the next AirPlay writer instead of spinning.
-pub fn pcm_session_gap_wait(persistent: bool, sleeper: &mut dyn FnMut(Duration)) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcmSessionGap {
+    Exit,
+    Reopen,
+    Wait(Duration),
+}
+
+/// After PCM EOF, either exit, reopen a FIFO (kernel-block on `open`/`read`), or poll stdin.
+pub fn pcm_session_gap(persistent: bool, reopenable: bool) -> PcmSessionGap {
     if !persistent {
-        return false;
+        PcmSessionGap::Exit
+    } else if reopenable {
+        PcmSessionGap::Reopen
+    } else {
+        PcmSessionGap::Wait(PCM_FIFO_IDLE_POLL)
     }
-    sleeper(PCM_FIFO_IDLE_POLL);
-    true
+}
+
+/// Drive a file/FIFO PCM source: reopen while `read` returns true (EOF on a FIFO).
+pub fn pcm_file_pump(
+    open: &mut dyn FnMut() -> std::io::Result<()>,
+    read: &mut dyn FnMut() -> bool,
+    on_open_err: &mut dyn FnMut(std::io::Error),
+) {
+    loop {
+        match open() {
+            Ok(()) => {
+                if !read() {
+                    return;
+                }
+            }
+            Err(e) => {
+                on_open_err(e);
+                return;
+            }
+        }
+    }
+}
+
+pub fn path_is_fifo(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        std::fs::metadata(path)
+            .map(|m| m.file_type().is_fifo())
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Open a PCM file, or a FIFO as RDWR so an empty pipe blocks in the kernel instead of EOF.
+pub fn open_pcm_input(path: &Path) -> std::io::Result<File> {
+    if path_is_fifo(path) {
+        OpenOptions::new().read(true).write(true).open(path)
+    } else {
+        File::open(path)
+    }
 }
 
 pub fn stdin_keep_bytes(bytes_per_second: u64) -> u64 {
@@ -149,15 +212,46 @@ pub fn step_send_deadline(last_send: Instant, interval: Duration, now: Instant) 
     }
 }
 
-pub fn drain_due_packets(
+pub fn pop_due_packet(
     queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
     now: Instant,
-) -> Vec<AudioSyncPacket> {
-    let mut due = Vec::new();
-    while queue.front().map(|(t, _)| now >= *t).unwrap_or(false) {
-        due.push(queue.pop_front().unwrap().1);
+) -> Option<AudioSyncPacket> {
+    if queue.front().map(|(t, _)| now >= *t).unwrap_or(false) {
+        Some(queue.pop_front().unwrap().1)
+    } else {
+        None
     }
-    due
+}
+
+pub fn next_due_at(queue: &VecDeque<(Instant, AudioSyncPacket)>) -> Option<Instant> {
+    queue.front().map(|(t, _)| *t)
+}
+
+/// Sleep until the next send tick, delayed packet, or status refresh (capped for restart).
+pub fn event_loop_wait(
+    now: Instant,
+    last_send: Instant,
+    last_status: Instant,
+    update_interval: Duration,
+    next_due: Option<Instant>,
+) -> Duration {
+    let next_send = if last_send > now {
+        last_send
+    } else {
+        last_send + update_interval
+    };
+    let next_status = last_status + STATUS_INTERVAL;
+    let mut wake = next_send.min(next_status);
+    if let Some(due) = next_due {
+        if due < wake {
+            wake = due;
+        }
+    }
+    let cap = now + EVENT_LOOP_WAKE_CAP;
+    if wake > cap {
+        wake = cap;
+    }
+    wake.saturating_duration_since(now)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,6 +472,7 @@ mod tests {
     use crate::web::{AirplayStatus, RuntimeStatus};
     use crate::wled::AudioSyncPacket;
     use std::io::Cursor;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -415,15 +510,75 @@ mod tests {
     }
 
     #[test]
-    fn pcm_session_gap_wait_sleeps_only_when_persistent() {
-        let mut calls = 0u8;
-        let mut sleeper = |d: Duration| {
-            calls += 1;
-            assert_eq!(d, PCM_FIFO_IDLE_POLL);
-        };
-        assert!(!pcm_session_gap_wait(false, &mut sleeper));
-        assert!(pcm_session_gap_wait(true, &mut sleeper));
-        assert_eq!(calls, 1);
+    fn pcm_session_gap_exit_wait_or_reopen() {
+        assert_eq!(pcm_session_gap(false, false), PcmSessionGap::Exit);
+        assert_eq!(pcm_session_gap(false, true), PcmSessionGap::Exit);
+        assert_eq!(
+            pcm_session_gap(true, false),
+            PcmSessionGap::Wait(PCM_FIFO_IDLE_POLL)
+        );
+        assert_eq!(pcm_session_gap(true, true), PcmSessionGap::Reopen);
+    }
+
+    #[test]
+    fn pcm_file_pump_reopens_then_stops() {
+        let mut opens = 0u8;
+        let mut reads = 0u8;
+        let mut errs = 0u8;
+        pcm_file_pump(
+            &mut || {
+                opens += 1;
+                if opens <= 2 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("gone"))
+                }
+            },
+            &mut || {
+                reads += 1;
+                true
+            },
+            &mut |_| {
+                errs += 1;
+            },
+        );
+        assert_eq!(opens, 3);
+        assert_eq!(reads, 2);
+        assert_eq!(errs, 1);
+
+        let mut opens = 0u8;
+        pcm_file_pump(
+            &mut || {
+                opens += 1;
+                Err(std::io::Error::other("missing"))
+            },
+            &mut || true,
+            &mut |_| {},
+        );
+        assert_eq!(opens, 1);
+    }
+
+    #[test]
+    fn path_is_fifo_false_for_missing_and_regular_files() {
+        assert!(!path_is_fifo(Path::new("/no/such/wledplay.pcm")));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.pcm");
+        std::fs::write(&file, [0u8; 4]).unwrap();
+        assert!(!path_is_fifo(&file));
+        assert!(open_pcm_input(&file).is_ok());
+        assert!(open_pcm_input(Path::new("/no/such/wledplay.pcm")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_pcm_fifo_uses_rdwr() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("audio.fifo");
+        let cstr = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cstr.as_ptr(), 0o644) }, 0);
+        assert!(path_is_fifo(&fifo));
+        let f = open_pcm_input(&fifo).unwrap();
+        drop(f);
     }
 
     #[test]
@@ -494,16 +649,61 @@ mod tests {
     }
 
     #[test]
-    fn drain_due_packets_respects_time() {
+    fn pop_due_packet_respects_time() {
         let mut q = VecDeque::new();
         let now = Instant::now();
         enqueue_packet(&mut q, AudioSyncPacket::silence(), 5_000, now);
-        assert!(drain_due_packets(&mut q, now).is_empty());
-        assert_eq!(
-            drain_due_packets(&mut q, now + Duration::from_secs(6)).len(),
-            1
-        );
+        assert!(pop_due_packet(&mut q, now).is_none());
+        assert_eq!(next_due_at(&q), Some(now + Duration::from_millis(5_000)));
+        assert!(pop_due_packet(&mut q, now + Duration::from_secs(6)).is_some());
         assert!(q.is_empty());
+        assert!(next_due_at(&q).is_none());
+        assert!(pop_due_packet(&mut q, now).is_none());
+    }
+
+    #[test]
+    fn event_loop_wait_uses_soonest_deadline_and_cap() {
+        let now = Instant::now();
+        let interval = Duration::from_millis(20);
+        assert_eq!(event_loop_wait(now, now, now, interval, None), interval);
+        assert_eq!(
+            event_loop_wait(now, now + Duration::from_millis(15), now, interval, None),
+            Duration::from_millis(15)
+        );
+        assert_eq!(
+            event_loop_wait(
+                now,
+                now + Duration::from_millis(20),
+                now,
+                interval,
+                Some(now + Duration::from_millis(5))
+            ),
+            Duration::from_millis(5)
+        );
+        assert_eq!(
+            event_loop_wait(now, now + Duration::from_secs(5), now, interval, None),
+            EVENT_LOOP_WAKE_CAP
+        );
+        assert_eq!(
+            event_loop_wait(
+                now,
+                now + Duration::from_secs(5),
+                now - STATUS_INTERVAL,
+                interval,
+                None
+            ),
+            Duration::ZERO
+        );
+        assert_eq!(
+            event_loop_wait(
+                now,
+                now,
+                now,
+                interval,
+                Some(now - Duration::from_millis(1))
+            ),
+            Duration::ZERO
+        );
     }
 
     #[test]
