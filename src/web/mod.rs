@@ -338,6 +338,8 @@ mod tests {
         assert!(html.contains("WLEDPlay"));
         assert!(html.contains("id=\"viz-toggle\""));
         assert!(html.contains("id=\"viz-source\""));
+        assert!(html.contains("id=\"viz-decay\""));
+        assert!(html.contains("id=\"beat\""));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("function isDirty()"));

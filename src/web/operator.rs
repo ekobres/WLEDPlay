@@ -171,6 +171,16 @@ mod tests {
         assert!(html.contains("On LEDs (sent)"));
         assert!(html.contains("Received (early)"));
         assert!(html.contains("function sourceMeters"));
+        assert!(html.contains("shownRms >= 0.95"));
+        assert!(!html.contains("s.peak ?"));
+        assert!(html.contains("id=\"viz-decay\""));
+        assert!(html.contains("id=\"beat\""));
+        assert!(html.contains("id=\"beatbar\""));
+        assert!(html.contains("function fallToward"));
+        let bands_at = html.find("id=\"bands\"").expect("bands");
+        let level_at = html.find("id=\"levelbar\"").expect("levelbar");
+        let stats_at = html.find("id=\"counters\"").expect("counters");
+        assert!(bands_at < level_at && level_at < stats_at);
     }
 
     #[test]

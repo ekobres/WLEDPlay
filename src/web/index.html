@@ -51,6 +51,23 @@
     .value.peak { color: var(--peak); }
     .meter { height: 10px; background: #0e1424; border-radius: 6px; overflow: hidden; margin-top: 8px; }
     .meter > span { display: block; height: 100%; width: 0; background: var(--bar); }
+    .viz-meters { margin-top: 12px; }
+    .viz-meter-head { display: flex; align-items: center; gap: 8px; }
+    .viz-meter-head .value { margin-top: 0; font-size: 0.95rem; }
+    .viz-volume { margin-top: 6px; height: 12px; }
+    .viz-volume.hot > span { background: var(--peak); }
+    .beat {
+      display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+      color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .beat-led {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+      background: #1d243c; border: 1px solid var(--line);
+    }
+    .beat-meter {
+      width: 56px; height: 8px; background: #0e1424; border-radius: 6px; overflow: hidden;
+    }
+    .beat-meter > span { display: block; height: 100%; width: 0; background: var(--peak); }
     .bands {
       display: grid;
       grid-template-columns: repeat(16, 1fr);
@@ -131,11 +148,6 @@
         </div>
       </div>
       <div class="card">
-        <div class="label">Level</div>
-        <div class="value" id="level">0%</div>
-        <div class="meter"><span id="levelbar"></span></div>
-      </div>
-      <div class="card">
         <div class="label">Dominant frequency</div>
         <div class="value" id="freq">—</div>
       </div>
@@ -165,6 +177,11 @@
             <option value="rx">Received (early)</option>
           </select>
           <label class="switch">
+            <span>Decay</span>
+            <input type="checkbox" id="viz-decay" role="switch" checked aria-label="Visualizer decay">
+            <span class="switch-track"></span>
+          </label>
+          <label class="switch">
             <span>Visualizer</span>
             <input type="checkbox" id="viz-toggle" role="switch" checked aria-label="Live visualizer">
             <span class="switch-track"></span>
@@ -172,6 +189,18 @@
         </div>
       </div>
       <div class="bands" id="bands"></div>
+      <div class="viz-meters">
+        <div class="viz-meter-head">
+          <span class="label">Level</span>
+          <span class="value" id="level">0%</span>
+          <span class="beat" id="beat" aria-label="Beat">
+            <span class="beat-led" id="beat-led"></span>
+            Beat
+            <span class="beat-meter"><span id="beatbar"></span></span>
+          </span>
+        </div>
+        <div class="meter viz-volume" id="levelmeter"><span id="levelbar"></span></div>
+      </div>
       <pre id="counters"></pre>
     </div>
     <div class="card controls" style="margin-top:12px">
@@ -215,6 +244,25 @@
     let vizOn = true;
     let levelsTimer = 0;
     let statusTimer = 0;
+    let lastPaintMs = 0;
+    let shownRms = 0;
+    let shownBeat = 0;
+    const shownBands = new Array(16).fill(0);
+    const VIZ_DECAY_TAU = 0.12;
+
+    function resetShown() {
+      lastPaintMs = 0;
+      shownRms = 0;
+      shownBeat = 0;
+      shownBands.fill(0);
+    }
+
+    function fallToward(current, target, dt) {
+      if (target >= current) return target;
+      if (dt <= 0) return current;
+      const a = Math.exp(-dt / VIZ_DECAY_TAU);
+      return target + (current - target) * a;
+    }
 
     function paintConn(live) {
       $("conn").textContent = live ? "live" : "idle";
@@ -227,9 +275,9 @@
       }
       return {
         connected: !!s.tx_connected,
-        rms: Number(s.tx_rms || 0),
+        rms: Number(s.tx_rms ?? 0),
         peak: !!s.tx_peak,
-        dominant_frequency: Number(s.tx_dominant_frequency || 0),
+        dominant_frequency: Number(s.tx_dominant_frequency ?? 0),
         bands: s.tx_bands || [],
         update_hz: s.update_hz
       };
@@ -237,14 +285,31 @@
 
     function paintSpectrum(s) {
       paintConn(!!s.connected);
-      const rms = Number(s.rms || 0);
-      $("level").textContent = Math.round(rms * 100) + "%" + (s.peak ? "  peak" : "");
-      $("level").className = "value" + (s.peak ? " peak" : "");
-      $("levelbar").style.width = Math.min(100, rms * 100) + "%";
+      const now = performance.now();
+      const dt = lastPaintMs ? Math.min(0.1, (now - lastPaintMs) / 1000) : 0;
+      lastPaintMs = now;
+      const decayOn = $("viz-decay").checked;
+      const rmsIn = Math.min(1, Math.max(0, Number(s.rms ?? 0)));
+      const beatIn = Number(!!s.peak);
+      shownRms = decayOn ? fallToward(shownRms, rmsIn, dt) : rmsIn;
+      shownBeat = decayOn ? fallToward(shownBeat, beatIn, dt) : beatIn;
+      const clipping = shownRms >= 0.95;
+      $("level").textContent = Math.round(shownRms * 100) + "%" + (clipping ? "  peak" : "");
+      $("level").className = "value" + (clipping ? " peak" : "");
+      $("levelbar").style.width = (shownRms * 100) + "%";
+      $("levelmeter").classList.toggle("hot", clipping);
+      $("beatbar").style.width = (shownBeat * 100) + "%";
+      $("beat-led").style.background = shownBeat > 0.08 ? "var(--peak)" : "#1d243c";
+      $("beat-led").style.borderColor = shownBeat > 0.08 ? "var(--peak)" : "var(--line)";
+      $("beat-led").style.boxShadow = shownBeat > 0.08
+        ? "0 0 " + (10 * shownBeat).toFixed(1) + "px var(--peak)" : "none";
+      $("beat-led").style.opacity = (0.35 + 0.65 * shownBeat).toFixed(3);
       const hz = Number(s.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1) + " Hz" : "—";
       (s.bands || []).forEach((v, i) => {
-        if (bars[i]) bars[i].style.height = Math.max(2, (v / 255) * 100) + "%";
+        const t = Math.max(0, Math.min(1, Number(v) / 255));
+        shownBands[i] = decayOn ? fallToward(shownBands[i], t, dt) : t;
+        if (bars[i]) bars[i].style.height = Math.max(2, shownBands[i] * 100) + "%";
       });
       if (s.update_hz > 0) updateHz = s.update_hz;
     }
@@ -308,6 +373,7 @@
     }
 
     function startLevels() {
+      lastPaintMs = 0;
       clearTimeout(levelsTimer);
       if (levelsActive()) levelsTick();
     }
@@ -510,7 +576,11 @@
     };
 
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
+    $("viz-decay").addEventListener("change", () => {
+      if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
+    });
     $("viz-source").addEventListener("change", () => {
+      resetShown();
       if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
       if (vizOn) startLevels();
     });
