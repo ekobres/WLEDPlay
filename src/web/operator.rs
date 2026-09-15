@@ -181,6 +181,10 @@ mod tests {
         assert!(html.contains("id=\"trackbar\""));
         assert!(html.contains("id=\"track-pos\""));
         assert!(html.contains("function formatClock"));
+        assert!(html.contains("function adoptTrackProgress"));
+        assert!(html.contains("function paintTrackProgress"));
+        assert!(html.contains("md.position_s == null"));
+        assert!(html.contains("padStart(2, \"0\")"));
         assert!(html.contains("padStart(3, \" \")"));
         assert!(html.contains("padStart(7, \" \")"));
         assert!(!html.contains("Dominant frequency"));

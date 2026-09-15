@@ -55,6 +55,7 @@
     .track-progress {
       display: grid;
       grid-template-columns: 5ch 1fr 5ch;
+      text-align: right;
       gap: 6px; align-items: center; margin-top: 4px;
       font-variant-numeric: tabular-nums;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -173,9 +174,9 @@
           <div class="label">Track</div>
           <div class="value" id="track">No metadata yet</div>
           <div class="track-progress">
-            <span id="track-pos">0:00</span>
+            <span id="track-pos">00:00</span>
             <div class="meter track-bar"><span id="trackbar"></span></div>
-            <span id="track-dur">0:00</span>
+            <span id="track-dur">00:00</span>
           </div>
         </div>
       </div>
@@ -303,7 +304,35 @@
       const t = Math.max(0, Math.floor(s));
       const m = Math.floor(t / 60);
       const sec = t % 60;
-      return m + ":" + String(sec).padStart(2, "0");
+      return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    }
+
+    let trackSnap = { pos: null, dur: null, at: 0 };
+
+    function adoptTrackProgress(md) {
+      if (md.position_s == null && md.duration_s == null && !md.title && !md.artist) {
+        trackSnap = { pos: null, dur: null, at: 0 };
+        return;
+      }
+      if (typeof md.duration_s === "number" && Number.isFinite(md.duration_s) && md.duration_s > 0) {
+        trackSnap.dur = md.duration_s;
+      }
+      if (typeof md.position_s === "number" && Number.isFinite(md.position_s) && md.position_s >= 0) {
+        trackSnap.pos = md.position_s;
+        trackSnap.at = performance.now();
+      }
+    }
+
+    function paintTrackProgress(live) {
+      const extra = (live && trackSnap.pos != null) ? (performance.now() - trackSnap.at) / 1000 : 0;
+      let pos = trackSnap.pos != null ? trackSnap.pos + extra : null;
+      const dur = trackSnap.dur;
+      if (pos != null && dur != null) pos = Math.min(pos, dur);
+      const haveDur = dur != null && dur > 0;
+      $("track-pos").textContent = pos != null ? formatClock(pos) : "00:00";
+      $("track-dur").textContent = haveDur ? formatClock(dur) : "00:00";
+      $("trackbar").style.width = haveDur && pos != null
+        ? Math.min(100, Math.max(0, pos / dur * 100)) + "%" : "0%";
     }
 
     function paintConn(live) {
@@ -363,14 +392,8 @@
       const md = s.metadata || {};
       const parts = [md.title, md.artist, md.album].filter(Boolean);
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
-      const pos = Number(md.position_s);
-      const dur = Number(md.duration_s);
-      const haveDur = Number.isFinite(dur) && dur > 0;
-      const havePos = Number.isFinite(pos) && pos >= 0;
-      $("track-pos").textContent = havePos ? formatClock(pos) : "0:00";
-      $("track-dur").textContent = haveDur ? formatClock(dur) : "0:00";
-      $("trackbar").style.width = haveDur && havePos
-        ? Math.min(100, Math.max(0, pos / dur * 100)) + "%" : "0%";
+      adoptTrackProgress(md);
+      paintTrackProgress(!!s.airplay.connected);
       const art = $("art");
       if (md.has_artwork) {
         const key = parts.join("|");
@@ -410,6 +433,7 @@
     function paintFromLevels(s) {
       lastLevels = s;
       paintSpectrum(sourceMeters(s));
+      paintTrackProgress(!!s.connected);
     }
 
     async function levelsTick() {

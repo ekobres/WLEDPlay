@@ -638,12 +638,9 @@ pub fn apply_metadata_line(
         }
     }
     let mut s = status.lock().unwrap();
-    s.metadata.artist = meta.artist.clone();
-    s.metadata.album = meta.album.clone();
-    s.metadata.title = meta.title.clone();
-    s.metadata.has_artwork = meta.has_artwork;
-    s.metadata.position_s = meta.position_s();
-    s.metadata.duration_s = meta.duration_s();
+    s.metadata.set_from_track(meta);
+    let playing = s.airplay.connected;
+    s.metadata.refresh_position(playing);
     s.airplay.source = meta.source.clone();
 }
 

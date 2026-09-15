@@ -6,7 +6,7 @@ pub use operator::{
 };
 
 use crate::control::{ConfigPatch, Control};
-use crate::metadata::SharedArtwork;
+use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceInfo;
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -79,6 +79,49 @@ pub struct TrackMetadataStatus {
     pub has_artwork: bool,
     pub position_s: Option<f32>,
     pub duration_s: Option<f32>,
+    #[serde(skip)]
+    pub position_base_s: Option<f32>,
+    #[serde(skip)]
+    pub progress_unix_ms: Option<u64>,
+}
+
+impl TrackMetadataStatus {
+    pub fn set_from_track(&mut self, meta: &TrackMetadata) {
+        self.artist = meta.artist.clone();
+        self.album = meta.album.clone();
+        self.title = meta.title.clone();
+        self.has_artwork = meta.has_artwork;
+        self.duration_s = meta.duration_s();
+        self.position_base_s = meta.position_s();
+        self.progress_unix_ms = meta.progress_unix_ms;
+    }
+
+    pub fn refresh_position(&mut self, playing: bool) {
+        if playing {
+            if self.progress_unix_ms.is_none() && self.position_base_s.is_some() {
+                self.progress_unix_ms = Some(metadata::unix_ms_now());
+            }
+            self.position_s = metadata::interpolated_position(
+                self.position_base_s,
+                self.progress_unix_ms,
+                self.duration_s,
+            );
+            return;
+        }
+        if self.progress_unix_ms.is_some() {
+            if let Some(pos) = metadata::interpolated_position(
+                self.position_base_s,
+                self.progress_unix_ms,
+                self.duration_s,
+            ) {
+                self.position_s = Some(pos);
+                self.position_base_s = Some(pos);
+            }
+            self.progress_unix_ms = None;
+        } else if self.position_s.is_none() {
+            self.position_s = self.position_base_s;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -164,7 +207,13 @@ async fn health() -> &'static str {
 }
 
 async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
-    Json(state.status.lock().unwrap().clone())
+    let s = {
+        let mut s = state.status.lock().unwrap();
+        let playing = s.airplay.connected;
+        s.metadata.refresh_position(playing);
+        s.clone()
+    };
+    Json(s)
 }
 
 /// Slim 50 Hz payload: live meters only (no metadata / counters / destinations).
@@ -256,7 +305,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::control::Control;
-    use crate::metadata::Artwork;
+    use crate::metadata::{unix_ms_now, Artwork, TrackMetadata};
     use crate::wled::WledSender;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -349,6 +398,46 @@ mod tests {
         assert!(html.contains("function isDirty()"));
     }
 
+    #[test]
+    fn track_progress_interpolates_and_freezes() {
+        let mut md = TrackMetadataStatus::default();
+        md.refresh_position(false);
+        assert!(md.position_s.is_none());
+
+        let mut track = TrackMetadata::default();
+        track.rtp_start = Some(0);
+        track.rtp_current = Some(22050);
+        track.rtp_end = Some(44100);
+        track.duration_ms = Some(60_000);
+        track.progress_unix_ms = None;
+        md.set_from_track(&track);
+        md.refresh_position(true);
+        assert!((md.position_s.unwrap() - 0.5).abs() < 0.05);
+        assert!(md.progress_unix_ms.is_some());
+
+        md.progress_unix_ms = Some(unix_ms_now().saturating_sub(2000));
+        md.refresh_position(true);
+        assert!((md.position_s.unwrap() - 2.5).abs() < 0.3);
+
+        md.refresh_position(false);
+        let frozen = md.position_s.unwrap();
+        assert!(md.progress_unix_ms.is_none());
+        md.refresh_position(false);
+        assert!((md.position_s.unwrap() - frozen).abs() < 1e-6);
+
+        md.position_s = None;
+        md.refresh_position(false);
+        assert!((md.position_s.unwrap() - md.position_base_s.unwrap()).abs() < 1e-6);
+
+        md.position_base_s = None;
+        md.progress_unix_ms = Some(unix_ms_now());
+        md.refresh_position(false);
+        assert!(md.progress_unix_ms.is_none());
+
+        md.refresh_position(true);
+        assert!(md.position_s.is_none());
+    }
+
     #[tokio::test]
     async fn status_and_artwork() {
         let state = bare_state();
@@ -375,6 +464,24 @@ mod tests {
         state.status.lock().unwrap().audio.tx_dominant_frequency = 880.0;
         state.status.lock().unwrap().audio.tx_bands[2] = 90;
         state.status.lock().unwrap().audio.tx_connected = true;
+        {
+            let mut s = state.status.lock().unwrap();
+            s.metadata.position_base_s = Some(1.0);
+            s.metadata.duration_s = Some(180.0);
+            s.metadata.progress_unix_ms = Some(unix_ms_now().saturating_sub(1500));
+        }
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let live: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
+        assert!(live["metadata"]["position_s"].as_f64().unwrap() > 2.0);
+        assert!(!String::from_utf8_lossy(&body).contains("position_base_s"));
         let (status, body) = send(
             router(state.clone()),
             Request::builder()

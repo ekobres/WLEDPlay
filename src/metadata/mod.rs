@@ -19,6 +19,8 @@ pub struct TrackMetadata {
     pub rtp_current: Option<u32>,
     pub rtp_end: Option<u32>,
     pub duration_ms: Option<u32>,
+    /// Wall clock when `rtp_current` was sampled (`prgr` is not a 1 Hz stream).
+    pub progress_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,15 +35,48 @@ pub const RTP_PROGRESS_RATE: f32 = 44100.0;
 
 impl TrackMetadata {
     pub fn duration_s(&self) -> Option<f32> {
-        if let Some(ms) = self.duration_ms {
+        if let Some(ms) = self.duration_ms.filter(|&ms| ms > 0) {
             return Some(ms as f32 / 1000.0);
         }
-        Some(rtp_secs(self.rtp_start?, self.rtp_end?))
+        let d = rtp_secs(self.rtp_start?, self.rtp_end?);
+        (d > 0.0).then_some(d)
     }
 
     pub fn position_s(&self) -> Option<f32> {
         Some(rtp_secs(self.rtp_start?, self.rtp_current?))
     }
+
+    fn clear_progress(&mut self) {
+        self.rtp_start = None;
+        self.rtp_current = None;
+        self.rtp_end = None;
+        self.duration_ms = None;
+        self.progress_unix_ms = None;
+    }
+}
+
+pub fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Extrapolate a frozen `prgr` snapshot. Shairport only emits progress on play/stop.
+pub fn interpolated_position(
+    base_s: Option<f32>,
+    progress_unix_ms: Option<u64>,
+    duration_s: Option<f32>,
+) -> Option<f32> {
+    let base = base_s?;
+    let extra = progress_unix_ms
+        .map(|t| unix_ms_now().saturating_sub(t) as f32 / 1000.0)
+        .unwrap_or(0.0);
+    let pos = (base + extra).max(0.0);
+    Some(match duration_s.filter(|d| *d > 0.0) {
+        Some(d) => pos.min(d),
+        None => pos,
+    })
 }
 
 fn rtp_secs(start: u32, later: u32) -> f32 {
@@ -117,7 +152,11 @@ pub fn apply_item(
 ) -> bool {
     match (item.type_code.as_str(), item.code.as_str()) {
         ("core", "minm") => {
-            meta.title = utf8_opt(&item.data);
+            let title = utf8_opt(&item.data);
+            if matches!((&meta.title, &title), (Some(old), Some(new)) if old != new) {
+                meta.clear_progress();
+            }
+            meta.title = title;
             true
         }
         ("core", "asar") => {
@@ -132,21 +171,13 @@ pub fn apply_item(
             meta.source = utf8_opt(&item.data);
             true
         }
-        ("ssnc", "mdst") => {
-            meta.title = None;
-            meta.artist = None;
-            meta.album = None;
-            meta.rtp_start = None;
-            meta.rtp_current = None;
-            meta.rtp_end = None;
-            meta.duration_ms = None;
-            true
-        }
+        ("ssnc", "mdst") => true,
         ("ssnc", "prgr") => {
             if let Some((start, current, end)) = parse_prgr(&item.data) {
                 meta.rtp_start = Some(start);
                 meta.rtp_current = Some(current);
                 meta.rtp_end = Some(end);
+                meta.progress_unix_ms = Some(unix_ms_now());
                 true
             } else {
                 false
@@ -208,7 +239,18 @@ fn parse_prgr(data: &[u8]) -> Option<(u32, u32, u32)> {
 }
 
 fn parse_astm(data: &[u8]) -> Option<u32> {
-    (data.len() >= 4).then(|| u32::from_be_bytes([data[0], data[1], data[2], data[3]]))
+    if let Ok(text) = std::str::from_utf8(data) {
+        let text = text.trim();
+        if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) {
+            return text.parse().ok().filter(|&ms| ms > 0);
+        }
+    }
+    let ms = match data.len() {
+        4 => u32::from_be_bytes(data.try_into().ok()?),
+        8 => u32::try_from(u64::from_be_bytes(data.try_into().ok()?)).ok()?,
+        _ => return None,
+    };
+    (ms > 0).then_some(ms)
 }
 
 pub fn sniff_image(bytes: &[u8]) -> &'static str {
@@ -360,7 +402,7 @@ mod tests {
         };
         meta.title = Some("x".into());
         assert!(apply_item(&mut meta, &mut art, &mdst));
-        assert!(meta.title.is_none());
+        assert_eq!(meta.title.as_deref(), Some("x"));
 
         let pfls = MetaItem {
             type_code: "ssnc".into(),
@@ -377,6 +419,12 @@ mod tests {
 
         assert!(parse_prgr(b"nope").is_none());
         assert!(parse_astm(&[1, 2]).is_none());
+        assert!(parse_astm(&[0, 0, 0, 0]).is_none());
+        assert!(parse_astm(b"abc").is_none());
+        assert!(parse_astm(b"nope!").is_none());
+        assert!(parse_astm(b"").is_none());
+        assert!(parse_astm(b"  ").is_none());
+        assert!(parse_astm(b"0").is_none());
         let prgr = MetaItem {
             type_code: "ssnc".into(),
             code: "prgr".into(),
@@ -392,6 +440,51 @@ mod tests {
         };
         assert!(apply_item(&mut meta, &mut art, &astm));
         assert!((meta.duration_s().unwrap() - 180.0).abs() < 1e-6);
+        assert!(apply_item(&mut meta, &mut art, &mdst));
+        assert!((meta.duration_s().unwrap() - 180.0).abs() < 1e-6);
+        assert!(meta.position_s().is_some());
+        let same_title = MetaItem {
+            type_code: "core".into(),
+            code: "minm".into(),
+            data: b"Same".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &same_title));
+        assert!(meta.position_s().is_some());
+        assert!(apply_item(&mut meta, &mut art, &same_title));
+        assert!(meta.position_s().is_some());
+        let new_title = MetaItem {
+            type_code: "core".into(),
+            code: "minm".into(),
+            data: b"Other".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &new_title));
+        assert!(meta.position_s().is_none());
+        assert!(meta.duration_s().is_none());
+        meta.duration_ms = Some(0);
+        meta.rtp_start = Some(10);
+        meta.rtp_end = Some(10);
+        assert!(meta.duration_s().is_none());
+        let astm8 = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: 90_000u64.to_be_bytes().to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &astm8));
+        assert!((meta.duration_s().unwrap() - 90.0).abs() < 1e-6);
+        let astm_ascii = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: b"45000".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &astm_ascii));
+        assert!((meta.duration_s().unwrap() - 45.0).abs() < 1e-6);
+        let zero_astm = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: 0u32.to_be_bytes().to_vec(),
+        };
+        assert!(!apply_item(&mut meta, &mut art, &zero_astm));
+        assert!((meta.duration_s().unwrap() - 45.0).abs() < 1e-6);
         let bad_prgr = MetaItem {
             type_code: "ssnc".into(),
             code: "prgr".into(),
@@ -404,8 +497,22 @@ mod tests {
             data: vec![1],
         };
         assert!(!apply_item(&mut meta, &mut art, &bad_astm));
-        assert!(apply_item(&mut meta, &mut art, &mdst));
-        assert!(meta.duration_s().is_none());
-        assert!(meta.position_s().is_none());
+        let huge_astm = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: u64::MAX.to_be_bytes().to_vec(),
+        };
+        assert!(!apply_item(&mut meta, &mut art, &huge_astm));
+        assert!((interpolated_position(Some(1.0), Some(unix_ms_now()), Some(3.0)).unwrap() - 1.0).abs() < 0.05);
+        assert!(
+            (interpolated_position(Some(1.0), Some(unix_ms_now().saturating_sub(2000)), Some(10.0))
+                .unwrap()
+                - 3.0)
+                .abs()
+                < 0.2
+        );
+        assert!(interpolated_position(None, None, None).is_none());
+        assert_eq!(interpolated_position(Some(12.0), None, Some(10.0)).unwrap(), 10.0);
+        assert_eq!(interpolated_position(Some(1.25), None, None).unwrap(), 1.25);
     }
 }
