@@ -77,6 +77,8 @@ pub struct TrackMetadataStatus {
     pub album: Option<String>,
     pub title: Option<String>,
     pub has_artwork: bool,
+    pub position_s: Option<f32>,
+    pub duration_s: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -340,6 +342,8 @@ mod tests {
         assert!(html.contains("id=\"viz-source\""));
         assert!(html.contains("id=\"viz-decay\""));
         assert!(html.contains("id=\"beat\""));
+        assert!(html.contains("id=\"freq\""));
+        assert!(html.contains("id=\"trackbar\""));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("function isDirty()"));

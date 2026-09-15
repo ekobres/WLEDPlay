@@ -15,6 +15,10 @@ pub struct TrackMetadata {
     pub title: Option<String>,
     pub source: Option<String>,
     pub has_artwork: bool,
+    pub rtp_start: Option<u32>,
+    pub rtp_current: Option<u32>,
+    pub rtp_end: Option<u32>,
+    pub duration_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +28,25 @@ pub struct Artwork {
 }
 
 pub type SharedArtwork = Arc<Mutex<Option<Artwork>>>;
+
+pub const RTP_PROGRESS_RATE: f32 = 44100.0;
+
+impl TrackMetadata {
+    pub fn duration_s(&self) -> Option<f32> {
+        if let Some(ms) = self.duration_ms {
+            return Some(ms as f32 / 1000.0);
+        }
+        Some(rtp_secs(self.rtp_start?, self.rtp_end?))
+    }
+
+    pub fn position_s(&self) -> Option<f32> {
+        Some(rtp_secs(self.rtp_start?, self.rtp_current?))
+    }
+}
+
+fn rtp_secs(start: u32, later: u32) -> f32 {
+    later.wrapping_sub(start) as f32 / RTP_PROGRESS_RATE
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaItem {
@@ -113,7 +136,29 @@ pub fn apply_item(
             meta.title = None;
             meta.artist = None;
             meta.album = None;
+            meta.rtp_start = None;
+            meta.rtp_current = None;
+            meta.rtp_end = None;
+            meta.duration_ms = None;
             true
+        }
+        ("ssnc", "prgr") => {
+            if let Some((start, current, end)) = parse_prgr(&item.data) {
+                meta.rtp_start = Some(start);
+                meta.rtp_current = Some(current);
+                meta.rtp_end = Some(end);
+                true
+            } else {
+                false
+            }
+        }
+        ("core", "astm") => {
+            if let Some(ms) = parse_astm(&item.data) {
+                meta.duration_ms = Some(ms);
+                true
+            } else {
+                false
+            }
         }
         ("ssnc", "pend") | ("ssnc", "pfls") => {
             *meta = TrackMetadata {
@@ -151,6 +196,19 @@ fn utf8_opt(bytes: &[u8]) -> Option<String> {
     } else {
         Some(s)
     }
+}
+
+fn parse_prgr(data: &[u8]) -> Option<(u32, u32, u32)> {
+    let s = String::from_utf8_lossy(data);
+    let mut parts = s.trim().split('/');
+    let start = parts.next()?.parse().ok()?;
+    let current = parts.next()?.parse().ok()?;
+    let end = parts.next()?.parse().ok()?;
+    Some((start, current, end))
+}
+
+fn parse_astm(data: &[u8]) -> Option<u32> {
+    (data.len() >= 4).then(|| u32::from_be_bytes([data[0], data[1], data[2], data[3]]))
 }
 
 pub fn sniff_image(bytes: &[u8]) -> &'static str {
@@ -316,5 +374,38 @@ mod tests {
         assert_eq!(utf8_opt(b" hi ").as_deref(), Some("hi"));
         assert!(tag_value("<x>", "data").is_none());
         assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 1]), "image/jpeg");
+
+        assert!(parse_prgr(b"nope").is_none());
+        assert!(parse_astm(&[1, 2]).is_none());
+        let prgr = MetaItem {
+            type_code: "ssnc".into(),
+            code: "prgr".into(),
+            data: b"4294967196/50/44100".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &prgr));
+        assert!((meta.position_s().unwrap() - (50u32.wrapping_sub(4294967196) as f32 / 44100.0)).abs() < 1e-3);
+        assert!(meta.duration_s().unwrap() > 0.0);
+        let astm = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: 180_000u32.to_be_bytes().to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &astm));
+        assert!((meta.duration_s().unwrap() - 180.0).abs() < 1e-6);
+        let bad_prgr = MetaItem {
+            type_code: "ssnc".into(),
+            code: "prgr".into(),
+            data: b"1/2".to_vec(),
+        };
+        assert!(!apply_item(&mut meta, &mut art, &bad_prgr));
+        let bad_astm = MetaItem {
+            type_code: "core".into(),
+            code: "astm".into(),
+            data: vec![1],
+        };
+        assert!(!apply_item(&mut meta, &mut art, &bad_astm));
+        assert!(apply_item(&mut meta, &mut art, &mdst));
+        assert!(meta.duration_s().is_none());
+        assert!(meta.position_s().is_none());
     }
 }

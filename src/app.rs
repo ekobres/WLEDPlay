@@ -642,6 +642,8 @@ pub fn apply_metadata_line(
     s.metadata.album = meta.album.clone();
     s.metadata.title = meta.title.clone();
     s.metadata.has_artwork = meta.has_artwork;
+    s.metadata.position_s = meta.position_s();
+    s.metadata.duration_s = meta.duration_s();
     s.airplay.source = meta.source.clone();
 }
 
@@ -1006,6 +1008,14 @@ mod tests {
             &artwork,
             &status,
         );
+        let prgr = format!(
+            "<item><type>73736e63</type><code>70726772</code><data encoding=\"base64\">{}</data></item>\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"0/22050/44100")
+        );
+        apply_metadata_line(&mut raw, &prgr, &mut meta, &artwork, &status);
+        let st = status.lock().unwrap();
+        assert!((st.metadata.position_s.unwrap() - 0.5).abs() < 1e-3);
+        assert!((st.metadata.duration_s.unwrap() - 1.0).abs() < 1e-3);
     }
 
     #[test]

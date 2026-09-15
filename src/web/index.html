@@ -42,18 +42,45 @@
       padding: 14px 16px;
     }
     .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .track-card { display: flex; gap: 12px; align-items: center; }
+    .track-card { display: flex; gap: 10px; align-items: center; }
     #art {
-      width: 72px; height: 72px; object-fit: cover; border-radius: 8px;
+      width: 28px; height: 28px; object-fit: cover; border-radius: 4px;
       background: #0e1424; flex-shrink: 0;
     }
+    .track-meta { min-width: 0; flex: 1; }
+    #track {
+      font-size: 0.72rem; line-height: 1.35; margin-top: 0;
+      color: var(--text); word-break: break-word;
+    }
+    .track-progress {
+      display: grid;
+      grid-template-columns: 5ch 1fr 5ch;
+      gap: 6px; align-items: center; margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.62rem; color: var(--muted);
+    }
+    .track-bar { height: 4px; margin-top: 0; }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
     .value.peak { color: var(--peak); }
     .meter { height: 10px; background: #0e1424; border-radius: 6px; overflow: hidden; margin-top: 8px; }
     .meter > span { display: block; height: 100%; width: 0; background: var(--bar); }
     .viz-meters { margin-top: 12px; }
-    .viz-meter-head { display: flex; align-items: center; gap: 8px; }
-    .viz-meter-head .value { margin-top: 0; font-size: 0.95rem; }
+    .viz-meter-head { display: flex; align-items: center; gap: 14px; }
+    .viz-stat { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+    .viz-num {
+      margin-top: 0; font-size: 0.95rem;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      display: inline-block; text-align: right;
+    }
+    #level { width: 4ch; }
+    #level-peak {
+      width: 4ch; color: var(--peak); font-size: 0.72rem; text-transform: uppercase;
+      letter-spacing: 0.04em; visibility: hidden;
+    }
+    #level-peak.on { visibility: visible; }
+    #freq { width: 11ch; }
     .viz-volume { margin-top: 6px; height: 12px; }
     .viz-volume.hot > span { background: var(--peak); }
     .beat {
@@ -142,14 +169,15 @@
       </div>
       <div class="card track-card">
         <img id="art" alt="" hidden>
-        <div>
+        <div class="track-meta">
           <div class="label">Track</div>
           <div class="value" id="track">No metadata yet</div>
+          <div class="track-progress">
+            <span id="track-pos">0:00</span>
+            <div class="meter track-bar"><span id="trackbar"></span></div>
+            <span id="track-dur">0:00</span>
+          </div>
         </div>
-      </div>
-      <div class="card">
-        <div class="label">Dominant frequency</div>
-        <div class="value" id="freq">—</div>
       </div>
       <div class="card">
         <div class="label">Packet rate</div>
@@ -191,8 +219,15 @@
       <div class="bands" id="bands"></div>
       <div class="viz-meters">
         <div class="viz-meter-head">
-          <span class="label">Level</span>
-          <span class="value" id="level">0%</span>
+          <span class="viz-stat">
+            <span class="label">Level</span>
+            <span class="viz-num" id="level">  0%</span>
+            <span id="level-peak">peak</span>
+          </span>
+          <span class="viz-stat">
+            <span class="label">Freq</span>
+            <span class="viz-num" id="freq">      — Hz</span>
+          </span>
           <span class="beat" id="beat" aria-label="Beat">
             <span class="beat-led" id="beat-led"></span>
             Beat
@@ -264,6 +299,13 @@
       return target + (current - target) * a;
     }
 
+    function formatClock(s) {
+      const t = Math.max(0, Math.floor(s));
+      const m = Math.floor(t / 60);
+      const sec = t % 60;
+      return m + ":" + String(sec).padStart(2, "0");
+    }
+
     function paintConn(live) {
       $("conn").textContent = live ? "live" : "idle";
       $("conn").className = "pill" + (live ? " live" : "");
@@ -294,8 +336,9 @@
       shownRms = decayOn ? fallToward(shownRms, rmsIn, dt) : rmsIn;
       shownBeat = decayOn ? fallToward(shownBeat, beatIn, dt) : beatIn;
       const clipping = shownRms >= 0.95;
-      $("level").textContent = Math.round(shownRms * 100) + "%" + (clipping ? "  peak" : "");
-      $("level").className = "value" + (clipping ? " peak" : "");
+      $("level").textContent = String(Math.round(shownRms * 100)).padStart(3, " ") + "%";
+      $("level").className = "viz-num" + (clipping ? " peak" : "");
+      $("level-peak").classList.toggle("on", clipping);
       $("levelbar").style.width = (shownRms * 100) + "%";
       $("levelmeter").classList.toggle("hot", clipping);
       $("beatbar").style.width = (shownBeat * 100) + "%";
@@ -305,7 +348,7 @@
         ? "0 0 " + (10 * shownBeat).toFixed(1) + "px var(--peak)" : "none";
       $("beat-led").style.opacity = (0.35 + 0.65 * shownBeat).toFixed(3);
       const hz = Number(s.dominant_frequency || 0);
-      $("freq").textContent = hz > 1 ? hz.toFixed(1) + " Hz" : "—";
+      $("freq").textContent = hz > 1 ? hz.toFixed(1).padStart(7, " ") + " Hz" : "      — Hz";
       (s.bands || []).forEach((v, i) => {
         const t = Math.max(0, Math.min(1, Number(v) / 255));
         shownBands[i] = decayOn ? fallToward(shownBands[i], t, dt) : t;
@@ -320,6 +363,14 @@
       const md = s.metadata || {};
       const parts = [md.title, md.artist, md.album].filter(Boolean);
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
+      const pos = Number(md.position_s);
+      const dur = Number(md.duration_s);
+      const haveDur = Number.isFinite(dur) && dur > 0;
+      const havePos = Number.isFinite(pos) && pos >= 0;
+      $("track-pos").textContent = havePos ? formatClock(pos) : "0:00";
+      $("track-dur").textContent = haveDur ? formatClock(dur) : "0:00";
+      $("trackbar").style.width = haveDur && havePos
+        ? Math.min(100, Math.max(0, pos / dur * 100)) + "%" : "0%";
       const art = $("art");
       if (md.has_artwork) {
         const key = parts.join("|");

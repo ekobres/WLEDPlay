@@ -317,12 +317,12 @@ impl SendLoop {
                 rt.pcm_underruns += 1;
             }
             let pkt = rt.analyzer.build_packet();
-            publish_audio(status, rt, cfg);
+            publish_audio(status, rt, cfg, pkt.sample_peak != 0);
             enqueue_packet(&mut self.delay_q, pkt, delay_ms, now);
             LoopAction::Continue
         } else if self.udp_active {
             let pkt = rt.analyzer.silence_packet();
-            publish_audio(status, rt, cfg);
+            publish_audio(status, rt, cfg, false);
             enqueue_packet(&mut self.delay_q, pkt, delay_ms, now);
             self.idle_packets_sent += 1;
             if self.idle_packets_sent >= IDLE_GRACE_PACKETS {
@@ -363,7 +363,6 @@ pub fn update_status(
     s.audio.channels = 1;
     if rt.stream_active {
         s.audio.rms = rt.analyzer.rms_proxy();
-        s.audio.peak = rt.analyzer.samples.sample_peak;
         s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
         s.audio.bands = rt.analyzer.fft_bands();
     } else {
@@ -405,13 +404,13 @@ pub fn record_transmitted(status: &SharedStatus, pkt: &AudioSyncPacket) {
     apply_transmitted_packet(&mut status.lock().unwrap().audio, pkt);
 }
 
-pub fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config) {
+pub fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config, packet_peak: bool) {
     let mut s = status.lock().unwrap();
     s.audio.sample_rate = crate::pcm::ANALYSIS_RATE;
     s.audio.channels = 1;
     if rt.stream_active {
         s.audio.rms = rt.analyzer.rms_proxy();
-        s.audio.peak = rt.analyzer.samples.sample_peak;
+        s.audio.peak = packet_peak;
         s.audio.dominant_frequency = rt.analyzer.dominant_frequency();
         s.audio.bands = rt.analyzer.fft_bands();
     } else {
@@ -836,7 +835,7 @@ mod tests {
         rt.stream_since = Some(now - Duration::from_secs(2));
         rt.pcm_frames = 9;
         rt.connections = 3;
-        publish_audio(&status, &rt, &cfg);
+        publish_audio(&status, &rt, &cfg, false);
         update_status(&status, &rt, "239.0.0.1:11988".into(), 4, 1, 7, &cfg, now);
         let s = status.lock().unwrap();
         assert!(s.airplay.connected);
@@ -883,6 +882,23 @@ mod tests {
 
         apply_transmitted_packet(&mut status.lock().unwrap().audio, &AudioSyncPacket::silence());
         assert!(!status.lock().unwrap().audio.tx_connected);
+    }
+
+    #[test]
+    fn publish_audio_peak_follows_packet_not_hold_flag() {
+        let status = status();
+        let mut cfg = Config::default();
+        cfg.audio.sync_offset_ms = 0;
+        let mut rt = PcmRuntime::new(AgcMode::Off);
+        rt.stream_active = true;
+        rt.analyzer.samples.sample_peak = true;
+        publish_audio(&status, &rt, &cfg, false);
+        assert!(!status.lock().unwrap().audio.peak);
+        publish_audio(&status, &rt, &cfg, true);
+        assert!(status.lock().unwrap().audio.peak);
+        rt.stream_active = false;
+        publish_audio(&status, &rt, &cfg, true);
+        assert!(!status.lock().unwrap().audio.peak);
     }
 
     #[test]

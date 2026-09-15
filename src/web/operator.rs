@@ -177,6 +177,14 @@ mod tests {
         assert!(html.contains("id=\"beat\""));
         assert!(html.contains("id=\"beatbar\""));
         assert!(html.contains("function fallToward"));
+        assert!(html.contains("id=\"level-peak\""));
+        assert!(html.contains("id=\"trackbar\""));
+        assert!(html.contains("id=\"track-pos\""));
+        assert!(html.contains("function formatClock"));
+        assert!(html.contains("padStart(3, \" \")"));
+        assert!(html.contains("padStart(7, \" \")"));
+        assert!(!html.contains("Dominant frequency"));
+        assert!(html.contains(">Freq</span>"));
         let bands_at = html.find("id=\"bands\"").expect("bands");
         let level_at = html.find("id=\"levelbar\"").expect("levelbar");
         let stats_at = html.find("id=\"counters\"").expect("counters");
