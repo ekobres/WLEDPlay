@@ -67,7 +67,7 @@
     .meter { height: 10px; background: #0e1424; border-radius: 6px; overflow: hidden; margin-top: 8px; }
     .meter > span { display: block; height: 100%; width: 0; background: var(--bar); }
     .viz-meters { margin-top: 12px; }
-    .viz-meter-head { display: flex; align-items: center; gap: 14px; }
+    .viz-meter-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .viz-stat { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
     .viz-num {
       margin-top: 0; font-size: 0.95rem;
@@ -82,6 +82,7 @@
     }
     #level-peak.on { visibility: visible; }
     #freq { width: 11ch; }
+    #agc { width: 7ch; }
     .viz-volume { margin-top: 6px; height: 12px; }
     .viz-volume.hot > span { background: var(--peak); }
     .beat {
@@ -229,6 +230,10 @@
             <span class="label">Freq</span>
             <span class="viz-num" id="freq">      — Hz</span>
           </span>
+          <span class="viz-stat">
+            <span class="label">AGC</span>
+            <span class="viz-num" id="agc">    off</span>
+          </span>
           <span class="beat" id="beat" aria-label="Beat">
             <span class="beat-led" id="beat-led"></span>
             Beat
@@ -249,7 +254,7 @@
       <label for="ctl-gain">AGC — live; WLED soundAgc profile (Off / Normal / Vivid / Lazy)</label>
       <select id="ctl-gain">
         <option value="off">Off</option>
-        <option value="normal">Normal</option>
+        <option value="normal" selected>Normal</option>
         <option value="vivid">Vivid</option>
         <option value="lazy">Lazy</option>
       </select>
@@ -357,7 +362,9 @@
         peak: !!s.tx_peak,
         dominant_frequency: Number(s.tx_dominant_frequency ?? 0),
         bands: s.tx_bands || [],
-        update_hz: s.update_hz
+        update_hz: s.update_hz,
+        agc_gain: Number(s.agc_gain ?? 0),
+        agc_on: !!s.agc_on
       };
     }
 
@@ -385,6 +392,11 @@
       $("beat-led").style.opacity = (0.35 + 0.65 * shownBeat).toFixed(3);
       const hz = Number(s.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1).padStart(7, " ") + " Hz" : "      — Hz";
+      if (!s.agc_on) {
+        $("agc").textContent = "    off";
+      } else {
+        $("agc").textContent = Number(s.agc_gain || 0).toFixed(2).padStart(6, " ") + "×";
+      }
       (s.bands || []).forEach((v, i) => {
         const t = Math.max(0, Math.min(1, Number(v) / 255));
         shownBands[i] = decayOn ? fallToward(shownBands[i], t, dt) : t;
@@ -583,12 +595,17 @@
       syncActionButtons();
     }
 
-    async function loadConfig() {
-      try { fillConfig(await fetch("/config").then((r) => r.json())); }
-      catch { /* ignore */ }
-    }
-
     let lastConfig = { values: {} };
+    let configHydrated = false;
+
+    async function loadConfig() {
+      try {
+        const c = await fetch("/config").then((r) => r.json());
+        const first = !configHydrated;
+        fillConfig(c, first);
+        configHydrated = true;
+      } catch { /* ignore */ }
+    }
 
     function fillIfaceSelect(id, current, interfaces) {
       const sel = $(id);

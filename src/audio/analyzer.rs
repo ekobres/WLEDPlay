@@ -169,6 +169,14 @@ impl Analyzer {
         self.samples.volume_smth() / 255.0
     }
 
+    pub fn agc_gain(&self) -> f32 {
+        self.samples.mult_agc
+    }
+
+    pub fn agc_enabled(&self) -> bool {
+        self.samples.sound_agc != AgcMode::Off
+    }
+
     pub fn fft_bands(&self) -> [u8; 16] {
         let mut fft = [0u8; 16];
         for (i, v) in self.fft_result.iter().enumerate() {
@@ -218,6 +226,8 @@ mod tests {
     fn silence_packet_matches_default() {
         let a = Analyzer::new(AgcMode::Off);
         assert_eq!(a.silence_packet(), AudioSyncPacket::silence());
+        assert!(!a.agc_enabled());
+        assert!((a.agc_gain() - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -236,6 +246,8 @@ mod tests {
         assert!(a.dominant_frequency() >= 1.0);
         let _ = a.fft_bands();
         let _ = a.rms_proxy();
+        assert!(a.agc_enabled());
+        assert!(a.agc_gain() > 0.0);
         let pkt = a.build_packet();
         assert!(pkt.fft_major_peak >= 1.0);
 

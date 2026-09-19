@@ -162,8 +162,11 @@ mod tests {
         assert!(html.contains("id=\"ctl-delay\""));
         assert!(html.contains("id=\"ctl-gain\""));
         assert!(html.contains("value=\"off\""));
+        assert!(html.contains("value=\"normal\" selected"));
         assert!(html.contains("value=\"vivid\""));
         assert!(html.contains("value=\"lazy\""));
+        assert!(html.contains("configHydrated"));
+        assert!(html.contains("fillConfig(c, first)"));
         assert!(html.contains("id=\"ctl-delay-hint\""));
         assert!(html.contains("Shairport lead (s)"));
         assert!(html.contains("Send delay (ms)"));
@@ -199,6 +202,10 @@ mod tests {
         assert!(html.contains("padStart(7, \" \")"));
         assert!(!html.contains("Dominant frequency"));
         assert!(html.contains(">Freq</span>"));
+        assert!(html.contains(">AGC</span>"));
+        assert!(html.contains("id=\"agc\""));
+        assert!(html.contains("agc_on"));
+        assert!(html.contains("padStart(6, \" \")"));
         let bands_at = html.find("id=\"bands\"").expect("bands");
         let level_at = html.find("id=\"levelbar\"").expect("levelbar");
         let stats_at = html.find("id=\"counters\"").expect("counters");

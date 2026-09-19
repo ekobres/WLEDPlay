@@ -374,6 +374,8 @@ pub fn update_status(
     }
     s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
     s.audio.update_hz = cfg.audio.update_hz;
+    s.audio.agc_gain = rt.analyzer.agc_gain();
+    s.audio.agc_on = rt.analyzer.agc_enabled();
     s.wled.packets_per_second = packets_per_sec as f32;
     s.wled.destination = destination;
     s.wled.destinations = cfg.wled.destinations.clone();
@@ -423,6 +425,8 @@ pub fn publish_audio(status: &SharedStatus, rt: &PcmRuntime, cfg: &Config, packe
     }
     s.audio.sync_offset_ms = cfg.audio.sync_offset_ms;
     s.audio.update_hz = cfg.audio.update_hz;
+    s.audio.agc_gain = rt.analyzer.agc_gain();
+    s.audio.agc_on = rt.analyzer.agc_enabled();
     s.airplay.connected = rt.stream_active;
 }
 
@@ -841,12 +845,23 @@ mod tests {
         rt.connections = 3;
         publish_audio(&status, &rt, &cfg, false);
         update_status(&status, &rt, "239.0.0.1:11988".into(), 4, 1, 7, &cfg, now);
-        let s = status.lock().unwrap();
-        assert!(s.airplay.connected);
-        assert_eq!(s.counters.pcm_frames, 9);
-        assert_eq!(s.counters.airplay_connections, 3);
-        assert_eq!(s.wled.packets_per_second, 7.0);
-        assert!(s.airplay.stream_duration_s >= 2.0);
+        {
+            let s = status.lock().unwrap();
+            assert!(s.airplay.connected);
+            assert_eq!(s.counters.pcm_frames, 9);
+            assert_eq!(s.counters.airplay_connections, 3);
+            assert_eq!(s.wled.packets_per_second, 7.0);
+            assert!(s.airplay.stream_duration_s >= 2.0);
+            assert!(!s.audio.agc_on);
+            assert!((s.audio.agc_gain - 1.0).abs() < 1e-6);
+        }
+
+        rt.analyzer.set_agc(AgcMode::Vivid);
+        rt.analyzer.samples.mult_agc = 2.5;
+        publish_audio(&status, &rt, &cfg, false);
+        let a = status.lock().unwrap().audio.clone();
+        assert!(a.agc_on);
+        assert!((a.agc_gain - 2.5).abs() < 1e-6);
     }
 
     #[test]

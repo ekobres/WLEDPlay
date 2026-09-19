@@ -61,6 +61,9 @@ pub struct AudioStatus {
     pub tx_peak: bool,
     pub tx_dominant_frequency: f32,
     pub tx_bands: [u8; 16],
+    /// WLED `multAgc` currently applied to samples/FFT (1.0 when AGC is off).
+    pub agc_gain: f32,
+    pub agc_on: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -230,6 +233,8 @@ pub struct LiveLevels {
     pub tx_peak: bool,
     pub tx_dominant_frequency: f32,
     pub tx_bands: [u8; 16],
+    pub agc_gain: f32,
+    pub agc_on: bool,
 }
 
 pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
@@ -245,6 +250,8 @@ pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
         tx_peak: status.audio.tx_peak,
         tx_dominant_frequency: status.audio.tx_dominant_frequency,
         tx_bands: status.audio.tx_bands,
+        agc_gain: status.audio.agc_gain,
+        agc_on: status.audio.agc_on,
     }
 }
 
@@ -392,6 +399,7 @@ mod tests {
         assert!(html.contains("id=\"viz-decay\""));
         assert!(html.contains("id=\"beat\""));
         assert!(html.contains("id=\"freq\""));
+        assert!(html.contains("id=\"agc\""));
         assert!(html.contains("id=\"trackbar\""));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
@@ -465,6 +473,8 @@ mod tests {
         state.status.lock().unwrap().audio.tx_dominant_frequency = 880.0;
         state.status.lock().unwrap().audio.tx_bands[2] = 90;
         state.status.lock().unwrap().audio.tx_connected = true;
+        state.status.lock().unwrap().audio.agc_gain = 2.25;
+        state.status.lock().unwrap().audio.agc_on = true;
         {
             let mut s = state.status.lock().unwrap();
             s.metadata.position_base_s = Some(1.0);
@@ -502,6 +512,8 @@ mod tests {
         assert!((levels.tx_rms - 0.25).abs() < 1e-6);
         assert!((levels.tx_dominant_frequency - 880.0).abs() < 1e-6);
         assert_eq!(levels.tx_bands[2], 90);
+        assert!(levels.agc_on);
+        assert!((levels.agc_gain - 2.25).abs() < 1e-6);
         assert!(!String::from_utf8_lossy(&body).contains("receiver_name"));
 
         let (status, body) = send(
