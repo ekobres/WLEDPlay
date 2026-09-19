@@ -431,7 +431,10 @@ mod tests {
             data: b"4294967196/50/44100".to_vec(),
         };
         assert!(apply_item(&mut meta, &mut art, &prgr));
-        assert!((meta.position_s().unwrap() - (50u32.wrapping_sub(4294967196) as f32 / 44100.0)).abs() < 1e-3);
+        assert!(
+            (meta.position_s().unwrap() - (50u32.wrapping_sub(4294967196) as f32 / 44100.0)).abs()
+                < 1e-3
+        );
         assert!(meta.duration_s().unwrap() > 0.0);
         let astm = MetaItem {
             type_code: "core".into(),
@@ -503,16 +506,26 @@ mod tests {
             data: u64::MAX.to_be_bytes().to_vec(),
         };
         assert!(!apply_item(&mut meta, &mut art, &huge_astm));
-        assert!((interpolated_position(Some(1.0), Some(unix_ms_now()), Some(3.0)).unwrap() - 1.0).abs() < 0.05);
         assert!(
-            (interpolated_position(Some(1.0), Some(unix_ms_now().saturating_sub(2000)), Some(10.0))
-                .unwrap()
+            (interpolated_position(Some(1.0), Some(unix_ms_now()), Some(3.0)).unwrap() - 1.0).abs()
+                < 0.05
+        );
+        assert!(
+            (interpolated_position(
+                Some(1.0),
+                Some(unix_ms_now().saturating_sub(2000)),
+                Some(10.0)
+            )
+            .unwrap()
                 - 3.0)
                 .abs()
                 < 0.2
         );
         assert!(interpolated_position(None, None, None).is_none());
-        assert_eq!(interpolated_position(Some(12.0), None, Some(10.0)).unwrap(), 10.0);
+        assert_eq!(
+            interpolated_position(Some(12.0), None, Some(10.0)).unwrap(),
+            10.0
+        );
         assert_eq!(interpolated_position(Some(1.25), None, None).unwrap(), 1.25);
     }
 }

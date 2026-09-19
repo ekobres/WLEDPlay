@@ -9,7 +9,8 @@ airplay:
 audio:
   sync_offset_ms: 1200
   shairport_latency_offset_s: -1.2
-  gain: auto
+  # WLED soundAgc: off | normal | vivid | lazy  (`auto` = normal). Live.
+  gain: normal
   update_hz: 50
 
 wled:

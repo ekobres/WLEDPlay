@@ -289,6 +289,7 @@ impl SendLoop {
         finite_input: bool,
         now: Instant,
     ) -> LoopAction {
+        rt.analyzer.set_agc(cfg.agc_mode());
         if rt.stream_active {
             if let Some(t) = rt.last_pcm {
                 if now.saturating_duration_since(t) >= pcm_idle_timeout(rt.stream_since, now) {
@@ -728,10 +729,12 @@ mod tests {
 
         rt.stream_active = true;
         rt.last_pcm = None;
+        assert_eq!(rt.analyzer.samples.sound_agc, AgcMode::Off);
         assert_eq!(
             sl.on_update(&mut rt, &status, &cfg, true, now),
             LoopAction::Continue
         );
+        assert_eq!(rt.analyzer.samples.sound_agc, AgcMode::Normal);
         rt.last_pcm = Some(now);
         assert_eq!(
             sl.on_update(&mut rt, &status, &cfg, true, now),
@@ -881,7 +884,10 @@ mod tests {
         apply_transmitted_packet(&mut status.lock().unwrap().audio, &bands_only);
         assert!(status.lock().unwrap().audio.tx_connected);
 
-        apply_transmitted_packet(&mut status.lock().unwrap().audio, &AudioSyncPacket::silence());
+        apply_transmitted_packet(
+            &mut status.lock().unwrap().audio,
+            &AudioSyncPacket::silence(),
+        );
         assert!(!status.lock().unwrap().audio.tx_connected);
     }
 

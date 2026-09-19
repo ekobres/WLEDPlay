@@ -107,12 +107,12 @@ impl SampleProcessor {
                 self.time_of_peak_ms = now_ms;
                 self.udp_sample_peak = true;
             }
-        } else if self.mult_agc * self.sample_max > agc_zone_stop(0)
+        } else if self.mult_agc * self.sample_max > agc_zone_stop(self.sound_agc.profile_index())
             && self.sound_agc != AgcMode::Off
         {
             self.sample_max += 0.5 * (self.sample_real - self.sample_max);
         } else {
-            self.sample_max *= agc_sample_decay(0);
+            self.sample_max *= agc_sample_decay(self.sound_agc.profile_index());
         }
         if self.sample_max < 0.5 {
             self.sample_max = 0.0;
@@ -152,7 +152,7 @@ impl SampleProcessor {
         if self.sound_agc == AgcMode::Off {
             return;
         }
-        let preset = self.sound_agc as usize - 1;
+        let preset = self.sound_agc.profile_index();
         let last_mult = self.mult_agc;
         let mut mult_temp = self.mult_agc;
         let mut tmp_agc = self.sample_real * self.mult_agc;

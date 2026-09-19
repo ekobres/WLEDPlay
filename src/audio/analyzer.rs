@@ -48,6 +48,10 @@ impl Analyzer {
         }
     }
 
+    pub fn set_agc(&mut self, agc: AgcMode) {
+        self.samples.sound_agc = agc;
+    }
+
     pub fn reset_silence(&mut self) {
         self.samples.reset();
         self.sample_buffer.clear();
@@ -219,6 +223,9 @@ mod tests {
     #[test]
     fn ingest_tone_runs_fft_and_getters() {
         let mut a = Analyzer::new(AgcMode::Normal);
+        a.set_agc(AgcMode::Vivid);
+        assert_eq!(a.samples.sound_agc, AgcMode::Vivid);
+        a.set_agc(AgcMode::Normal);
         a.set_stream_active(true);
         for i in 0..900 {
             let t = i as f32 / 22050.0;

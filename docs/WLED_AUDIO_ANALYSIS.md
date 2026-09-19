@@ -82,6 +82,8 @@ PI controller targets:
 
 When AGC off, packet uses `sampleRaw` / `sampleAvg`.
 
+WLEDPlay maps this to live `audio.gain`: `off` | `normal` (`auto`) | `vivid` | `lazy` (WLED integers 0–3 also accepted). Default is **normal**. Changing it does not restart Shairport; the send loop applies the profile to the analyzer each tick.
+
 ---
 
 ## FFT

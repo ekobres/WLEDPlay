@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{AgcMode, Config};
 use crate::netif::{self, InterfaceInfo};
 use crate::wled::WledSender;
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,7 @@ pub struct Control {
 pub struct ConfigPatch {
     pub airplay_name: Option<String>,
     pub sync_offset_ms: Option<i32>,
+    pub gain: Option<String>,
     pub shairport_latency_offset_s: Option<f64>,
     pub multicast_enabled: Option<bool>,
     pub multicast_address: Option<String>,
@@ -50,6 +51,7 @@ pub struct ConfigView {
 pub struct ConfigValues {
     pub airplay_name: String,
     pub sync_offset_ms: i32,
+    pub gain: AgcMode,
     pub shairport_latency_offset_s: f64,
     /// Send delay (ms) that aligns UDP with presentation for the current Shairport lead.
     pub on_time_send_delay_ms: u32,
@@ -66,6 +68,7 @@ pub struct ConfigValues {
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigFields {
     pub sync_offset_ms: &'static str,
+    pub gain: &'static str,
     pub multicast_enabled: &'static str,
     pub destinations: &'static str,
     pub airplay_name: &'static str,
@@ -82,6 +85,7 @@ impl ConfigFields {
     fn standard() -> Self {
         Self {
             sync_offset_ms: "live",
+            gain: "live",
             multicast_enabled: "live",
             destinations: "live",
             airplay_name: "restart",
@@ -178,6 +182,11 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             return Err("sync_offset_ms must be between 0 and 5000".into());
         }
     }
+    if let Some(gain) = &patch.gain {
+        if parse_gain(gain).is_none() {
+            return Err("gain must be off, normal, vivid, or lazy".into());
+        }
+    }
     if let Some(off) = patch.shairport_latency_offset_s {
         if !(-5.0..=2.0).contains(&off) {
             return Err("shairport_latency_offset_s must be between -5 and 2".into());
@@ -218,6 +227,9 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
     }
     if let Some(ms) = patch.sync_offset_ms {
         cfg.audio.sync_offset_ms = ms;
+    }
+    if let Some(gain) = patch.gain {
+        cfg.audio.gain = parse_gain(&gain).expect("validated");
     }
     if let Some(off) = patch.shairport_latency_offset_s {
         cfg.audio.shairport_latency_offset_s = off;
@@ -263,6 +275,10 @@ fn validate_iface(name: &Option<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn parse_gain(raw: &str) -> Option<AgcMode> {
+    AgcMode::parse(raw).or_else(|| raw.trim().parse::<i64>().ok().map(AgcMode::from_sound_agc))
+}
+
 /// Presentation-aligned send delay for the current Shairport lead (`|offset|` in ms).
 pub fn on_time_send_delay_ms(shairport_s: f64) -> u32 {
     (-shairport_s * 1000.0).round().max(0.0) as u32
@@ -273,6 +289,7 @@ fn values_from(cfg: &Config) -> ConfigValues {
     ConfigValues {
         airplay_name: cfg.airplay.name.clone(),
         sync_offset_ms: cfg.audio.sync_offset_ms,
+        gain: cfg.audio.gain,
         shairport_latency_offset_s: shairport,
         on_time_send_delay_ms: on_time_send_delay_ms(shairport),
         multicast_enabled: cfg.wled.multicast_enabled,
@@ -288,7 +305,7 @@ fn values_from(cfg: &Config) -> ConfigValues {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
+    use crate::config::{AgcMode, Config};
 
     #[test]
     fn on_time_send_delay_ms_matches_shairport_lead() {
@@ -323,6 +340,61 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.audio.sync_offset_ms, 80);
         assert!((cfg.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
+
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("vivid".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.gain, AgcMode::Vivid);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("2".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.gain, AgcMode::Vivid);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("auto".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.gain, AgcMode::Normal);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("off".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.gain, AgcMode::Off);
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("0".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.audio.gain, AgcMode::Off);
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                gain: Some("nope".into()),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert_eq!(cfg.audio.gain, AgcMode::Off);
     }
 
     #[test]
@@ -333,6 +405,7 @@ mod tests {
         let values = super::values_from(&cfg);
         assert_eq!(values.sync_offset_ms, 1200);
         assert_eq!(values.on_time_send_delay_ms, 1200);
+        assert_eq!(values.gain, AgcMode::Normal);
     }
 
     #[test]
@@ -526,6 +599,7 @@ mod tests {
             .apply_patch(super::ConfigPatch {
                 airplay_name: Some("Living Room".into()),
                 sync_offset_ms: Some(80),
+                gain: Some("lazy".into()),
                 shairport_latency_offset_s: Some(-0.5),
                 multicast_enabled: Some(false),
                 multicast_address: Some("239.1.1.1".into()),
@@ -539,6 +613,8 @@ mod tests {
             .unwrap();
         assert!(view.persisted);
         assert_eq!(view.values.airplay_name, "Living Room");
+        assert_eq!(view.values.gain, AgcMode::Lazy);
+        assert_eq!(view.fields.gain, "live");
         assert_eq!(view.values.port, 12001);
         assert_eq!(view.values.destinations, vec!["10.0.0.8".to_string()]);
         assert!(!view.values.multicast_enabled);

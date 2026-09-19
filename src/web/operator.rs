@@ -1,3 +1,4 @@
+use crate::config::AgcMode;
 use crate::control::ConfigValues;
 
 /// Embedded operator UI (switch + pending Save/Cancel).
@@ -10,6 +11,7 @@ pub fn operator_ui() -> &'static str {
 pub struct OperatorSnapshot {
     pub sync_offset_ms: i32,
     pub shairport_latency_offset_s: f64,
+    pub gain: AgcMode,
     pub airplay_name: String,
     pub http_interface: String,
     pub airplay_interface: String,
@@ -43,6 +45,7 @@ impl PartialEq for OperatorSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.sync_offset_ms == other.sync_offset_ms
             && (self.shairport_latency_offset_s - other.shairport_latency_offset_s).abs() < 0.0001
+            && self.gain == other.gain
             && self.airplay_name == other.airplay_name
             && self.http_interface == other.http_interface
             && self.airplay_interface == other.airplay_interface
@@ -58,6 +61,7 @@ impl OperatorSnapshot {
         Self {
             sync_offset_ms: v.sync_offset_ms,
             shairport_latency_offset_s: v.shairport_latency_offset_s,
+            gain: v.gain,
             airplay_name: v.airplay_name.trim().to_string(),
             http_interface: v.http_interface.clone(),
             airplay_interface: v.airplay_interface.clone(),
@@ -133,6 +137,7 @@ mod tests {
         ConfigValues {
             airplay_name: name.into(),
             sync_offset_ms: 1200,
+            gain: AgcMode::Normal,
             shairport_latency_offset_s: -1.2,
             on_time_send_delay_ms: 1200,
             multicast_enabled: true,
@@ -155,11 +160,16 @@ mod tests {
         let html = operator_ui();
         assert!(html.contains("id=\"ctl-shairport\""));
         assert!(html.contains("id=\"ctl-delay\""));
+        assert!(html.contains("id=\"ctl-gain\""));
+        assert!(html.contains("value=\"off\""));
+        assert!(html.contains("value=\"vivid\""));
+        assert!(html.contains("value=\"lazy\""));
         assert!(html.contains("id=\"ctl-delay-hint\""));
         assert!(html.contains("Shairport lead (s)"));
         assert!(html.contains("Send delay (ms)"));
         assert!(html.contains("sync_offset_ms"));
         assert!(html.contains("shairport_latency_offset_s"));
+        assert!(html.contains("gain"));
         assert!(html.contains("on_time_send_delay_ms"));
         assert!(html.contains("function shairportChanged"));
         assert!(!html.contains("visual_delay_ms"));
@@ -217,6 +227,7 @@ mod tests {
         let form = OperatorSnapshot {
             sync_offset_ms: 1200,
             shairport_latency_offset_s: -1.2,
+            gain: AgcMode::Normal,
             airplay_name: "  WLEDPlay  ".trim().to_string(),
             http_interface: String::new(),
             airplay_interface: String::new(),
@@ -232,6 +243,14 @@ mod tests {
         let mut dirty = form.clone();
         dirty.sync_offset_ms = 800;
         assert!(dirty.is_dirty(&saved));
+        dirty.gain = AgcMode::Vivid;
+        assert!(dirty.is_dirty(&saved));
+        dirty.gain = AgcMode::Normal;
+        dirty.sync_offset_ms = 1200;
+        dirty.gain = AgcMode::Off;
+        assert!(dirty.is_dirty(&saved));
+        dirty.gain = AgcMode::Normal;
+        assert!(!dirty.is_dirty(&saved));
         assert!(!dirty.shairport_changed(&saved));
 
         dirty.shairport_latency_offset_s = -2.0;

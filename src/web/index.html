@@ -246,6 +246,13 @@
       <label for="ctl-delay">Send delay (ms) — live; hold after decode before UDP</label>
       <input id="ctl-delay" type="number" step="10" min="0" max="5000">
       <div class="hint" id="ctl-delay-hint"></div>
+      <label for="ctl-gain">AGC — live; WLED soundAgc profile (Off / Normal / Vivid / Lazy)</label>
+      <select id="ctl-gain">
+        <option value="off">Off</option>
+        <option value="normal">Normal</option>
+        <option value="vivid">Vivid</option>
+        <option value="lazy">Lazy</option>
+      </select>
       <label for="ctl-name">AirPlay name — restart to re-advertise</label>
       <input id="ctl-name" type="text" maxlength="64">
       <label for="ctl-http">HTTP (management) — restart</label>
@@ -475,7 +482,7 @@
     }
 
     const FIELD_IDS = [
-      "ctl-shairport", "ctl-delay", "ctl-name", "ctl-http", "ctl-airplay",
+      "ctl-shairport", "ctl-delay", "ctl-gain", "ctl-name", "ctl-http", "ctl-airplay",
       "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest"
     ];
 
@@ -497,6 +504,7 @@
     function formSnapshot() {
       return {
         sync_offset_ms: Number($("ctl-delay").value),
+        gain: $("ctl-gain").value,
         shairport_latency_offset_s: Number($("ctl-shairport").value),
         airplay_name: $("ctl-name").value.trim(),
         http_interface: $("ctl-http").value,
@@ -512,6 +520,7 @@
       const v = lastConfig.values || {};
       return {
         sync_offset_ms: Number(v.sync_offset_ms ?? 0),
+        gain: v.gain || "normal",
         shairport_latency_offset_s: Number(v.shairport_latency_offset_s ?? 0),
         airplay_name: (v.airplay_name || "").trim(),
         http_interface: v.http_interface || "",
@@ -551,6 +560,7 @@
       if (force || !dirty) {
         $("ctl-shairport").value = v.shairport_latency_offset_s ?? 0;
         $("ctl-delay").value = v.sync_offset_ms ?? 0;
+        $("ctl-gain").value = v.gain || "normal";
         $("ctl-name").value = v.airplay_name || "";
         $("ctl-dest").value = (v.destinations || []).join("\n");
         $("ctl-mcast").checked = !!v.multicast_enabled;

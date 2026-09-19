@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -59,33 +60,101 @@ pub struct AudioConfig {
     /// Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM).
     #[serde(default)]
     pub shairport_latency_offset_s: f64,
-    #[serde(default = "default_gain")]
-    pub gain: GainSetting,
+    /// WLED `soundAgc` profile: `off`, `normal` (`auto`), `vivid`, `lazy`. Live.
+    #[serde(default)]
+    pub gain: AgcMode,
     #[serde(default)]
     pub update_hz: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum GainSetting {
-    Auto,
-    Fixed(u8),
-    Agc(String),
-}
-
-impl Default for GainSetting {
-    fn default() -> Self {
-        GainSetting::Auto
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// WLED Audio Reactive `soundAgc`: 0=Off, 1=Normal, 2=Vivid, 3=Lazy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgcMode {
     Off,
     Normal,
     Vivid,
     Lazy,
+}
+
+impl Default for AgcMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+impl AgcMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Normal => "normal",
+            Self::Vivid => "vivid",
+            Self::Lazy => "lazy",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "on" | "normal" | "auto" => Some(Self::Normal),
+            "vivid" => Some(Self::Vivid),
+            "lazy" => Some(Self::Lazy),
+            _ => None,
+        }
+    }
+
+    /// WLED `soundAgc` integer. Other numbers (legacy `gain: 60`) mean Off.
+    pub fn from_sound_agc(n: i64) -> Self {
+        match n {
+            1 => Self::Normal,
+            2 => Self::Vivid,
+            3 => Self::Lazy,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn profile_index(self) -> usize {
+        match self {
+            Self::Off | Self::Normal => 0,
+            Self::Vivid => 1,
+            Self::Lazy => 2,
+        }
+    }
+}
+
+impl Serialize for AgcMode {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgcMode {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AgcVisitor;
+        impl<'de> serde::de::Visitor<'de> for AgcVisitor {
+            type Value = AgcMode;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("WLED AGC profile: off, normal, vivid, or lazy")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<AgcMode, E> {
+                AgcMode::parse(v)
+                    .ok_or_else(|| E::unknown_variant(v, &["off", "normal", "vivid", "lazy"]))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<AgcMode, E> {
+                self.visit_str(&v)
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<AgcMode, E> {
+                Ok(AgcMode::from_sound_agc(v))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<AgcMode, E> {
+                Ok(AgcMode::from_sound_agc(v as i64))
+            }
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<AgcMode, E> {
+                // YAML 1.1: `off`/`on` may arrive as bool.
+                Ok(if v { AgcMode::Normal } else { AgcMode::Off })
+            }
+        }
+        deserializer.deserialize_any(AgcVisitor)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +200,7 @@ impl Default for AudioConfig {
         Self {
             sync_offset_ms: 0,
             shairport_latency_offset_s: 0.0,
-            gain: default_gain(),
+            gain: AgcMode::default(),
             update_hz: 50,
         }
     }
@@ -224,9 +293,6 @@ fn default_pcm_channels() -> u16 {
 fn default_pcm_format() -> String {
     "s16le".into()
 }
-fn default_gain() -> GainSetting {
-    GainSetting::default()
-}
 fn default_multicast_enabled() -> bool {
     true
 }
@@ -283,6 +349,15 @@ impl Config {
         if let Ok(v) = std::env::var("WLEDPLAY_SYNC_OFFSET_MS") {
             if let Ok(p) = v.parse::<i32>() {
                 self.audio.sync_offset_ms = p.max(0);
+            }
+        }
+        if let Ok(v) = std::env::var("WLEDPLAY_GAIN") {
+            if !v.is_empty() {
+                if let Some(mode) = AgcMode::parse(&v) {
+                    self.audio.gain = mode;
+                } else if let Ok(n) = v.parse::<i64>() {
+                    self.audio.gain = AgcMode::from_sound_agc(n);
+                }
             }
         }
         if let Ok(v) = std::env::var("WLEDPLAY_LOG_LEVEL") {
@@ -358,10 +433,7 @@ impl Config {
     }
 
     pub fn agc_mode(&self) -> AgcMode {
-        match &self.audio.gain {
-            GainSetting::Auto | GainSetting::Agc(_) => AgcMode::Normal,
-            GainSetting::Fixed(_) => AgcMode::Off,
-        }
+        self.audio.gain
     }
 
     pub fn multicast_ip(&self) -> IpAddr {
@@ -457,10 +529,63 @@ mod tests {
     fn agc_mode_from_gain_setting() {
         let mut cfg = Config::default();
         assert_eq!(cfg.agc_mode(), AgcMode::Normal);
-        cfg.audio.gain = GainSetting::Fixed(128);
+        cfg.audio.gain = AgcMode::Off;
         assert_eq!(cfg.agc_mode(), AgcMode::Off);
-        cfg.audio.gain = GainSetting::Agc("vivid".into());
-        assert_eq!(cfg.agc_mode(), AgcMode::Normal);
+        cfg.audio.gain = AgcMode::Vivid;
+        assert_eq!(cfg.agc_mode(), AgcMode::Vivid);
+        cfg.audio.gain = AgcMode::Lazy;
+        assert_eq!(cfg.agc_mode(), AgcMode::Lazy);
+    }
+
+    #[test]
+    fn agc_mode_parses_wled_profiles_and_legacy() {
+        fn gain(yaml: &str) -> AgcMode {
+            let cfg: AudioConfig = serde_yaml::from_str(yaml).unwrap();
+            cfg.gain
+        }
+        assert_eq!(gain("gain: off"), AgcMode::Off);
+        assert_eq!(gain("gain: auto"), AgcMode::Normal);
+        assert_eq!(gain("gain: normal"), AgcMode::Normal);
+        assert_eq!(gain("gain: VIVID"), AgcMode::Vivid);
+        assert_eq!(gain("gain: lazy"), AgcMode::Lazy);
+        assert_eq!(gain("gain: 0"), AgcMode::Off);
+        assert_eq!(gain("gain: 1"), AgcMode::Normal);
+        assert_eq!(gain("gain: 2"), AgcMode::Vivid);
+        assert_eq!(gain("gain: 3"), AgcMode::Lazy);
+        assert_eq!(gain("gain: 60"), AgcMode::Off);
+        assert_eq!(gain("gain: -1"), AgcMode::Off);
+        assert!(serde_yaml::from_str::<AudioConfig>("gain: nope").is_err());
+        assert_eq!(
+            serde_yaml::to_string(&AgcMode::Normal).unwrap().trim(),
+            "normal"
+        );
+        assert_eq!(AgcMode::Off.as_str(), "off");
+        assert_eq!(serde_yaml::to_string(&AgcMode::Off).unwrap().trim(), "off");
+        let err = serde_yaml::from_str::<AgcMode>("[]")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("WLED AGC profile"));
+        assert!(serde_yaml::from_str::<AgcMode>("{foo: 1}").is_err());
+        assert_eq!(AgcMode::parse("  Auto  "), Some(AgcMode::Normal));
+        assert_eq!(AgcMode::parse("on"), Some(AgcMode::Normal));
+        assert!(AgcMode::parse("nope").is_none());
+        assert_eq!(AgcMode::from_sound_agc(1).as_str(), "normal");
+        assert_eq!(AgcMode::Off.profile_index(), 0);
+        assert_eq!(AgcMode::Vivid.profile_index(), 1);
+        assert_eq!(AgcMode::Lazy.profile_index(), 2);
+        let json: AgcMode = serde_json::from_str("\"lazy\"").unwrap();
+        assert_eq!(json, AgcMode::Lazy);
+        let json_n: AgcMode = serde_json::from_str("2").unwrap();
+        assert_eq!(json_n, AgcMode::Vivid);
+        let json_u: AgcMode = serde_json::from_value(serde_json::json!(3u64)).unwrap();
+        assert_eq!(json_u, AgcMode::Lazy);
+        let json_s: AgcMode =
+            serde_json::from_value(serde_json::Value::String("off".into())).unwrap();
+        assert_eq!(json_s, AgcMode::Off);
+        let yaml_on: AgcMode = serde_yaml::from_str("on").unwrap();
+        assert_eq!(yaml_on, AgcMode::Normal);
+        let yaml_off: AgcMode = serde_yaml::from_str("false").unwrap();
+        assert_eq!(yaml_off, AgcMode::Off);
     }
 
     #[test]
@@ -477,12 +602,14 @@ mod tests {
         cfg.network.airplay = "eth1".into();
         cfg.wled.destinations = vec!["10.11.1.124".into()];
         cfg.audio.shairport_latency_offset_s = -1.2;
+        cfg.audio.gain = AgcMode::Lazy;
         let yaml = serde_yaml::to_string(&cfg).unwrap();
         let parsed: Config = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.network.http, "eth0");
         assert_eq!(parsed.network.airplay, "eth1");
         assert_eq!(parsed.wled.destinations, vec!["10.11.1.124"]);
         assert!((parsed.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
+        assert_eq!(parsed.audio.gain, AgcMode::Lazy);
     }
 
     #[test]
@@ -549,7 +676,7 @@ mod tests {
 
         let cfg = Config::load(None);
         assert_eq!(cfg.wled.port, 11988);
-        assert!(matches!(GainSetting::default(), GainSetting::Auto));
+        assert_eq!(AgcMode::default(), AgcMode::Normal);
     }
 
     #[test]
@@ -571,6 +698,7 @@ mod tests {
             "WLEDPLAY_METADATA_PIPE",
             "WLEDPLAY_SHAIRPORT_LATENCY_OFFSET",
             "WLEDPLAY_MULTICAST_ENABLED",
+            "WLEDPLAY_GAIN",
         ];
         for key in keys {
             std::env::remove_var(key);
@@ -590,6 +718,7 @@ mod tests {
         std::env::set_var("WLEDPLAY_METADATA_PIPE", "/tmp/m");
         std::env::set_var("WLEDPLAY_SHAIRPORT_LATENCY_OFFSET", "");
         std::env::set_var("WLEDPLAY_MULTICAST_ENABLED", "0");
+        std::env::set_var("WLEDPLAY_GAIN", "not-a-mode");
 
         let mut cfg = Config::default();
         cfg.apply_env();
@@ -606,6 +735,7 @@ mod tests {
         assert_eq!(cfg.web.port, 9090);
         assert_eq!(cfg.metadata.pipe, "/tmp/m");
         assert!(!cfg.wled.multicast_enabled);
+        assert_eq!(cfg.audio.gain, AgcMode::Normal);
 
         std::env::set_var("WLEDPLAY_PORT", "12121");
         std::env::set_var("WLEDPLAY_SYNC_OFFSET_MS", "-25");
@@ -623,8 +753,16 @@ mod tests {
         assert!(cfg.wled.multicast_enabled);
 
         std::env::set_var("WLEDPLAY_SHAIRPORT_LATENCY_OFFSET", "-1.25");
+        std::env::set_var("WLEDPLAY_GAIN", "vivid");
         cfg.apply_env();
         assert!((cfg.audio.shairport_latency_offset_s - -1.25).abs() < 1e-9);
+        assert_eq!(cfg.audio.gain, AgcMode::Vivid);
+
+        std::env::set_var("WLEDPLAY_GAIN", "2");
+        cfg.apply_env();
+        assert_eq!(cfg.audio.gain, AgcMode::Vivid);
+
+        std::env::set_var("WLEDPLAY_GAIN", "");
 
         std::env::set_var("WLEDPLAY_AIRPLAY_INTERFACE", "");
         std::env::set_var("WLEDPLAY_UNICAST_INTERFACE", "");

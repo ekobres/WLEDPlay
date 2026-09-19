@@ -395,6 +395,7 @@ mod tests {
         assert!(html.contains("id=\"trackbar\""));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
+        assert!(html.contains("id=\"ctl-gain\""));
         assert!(html.contains("function isDirty()"));
     }
 
@@ -479,7 +480,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let live: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
+        let live: serde_json::Value =
+            serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
         assert!(live["metadata"]["position_s"].as_f64().unwrap() > 2.0);
         assert!(!String::from_utf8_lossy(&body).contains("position_base_s"));
         let (status, body) = send(
@@ -584,7 +586,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8_lossy(&body).contains("WLEDPlay"));
+        let cfg_json = String::from_utf8_lossy(&body);
+        assert!(cfg_json.contains("WLEDPlay"));
+        assert!(cfg_json.contains("\"gain\":\"normal\""));
+        assert!(cfg_json.contains("\"gain\":\"live\""));
 
         let (status, _) = send(
             router(state.clone()),
@@ -597,6 +602,19 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("PATCH")
+                .uri("/config")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"gain":"vivid"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8_lossy(&body).contains("vivid"));
 
         let (status, _) = send(
             router(state.clone()),
