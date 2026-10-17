@@ -19,6 +19,9 @@ pub struct OperatorSnapshot {
     pub multicast_interface: String,
     pub multicast_enabled: bool,
     pub destinations: Vec<String>,
+    pub auto_join_enabled: bool,
+    pub auto_join_target_id: String,
+    pub auto_join_target_name: String,
 }
 
 pub fn dest_lines(text: &str) -> Vec<String> {
@@ -53,6 +56,9 @@ impl PartialEq for OperatorSnapshot {
             && self.multicast_interface == other.multicast_interface
             && self.multicast_enabled == other.multicast_enabled
             && self.destinations == other.destinations
+            && self.auto_join_enabled == other.auto_join_enabled
+            && self.auto_join_target_id == other.auto_join_target_id
+            && self.auto_join_target_name == other.auto_join_target_name
     }
 }
 
@@ -69,6 +75,9 @@ impl OperatorSnapshot {
             multicast_interface: v.multicast_interface.clone(),
             multicast_enabled: v.multicast_enabled,
             destinations: v.destinations.clone(),
+            auto_join_enabled: v.auto_join_enabled,
+            auto_join_target_id: v.auto_join_target_id.trim().to_string(),
+            auto_join_target_name: v.auto_join_target_name.trim().to_string(),
         }
     }
 
@@ -148,6 +157,9 @@ mod tests {
             airplay_interface: String::new(),
             unicast_interface: String::new(),
             multicast_interface: String::new(),
+            auto_join_enabled: false,
+            auto_join_target_id: String::new(),
+            auto_join_target_name: String::new(),
         }
     }
 
@@ -178,6 +190,14 @@ mod tests {
         assert!(!html.contains("visual_delay_ms"));
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
+        assert!(html.contains("id=\"ctl-autojoin\""));
+        assert!(html.contains("id=\"ctl-autojoin-target\""));
+        assert!(html.contains("id=\"autojoin-discovery\""));
+        assert!(html.contains("id=\"autojoin-target-status\""));
+        assert!(html.contains("id=\"autojoin-runtime\""));
+        assert!(html.contains("No target"));
+        assert!(html.contains("auto_join_enabled"));
+        assert!(html.contains("/airplay/devices"));
         assert!(html.contains("function isDirty()"));
         assert!(!html.contains("Visualizer on"));
         assert!(html.contains("id=\"viz-source\""));
@@ -242,6 +262,9 @@ mod tests {
             multicast_interface: String::new(),
             multicast_enabled: true,
             destinations: dest_lines("10.11.1.124\n"),
+            auto_join_enabled: false,
+            auto_join_target_id: String::new(),
+            auto_join_target_name: String::new(),
         };
         assert!(!form.is_dirty(&saved));
         assert!(!action_buttons_enabled(false));
@@ -282,6 +305,13 @@ mod tests {
         dirty.destinations = vec!["10.11.1.200".into()];
         assert!(dirty.is_dirty(&saved));
         assert!(!dirty.nics_changed(&saved));
+        dirty.destinations = saved.destinations.clone();
+        dirty.auto_join_enabled = true;
+        assert!(dirty.is_dirty(&saved));
+        assert!(!dirty.needs_restart_confirm(&saved, true));
+        dirty.auto_join_target_id = "speaker-1".into();
+        dirty.auto_join_target_name = "Kitchen".into();
+        assert!(dirty.is_dirty(&saved));
     }
 
     #[test]
@@ -333,6 +363,8 @@ mod tests {
         let v = values("  padded  ", &[]);
         let snap = OperatorSnapshot::from_values(&v);
         assert_eq!(snap.airplay_name, "padded");
+        assert_eq!(snap.auto_join_target_id, "");
+        assert!(!snap.auto_join_enabled);
         assert_eq!(snap.sync_offset_ms, 1200);
         assert!((snap.shairport_latency_offset_s - -1.2).abs() < 1e-9);
         assert!(snap.destinations.is_empty());

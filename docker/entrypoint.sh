@@ -55,6 +55,7 @@ fi
 ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
 PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
+SIDECAR_PID=""
 
 wait_for() {
   path=$1
@@ -107,9 +108,20 @@ start_mdns() {
   echo "Avahi is running (pid $(cat /run/avahi-daemon/pid))"
 }
 
+start_autojoin() {
+  mkdir -p "${PYATV_STORAGE:-/host-config/pyatv}"
+  export PYATV_STORAGE="${PYATV_STORAGE:-/host-config/pyatv}"
+  export WLEDPLAY_AUTOJOIN_URL="${WLEDPLAY_AUTOJOIN_URL:-http://127.0.0.1:8091}"
+  export WLEDPLAY_AIRPLAY_NAME
+  echo "Starting Auto Join sidecar..."
+  python3 /usr/local/bin/autojoin_sidecar.py &
+  SIDECAR_PID=$!
+}
+
 shutdown() {
   echo "Shutting down WLEDPlay stack..."
   kill "$WLEDPLAY_PID" 2>/dev/null || true
+  kill "$SIDECAR_PID" 2>/dev/null || true
   kill "$SHAIRPORT_PID" 2>/dev/null || true
   kill "$NQPTP_PID" 2>/dev/null || true
   if [ -f /run/avahi-daemon/pid ]; then
@@ -160,6 +172,9 @@ if [ -n "$WLEDPLAY_DESTINATION" ]; then
   done
   IFS=$OLDIFS
 fi
+
+echo "Starting Auto Join..."
+start_autojoin
 
 echo "Starting wledplay..."
 # shellcheck disable=SC2086

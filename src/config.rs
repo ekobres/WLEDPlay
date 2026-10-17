@@ -22,6 +22,21 @@ pub struct Config {
     pub network: NetworkConfig,
     #[serde(default)]
     pub metadata: MetadataConfig,
+    #[serde(default)]
+    pub auto_join: AutoJoinConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoJoinConfig {
+    /// Join the selected speaker's AirPlay group when WLEDPlay is idle.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Stable AirPlay output id. Empty disables join attempts.
+    #[serde(default)]
+    pub target_id: String,
+    /// Display name only; not the identity.
+    #[serde(default)]
+    pub target_name: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -308,6 +323,7 @@ impl Default for Config {
             pcm: PcmFormat::default(),
             network: NetworkConfig::default(),
             metadata: MetadataConfig::default(),
+            auto_join: AutoJoinConfig::default(),
         }
     }
 }
@@ -603,6 +619,9 @@ mod tests {
         cfg.wled.destinations = vec!["10.11.1.124".into()];
         cfg.audio.shairport_latency_offset_s = -1.2;
         cfg.audio.gain = AgcMode::Lazy;
+        cfg.auto_join.enabled = true;
+        cfg.auto_join.target_id = "speaker-1".into();
+        cfg.auto_join.target_name = "Kitchen".into();
         let yaml = serde_yaml::to_string(&cfg).unwrap();
         let parsed: Config = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.network.http, "eth0");
@@ -610,6 +629,12 @@ mod tests {
         assert_eq!(parsed.wled.destinations, vec!["10.11.1.124"]);
         assert!((parsed.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
         assert_eq!(parsed.audio.gain, AgcMode::Lazy);
+        assert!(parsed.auto_join.enabled);
+        assert_eq!(parsed.auto_join.target_id, "speaker-1");
+        assert_eq!(parsed.auto_join.target_name, "Kitchen");
+        let bare: Config = serde_yaml::from_str("airplay:\n  name: X\n").unwrap();
+        assert!(!bare.auto_join.enabled);
+        assert!(bare.auto_join.target_id.is_empty());
     }
 
     #[test]

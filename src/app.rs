@@ -275,6 +275,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
     let mut last_status = instant_or_now(Instant::now().checked_sub(Duration::from_secs(1)));
     let mut packets_last_sec = 0u64;
     let mut loop_state = SendLoop::default();
+    let auto_join = crate::auto_join::from_env();
 
     loop {
         let action = event_loop_tick(
@@ -290,6 +291,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
             update_interval,
             finite_input,
             Instant::now(),
+            &auto_join,
         );
         if action == LoopAction::Exit {
             break;
@@ -320,6 +322,7 @@ pub fn event_loop_tick(
     update_interval: Duration,
     finite_input: bool,
     now: Instant,
+    auto_join: &crate::auto_join::AutoJoinHub,
 ) -> LoopAction {
     if restart.load(Ordering::Relaxed) {
         tracing::info!("Restart requested; exiting so the supervisor can relaunch");
@@ -363,6 +366,17 @@ pub fn event_loop_tick(
         *packets_last_sec = 0;
         *last_status = now;
     }
+
+    let (raw_busy, auto, receiver_name) = {
+        let rt = runtime.lock().unwrap();
+        let live = live_cfg.lock().unwrap();
+        (
+            rt.stream_active,
+            live.auto_join.clone(),
+            live.airplay.name.clone(),
+        )
+    };
+    auto_join.drive(raw_busy, &auto, &receiver_name, now, status);
 
     LoopAction::Continue
 }
@@ -1260,6 +1274,7 @@ mod tests {
         let mut last_send = now;
         let mut last_status = now;
         let mut packets = 0u64;
+        let hub = crate::auto_join::AutoJoinHub::inactive();
         assert_eq!(
             event_loop_tick(
                 &restart,
@@ -1274,6 +1289,7 @@ mod tests {
                 Duration::from_millis(20),
                 true,
                 now,
+                &hub,
             ),
             LoopAction::Exit
         );
@@ -1295,6 +1311,7 @@ mod tests {
                 Duration::from_millis(20),
                 true,
                 now,
+                &hub,
             ),
             LoopAction::Exit
         );
@@ -1326,6 +1343,7 @@ mod tests {
                 Duration::from_millis(20),
                 false,
                 now,
+                &hub,
             ),
             LoopAction::Continue
         );
@@ -1353,6 +1371,7 @@ mod tests {
                 Duration::from_secs(60),
                 false,
                 now,
+                &hub,
             ),
             LoopAction::Continue
         );
@@ -1377,6 +1396,7 @@ mod tests {
                 Duration::from_millis(20),
                 false,
                 now,
+                &hub,
             ),
             LoopAction::Continue
         );

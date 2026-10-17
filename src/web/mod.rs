@@ -34,6 +34,8 @@ pub struct RuntimeStatus {
     pub wled: WledStatus,
     pub metadata: TrackMetadataStatus,
     pub counters: CounterStatus,
+    pub auto_join: AutoJoinStatus,
+    pub airplay_devices: Vec<AirPlayDeviceInfo>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -138,6 +140,36 @@ pub struct CounterStatus {
     pub airplay_connections: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AutoJoinStatus {
+    pub enabled: bool,
+    pub target_id: String,
+    pub target_name: String,
+    pub state: String,
+    pub label: String,
+    pub target_available: bool,
+    pub target_playing: bool,
+    pub target_status: String,
+    pub wledplay_busy: bool,
+    pub pending_config_change: bool,
+    pub discovery_active: bool,
+    pub device_count: u32,
+    pub last_error: String,
+    pub self_id: String,
+    pub discovery_error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
+pub struct AirPlayDeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub label: String,
+    pub model: String,
+    pub address: String,
+    pub available: bool,
+    pub playing: bool,
+}
+
 pub type SharedStatus = Arc<Mutex<RuntimeStatus>>;
 
 pub fn router(state: AppState) -> Router {
@@ -149,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route("/artwork", get(artwork_handler))
         .route("/config", get(config_get).patch(config_patch))
         .route("/interfaces", get(interfaces_handler))
+        .route("/airplay/devices", get(devices_handler))
         .route("/restart", post(restart_handler))
         .with_state(state)
 }
@@ -298,6 +331,15 @@ async fn interfaces_handler(State(state): State<AppState>) -> Json<Vec<Interface
     })
 }
 
+async fn devices_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let s = state.status.lock().unwrap();
+    Json(serde_json::json!({
+        "discovery_active": s.auto_join.discovery_active,
+        "self_id": s.auto_join.self_id,
+        "devices": s.airplay_devices,
+    }))
+}
+
 async fn restart_handler(State(state): State<AppState>) -> StatusCode {
     if let Some(ctrl) = &state.control {
         ctrl.request_restart();
@@ -404,6 +446,7 @@ mod tests {
         assert!(html.contains("role=\"switch\""));
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("id=\"ctl-gain\""));
+        assert!(html.contains("id=\"ctl-autojoin\""));
         assert!(html.contains("function isDirty()"));
     }
 
@@ -464,6 +507,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(String::from_utf8_lossy(&body).contains("0.1.0"));
+        assert!(String::from_utf8_lossy(&body).contains("auto_join"));
 
         state.status.lock().unwrap().audio.rms = 0.42;
         state.status.lock().unwrap().audio.bands[0] = 200;
@@ -627,6 +671,67 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(String::from_utf8_lossy(&body).contains("vivid"));
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("PATCH")
+                .uri("/config")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"auto_join_enabled":true,"auto_join_target_id":"speaker-1","auto_join_target_name":"Kitchen"}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let patched = String::from_utf8_lossy(&body);
+        assert!(patched.contains("speaker-1"));
+        assert!(patched.contains("\"auto_join_enabled\":\"live\""));
+
+        state.status.lock().unwrap().auto_join.discovery_active = true;
+        state.status.lock().unwrap().auto_join.self_id = "self".into();
+        state
+            .status
+            .lock()
+            .unwrap()
+            .airplay_devices
+            .push(crate::web::AirPlayDeviceInfo {
+                id: "speaker-1".into(),
+                name: "Kitchen".into(),
+                label: "Kitchen".into(),
+                model: "HomePod".into(),
+                address: "10.0.0.9".into(),
+                available: true,
+                playing: false,
+            });
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/airplay/devices")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let devices = String::from_utf8_lossy(&body);
+        assert!(devices.contains("speaker-1"));
+        assert!(devices.contains("\"discovery_active\":true"));
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("PATCH")
+                .uri("/config")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    "{{\"auto_join_target_id\":\"{}\"}}",
+                    "x".repeat(129)
+                )))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
 
         let (status, _) = send(
             router(state.clone()),

@@ -40,6 +40,13 @@ web:
 metadata:
   pipe: ""
 
+# Live. Joins the selected speaker's AirPlay group only while WLEDPlay is idle.
+# target_id is the stable AirPlay output id; target_name is display-only.
+auto_join:
+  enabled: false
+  target_id: ""
+  target_name: ""
+
 pcm:
   rate: 44100
   channels: 2

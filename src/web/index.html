@@ -244,6 +244,21 @@
       </div>
       <pre id="counters"></pre>
     </div>
+    </div>
+    <div class="card controls" style="margin-top:12px">
+      <div class="label">Auto Join</div>
+      <div class="check">
+        <input id="ctl-autojoin" type="checkbox" role="switch">
+        <span>Join selected speaker when idle</span>
+      </div>
+      <label for="ctl-autojoin-target">Target speaker</label>
+      <select id="ctl-autojoin-target" disabled>
+        <option value="">No target</option>
+      </select>
+      <div class="hint" id="autojoin-discovery">Discovery inactive</div>
+      <div class="hint" id="autojoin-target-status"></div>
+      <div class="hint" id="autojoin-runtime"></div>
+    </div>
     <div class="card controls" style="margin-top:12px">
       <div class="label">Operator controls</div>
       <label for="ctl-shairport">Shairport lead (s) — restart; negative = PCM early (e.g. −1.2)</label>
@@ -481,7 +496,9 @@
       try {
         const s = await fetch("/status").then((r) => r.json());
         paintMeta(s);
+        paintAutoJoin(s.auto_join);
         if (!vizOn) paintConn(!!s.airplay.connected);
+        refreshDevices();
       } catch { /* ignore */ }
       if (!document.hidden) statusTimer = setTimeout(statusTick, 1000);
     }
@@ -495,7 +512,8 @@
 
     const FIELD_IDS = [
       "ctl-shairport", "ctl-delay", "ctl-gain", "ctl-name", "ctl-http", "ctl-airplay",
-      "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest"
+      "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest",
+      "ctl-autojoin", "ctl-autojoin-target"
     ];
 
     function onTimeMs(shairportS) {
@@ -513,6 +531,64 @@
       return $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
     }
 
+    function selectedTargetName() {
+      const sel = $("ctl-autojoin-target");
+      const opt = sel.options[sel.selectedIndex];
+      return opt && opt.dataset.name ? opt.dataset.name : "";
+    }
+
+    function renderTargets(keepId, keepName, devices) {
+      const sel = $("ctl-autojoin-target");
+      const previous = keepId || "";
+      sel.innerHTML = "";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = "No target";
+      blank.dataset.name = "";
+      sel.appendChild(blank);
+      let found = !previous;
+      (devices || []).forEach((d) => {
+        const o = document.createElement("option");
+        o.value = d.id;
+        o.textContent = d.label || d.name || d.id;
+        o.dataset.name = d.name || "";
+        sel.appendChild(o);
+        if (d.id === previous) found = true;
+      });
+      if (previous && !found) {
+        const o = document.createElement("option");
+        o.value = previous;
+        const name = keepName || previous;
+        o.textContent = name + " — currently unavailable";
+        o.dataset.name = name;
+        sel.appendChild(o);
+      }
+      sel.value = previous;
+    }
+
+    let lastDevices = [];
+
+    async function refreshDevices() {
+      try {
+        const d = await fetch("/airplay/devices").then((r) => r.json());
+        lastDevices = d.devices || [];
+        const v = lastConfig.values || {};
+        const keep = isDirty() ? $("ctl-autojoin-target").value : (v.auto_join_target_id || "");
+        const name = isDirty() ? selectedTargetName() : (v.auto_join_target_name || "");
+        renderTargets(keep, name, lastDevices);
+      } catch { /* ignore */ }
+    }
+
+    function paintAutoJoin(aj) {
+      if (!aj) return;
+      const n = aj.device_count || 0;
+      $("autojoin-discovery").textContent = aj.discovery_active
+        ? ("Discovery active · " + n + (n === 1 ? " device" : " devices"))
+        : "Discovery inactive";
+      $("autojoin-target-status").textContent = aj.target_status || "";
+      $("autojoin-runtime").textContent = aj.label || "";
+    }
+
     function formSnapshot() {
       return {
         sync_offset_ms: Number($("ctl-delay").value),
@@ -524,7 +600,10 @@
         unicast_interface: $("ctl-unicast").value,
         multicast_interface: $("ctl-multicast").value,
         multicast_enabled: $("ctl-mcast").checked,
-        destinations: destLines()
+        destinations: destLines(),
+        auto_join_enabled: $("ctl-autojoin").checked,
+        auto_join_target_id: $("ctl-autojoin-target").value,
+        auto_join_target_name: selectedTargetName()
       };
     }
 
@@ -540,7 +619,10 @@
         unicast_interface: v.unicast_interface || "",
         multicast_interface: v.multicast_interface || "",
         multicast_enabled: !!v.multicast_enabled,
-        destinations: v.destinations || []
+        destinations: v.destinations || [],
+        auto_join_enabled: !!v.auto_join_enabled,
+        auto_join_target_id: v.auto_join_target_id || "",
+        auto_join_target_name: v.auto_join_target_name || ""
       };
     }
 
@@ -580,12 +662,17 @@
         fillIfaceSelect("ctl-airplay", v.airplay_interface || "", cfg.interfaces);
         fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
         fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
+        $("ctl-autojoin").checked = !!v.auto_join_enabled;
+        renderTargets(v.auto_join_target_id || "", v.auto_join_target_name || "", lastDevices);
+        $("ctl-autojoin-target").disabled = !v.auto_join_enabled;
         updateSendDelayHint(v);
       } else {
         fillIfaceSelect("ctl-http", $("ctl-http").value, cfg.interfaces);
         fillIfaceSelect("ctl-airplay", $("ctl-airplay").value, cfg.interfaces);
         fillIfaceSelect("ctl-unicast", $("ctl-unicast").value, cfg.interfaces);
         fillIfaceSelect("ctl-multicast", $("ctl-multicast").value, cfg.interfaces);
+        renderTargets($("ctl-autojoin-target").value, selectedTargetName(), lastDevices);
+        $("ctl-autojoin-target").disabled = !$("ctl-autojoin").checked;
         updateSendDelayHint({
           shairport_latency_offset_s: Number($("ctl-shairport").value),
           on_time_send_delay_ms: onTimeMs($("ctl-shairport").value)
@@ -639,7 +726,13 @@
 
     FIELD_IDS.forEach((id) => {
       $(id).addEventListener("input", () => { paintHint(lastConfig); syncActionButtons(); });
-      $(id).addEventListener("change", () => { paintHint(lastConfig); syncActionButtons(); });
+      $(id).addEventListener("change", () => {
+        if (id === "ctl-autojoin") {
+          $("ctl-autojoin-target").disabled = !$("ctl-autojoin").checked;
+        }
+        paintHint(lastConfig);
+        syncActionButtons();
+      });
     });
 
     $("ctl-cancel").onclick = () => fillConfig(lastConfig, true);

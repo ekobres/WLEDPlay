@@ -196,9 +196,39 @@ See [`docker-compose.yml`](../docker-compose.yml) and [`docker/entrypoint.sh`](.
 
 ---
 
+## Auto Join spike (pyatv)
+
+WLEDPlay stays a receiver. Auto Join asks the **group leader** to add that receiver. The mechanism is pyatv 0.16 MRP `add_output_devices`, not a second audio path and not an `airport.key`.
+
+Manual probe (Linux, same LAN as the speakers):
+
+```bash
+pip install 'pyatv==0.16.1'
+python3 scripts/auto-join-spike.py scan --storage config/pyatv
+python3 scripts/auto-join-spike.py watch --storage config/pyatv \
+  --target-id <speaker-id> --receiver-id <wledplay-output-id>
+```
+
+Locked contract for the sidecar (`docker/autojoin_sidecar.py`, `127.0.0.1:8091`):
+
+| Question | What the spike uses |
+|---|---|
+| Stable id | pyatv AirPlay **output device id** when present, otherwise the scan `identifier`. Never the display name. |
+| Playing | `playing` → device state `Playing` or `Loading` on the selected target only. |
+| Add output | `remote_control.add_output_devices(wledplay_output_id)` sent to the target. Only the current AirPlay leader returns the output list. |
+| Success | Shairport PCM session starts. An MRP `ok` is not success. |
+| Pairing | pyatv `FileStorage` under `config/pyatv` (gitignored). One-time `atvremote --storage config/pyatv wizard`. Never in the browser. |
+| iPhone as sender | Best-effort. If the phone owns the session, add-output usually fails. Surface `Join failed`. Direct AirPlay to WLEDPlay keeps working. |
+| HomePod / Apple TV as leader | The case this is built for: music started on that device, then WLEDPlay is added as an output. |
+
+`WLEDPLAY_AUTOJOIN_URL` (Docker default `http://127.0.0.1:8091`) points the Rust policy engine at the sidecar. Empty URL leaves Auto Join configured but discovery inactive.
+
+---
+
 ## References
 
 - [Shairport Sync sample config](https://github.com/mikebrady/shairport-sync/blob/master/scripts/shairport-sync.conf)
 - [CONFIGURATION FLAGS](https://github.com/mikebrady/shairport-sync/blob/master/CONFIGURATION%20FLAGS.md)
 - [`audio_stdout.c`](https://github.com/mikebrady/shairport-sync/blob/master/audio_stdout.c)
 - [NQPTP](https://github.com/mikebrady/nqptp)
+- [pyatv output devices](https://pyatv.dev/documentation/atvremote/)

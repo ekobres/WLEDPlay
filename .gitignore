@@ -5,3 +5,4 @@
 *.pcm
 /config/config.yaml
 /config/shairport-sync.conf
+/config/pyatv/

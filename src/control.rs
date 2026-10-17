@@ -34,6 +34,9 @@ pub struct ConfigPatch {
     pub airplay_interface: Option<String>,
     pub unicast_interface: Option<String>,
     pub multicast_interface: Option<String>,
+    pub auto_join_enabled: Option<bool>,
+    pub auto_join_target_id: Option<String>,
+    pub auto_join_target_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +66,9 @@ pub struct ConfigValues {
     pub airplay_interface: String,
     pub unicast_interface: String,
     pub multicast_interface: String,
+    pub auto_join_enabled: bool,
+    pub auto_join_target_id: String,
+    pub auto_join_target_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +85,9 @@ pub struct ConfigFields {
     pub shairport_latency_offset_s: &'static str,
     pub multicast_address: &'static str,
     pub port: &'static str,
+    pub auto_join_enabled: &'static str,
+    pub auto_join_target_id: &'static str,
+    pub auto_join_target_name: &'static str,
 }
 
 impl ConfigFields {
@@ -96,6 +105,9 @@ impl ConfigFields {
             shairport_latency_offset_s: "restart",
             multicast_address: "restart",
             port: "restart",
+            auto_join_enabled: "live",
+            auto_join_target_id: "live",
+            auto_join_target_name: "live",
         }
     }
 }
@@ -217,6 +229,16 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             }
         }
     }
+    if let Some(id) = &patch.auto_join_target_id {
+        if id.trim().len() > 128 {
+            return Err("auto_join_target_id must be at most 128 characters".into());
+        }
+    }
+    if let Some(name) = &patch.auto_join_target_name {
+        if name.trim().len() > 128 {
+            return Err("auto_join_target_name must be at most 128 characters".into());
+        }
+    }
     validate_iface(&patch.http_interface)?;
     validate_iface(&patch.airplay_interface)?;
     validate_iface(&patch.unicast_interface)?;
@@ -262,6 +284,15 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
     if let Some(iface) = patch.multicast_interface {
         cfg.network.multicast = iface.trim().to_string();
     }
+    if let Some(enabled) = patch.auto_join_enabled {
+        cfg.auto_join.enabled = enabled;
+    }
+    if let Some(id) = patch.auto_join_target_id {
+        cfg.auto_join.target_id = id.trim().to_string();
+    }
+    if let Some(name) = patch.auto_join_target_name {
+        cfg.auto_join.target_name = name.trim().to_string();
+    }
     Ok(())
 }
 
@@ -300,6 +331,9 @@ fn values_from(cfg: &Config) -> ConfigValues {
         airplay_interface: cfg.network.airplay.clone(),
         unicast_interface: cfg.network.unicast.clone(),
         multicast_interface: cfg.network.multicast.clone(),
+        auto_join_enabled: cfg.auto_join.enabled,
+        auto_join_target_id: cfg.auto_join.target_id.clone(),
+        auto_join_target_name: cfg.auto_join.target_name.clone(),
     }
 }
 
@@ -609,12 +643,20 @@ mod tests {
                 airplay_interface: Some("".into()),
                 unicast_interface: Some("".into()),
                 multicast_interface: Some("".into()),
+                auto_join_enabled: Some(true),
+                auto_join_target_id: Some("  aa-bb  ".into()),
+                auto_join_target_name: Some(" Kitchen ".into()),
             })
             .unwrap();
         assert!(view.persisted);
         assert_eq!(view.values.airplay_name, "Living Room");
         assert_eq!(view.values.gain, AgcMode::Lazy);
         assert_eq!(view.fields.gain, "live");
+        assert_eq!(view.fields.auto_join_enabled, "live");
+        assert_eq!(view.fields.auto_join_target_id, "live");
+        assert!(view.values.auto_join_enabled);
+        assert_eq!(view.values.auto_join_target_id, "aa-bb");
+        assert_eq!(view.values.auto_join_target_name, "Kitchen");
         assert_eq!(view.values.port, 12001);
         assert_eq!(view.values.destinations, vec!["10.0.0.8".to_string()]);
         assert!(!view.values.multicast_enabled);
@@ -669,6 +711,35 @@ mod tests {
             }
         )
         .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                auto_join_target_id: Some("x".repeat(129)),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert!(super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                auto_join_target_name: Some("n".repeat(129)),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                auto_join_enabled: Some(true),
+                auto_join_target_id: Some("".into()),
+                auto_join_target_name: Some("".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(cfg.auto_join.enabled);
+        assert!(cfg.auto_join.target_id.is_empty());
+        assert!(!control.needs_restart(&cfg));
     }
 
     #[test]

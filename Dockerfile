@@ -52,7 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libplist3 libuuid1 libpopt0 libsodium23 \
     libavahi-client3 libavahi-common3 \
     libavcodec59 libavformat59 libavutil57 libswresample4 \
-    && rm -rf /var/lib/apt/lists/*
+    python3 python3-pip iproute2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir --break-system-packages 'pyatv==0.16.1'
 
 COPY --from=shairport-build /usr/local/bin/shairport-sync /usr/local/bin/
 COPY --from=nqptp-build /usr/local/bin/nqptp /usr/local/bin/
@@ -62,6 +64,7 @@ COPY config/config-example.yaml /etc/wledplay/config.yaml
 COPY config/shairport-sync-example.conf /etc/shairport-sync.conf
 COPY docker/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/autojoin_sidecar.py /usr/local/bin/autojoin_sidecar.py
 COPY docker/NOTICE /NOTICE
 COPY LICENSE /LICENSE
 
@@ -81,6 +84,8 @@ ENV WLEDPLAY_AIRPLAY_NAME=WLEDPlay \
     WLEDPLAY_WEB_PORT=8080 \
     WLEDPLAY_SHAIRPORT_LATENCY_OFFSET= \
     WLEDPLAY_METADATA_PIPE=/run/wledplay.meta \
+    WLEDPLAY_AUTOJOIN_URL=http://127.0.0.1:8091 \
+    PYATV_STORAGE=/host-config/pyatv \
     ENABLE_AVAHI=1
 
 EXPOSE 8080
