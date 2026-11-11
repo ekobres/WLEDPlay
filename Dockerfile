@@ -14,16 +14,18 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS shairport-build
 ARG SHAIRPORT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates patch \
     build-essential git autoconf automake libtool pkg-config \
     libssl-dev libavahi-client-dev libasound2-dev libsoxr-dev \
     libplist-dev libplist-utils libgcrypt20-dev uuid-dev libpopt-dev libconfig-dev \
     libsodium-dev libavutil-dev libavcodec-dev libavformat-dev xxd \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
+    patch -p1 < /tmp/shairport-mixed-stack.patch && \
     autoreconf -fi && \
     ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata && \
     make -j"$(nproc)" && \
@@ -32,13 +34,15 @@ RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
 FROM debian:bookworm-slim AS nqptp-build
 ARG NQPTP_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates patch \
     build-essential git autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+COPY docker/nqptp-timing-peers.patch /tmp/nqptp-timing-peers.patch
 RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
       https://github.com/mikebrady/nqptp.git && \
     cd nqptp && \
+    patch -p1 < /tmp/nqptp-timing-peers.patch && \
     autoreconf -fi && \
     ./configure && \
     make -j"$(nproc)" && \
@@ -54,7 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavcodec59 libavformat59 libavutil57 libswresample4 \
     python3 python3-pip iproute2 \
     && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --no-cache-dir --break-system-packages 'pyatv==0.16.1'
+    && pip3 install --no-cache-dir --break-system-packages 'pyatv==0.16.1' 'srptools==1.0.1'
 
 COPY --from=shairport-build /usr/local/bin/shairport-sync /usr/local/bin/
 COPY --from=nqptp-build /usr/local/bin/nqptp /usr/local/bin/

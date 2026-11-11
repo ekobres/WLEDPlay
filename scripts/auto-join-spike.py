@@ -7,7 +7,7 @@ playback and add this Shairport Sync receiver to that group.
 Requires the `atvremote` CLI from pyatv 0.16.x on a Linux host that can
 see both the speaker and WLEDPlay via mDNS:
 
-    pip install 'pyatv==0.16.1'
+    pip install 'pyatv==0.16.1' 'srptools==1.0.1'
     python3 scripts/auto-join-spike.py scan --storage /host-config/pyatv/pyatv.json
     python3 scripts/auto-join-spike.py watch --storage /host-config/pyatv/pyatv.json \\
         --target-id <speaker-id> --receiver-name WLEDPlay
@@ -32,7 +32,7 @@ def atvremote() -> str:
     if not path:
         print(
             "atvremote not found. Install pyatv on the AirPlay host:\n"
-            "  pip install 'pyatv==0.16.1'",
+            "  pip install 'pyatv==0.16.1' 'srptools==1.0.1'",
             file=sys.stderr,
         )
         sys.exit(2)

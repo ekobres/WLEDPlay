@@ -180,7 +180,7 @@ Restart policy: if shairport-sync exits, supervisor restarts full stack.
 
 Use **`network_mode: host`** because WLEDPlay requires:
 
-- Bonjour/mDNS (AirPlay advertisement). Avahi publishes IPv4 only; an IPv6 session can deliver track metadata while NQPTP never starts stdout PCM.
+- Bonjour/mDNS (AirPlay advertisement) on IPv4 and IPv6. The AirPlay interface's global addresses, both families, are the timing peers. Link-local addresses and other NICs are left out, so a dual-stack client does not aim the PTP clock at an unreachable address. NQPTP watches every address the client offers.
 - UDP multicast to WLED (`239.0.0.1:11988`)
 - AirPlay 2 PTP (NQPTP). The entrypoint waits for `/dev/shm/nqptp` before starting Shairport.
 
@@ -203,7 +203,7 @@ WLEDPlay stays a receiver. Auto Join asks the **group leader** to add that recei
 Manual probe (Linux, same LAN as the speakers):
 
 ```bash
-pip install 'pyatv==0.16.1'
+pip install 'pyatv==0.16.1' 'srptools==1.0.1'
 python3 scripts/auto-join-spike.py scan --storage config/pyatv/pyatv.json
 python3 scripts/auto-join-spike.py watch --storage config/pyatv/pyatv.json \
   --target-id <speaker-id> --receiver-id <wledplay-output-id>
@@ -217,7 +217,7 @@ Locked contract for the sidecar (`docker/autojoin_sidecar.py`, `127.0.0.1:8091`)
 | Playing | `playing` → device state `Playing` or `Loading` on the selected target only. |
 | Add output | `remote_control.add_output_devices(wledplay_output_id)` sent to the target. Only the current AirPlay leader returns the output list. |
 | Success | Shairport PCM session starts. An MRP `ok` is not success. |
-| Pairing | pyatv `FileStorage` file `config/pyatv/pyatv.json` (gitignored). One-time `atvremote --storage-filename config/pyatv/pyatv.json wizard`. A directory path is not a settings file. Never in the browser. |
+| Pairing | pyatv `FileStorage` file `config/pyatv/pyatv.json` (gitignored). Run the wizard from the compose directory so that relative path exists: `mkdir -p config/pyatv && atvremote --storage-filename config/pyatv/pyatv.json wizard`. Pin `srptools==1.0.1`; srptools 2.0 rejects pyatv's SRP call. A directory path is not a settings file. Never in the browser. |
 | iPhone as sender | Best-effort. If the phone owns the session, add-output usually fails. Surface `Join failed`. Direct AirPlay to WLEDPlay keeps working. |
 | HomePod / Apple TV as leader | The case this is built for: music started on that device, then WLEDPlay is added as an output. |
 

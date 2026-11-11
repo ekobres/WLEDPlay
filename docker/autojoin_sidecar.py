@@ -137,11 +137,31 @@ async def _close(atv) -> None:
         await result
 
 
-async def probe_playing(conf, storage) -> bool:
+async def scan_devices(storage):
+    """pyatv 0.16 requires the running loop; newer releases take keywords only."""
     import pyatv
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await pyatv.scan(loop, timeout=4, storage=storage)
+    except TypeError:
+        return await pyatv.scan(timeout=4, storage=storage)
+
+
+async def connect_device(conf, storage):
+    import pyatv
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await pyatv.connect(conf, loop, storage=storage)
+    except TypeError:
+        return await pyatv.connect(conf, storage=storage)
+
+
+async def probe_playing(conf, storage) -> bool:
     from pyatv.const import DeviceState
 
-    atv = await pyatv.connect(conf, storage=storage)
+    atv = await connect_device(conf, storage)
     try:
         playing = atv.metadata.playing
         if asyncio.iscoroutine(playing):
@@ -153,9 +173,7 @@ async def probe_playing(conf, storage) -> bool:
 
 
 async def add_receiver(conf, receiver_id: str, storage) -> tuple[bool, str]:
-    import pyatv
-
-    atv = await pyatv.connect(conf, storage=storage)
+    atv = await connect_device(conf, storage)
     try:
         rc = atv.remote_control
         current = getattr(rc, "output_devices", []) or []
@@ -175,13 +193,8 @@ async def add_receiver(conf, receiver_id: str, storage) -> tuple[bool, str]:
 
 
 async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) -> dict:
-    import pyatv
-
     storage = loop_storage
-    try:
-        confs = await pyatv.scan(timeout=4, storage=storage)
-    except TypeError:
-        confs = await pyatv.scan(timeout=4)
+    confs = await scan_devices(storage)
     devices = []
     self_id = ""
     by_id = {}
@@ -282,16 +295,10 @@ def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
     network = iface_network(AIRPLAY_IFACE)
 
     async def _run():
-        import pyatv
-
-        loop = asyncio.get_running_loop()
-        storage = _storage(loop)
+        storage = _storage(asyncio.get_running_loop())
         if await _load_storage(storage):
             storage = None
-        try:
-            confs = await pyatv.scan(timeout=4, storage=storage)
-        except TypeError:
-            confs = await pyatv.scan(timeout=4)
+        confs = await scan_devices(storage)
         target = None
         for conf in confs:
             rec = device_record(conf)
