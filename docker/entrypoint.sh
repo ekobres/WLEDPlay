@@ -56,6 +56,9 @@ ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
 PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
 SIDECAR_PID=""
+NQPTP_PID=""
+SHAIRPORT_PID=""
+WLEDPLAY_PID=""
 
 wait_for() {
   path=$1
@@ -109,8 +112,12 @@ start_mdns() {
 }
 
 start_autojoin() {
-  mkdir -p "${PYATV_STORAGE:-/host-config/pyatv}"
-  export PYATV_STORAGE="${PYATV_STORAGE:-/host-config/pyatv}"
+  storage="${PYATV_STORAGE:-/host-config/pyatv}"
+  case "$storage" in
+    *.json|*.conf) mkdir -p "$(dirname "$storage")" ;;
+    *) mkdir -p "$storage" ;;
+  esac
+  export PYATV_STORAGE="$storage"
   export WLEDPLAY_AUTOJOIN_URL="${WLEDPLAY_AUTOJOIN_URL:-http://127.0.0.1:8091}"
   export WLEDPLAY_AIRPLAY_NAME
   echo "Starting Auto Join sidecar..."
@@ -139,8 +146,25 @@ start_mdns
 echo "Starting nqptp..."
 nqptp &
 NQPTP_PID=$!
+# AirPlay 2 does not start the stdout backend until this clock exists.
+if ! wait_for /dev/shm/nqptp 50; then
+  echo "warning: nqptp did not create /dev/shm/nqptp; AirPlay 2 audio will not start"
+fi
+if ! kill -0 "$NQPTP_PID" 2>/dev/null; then
+  echo "fatal: nqptp exited. AirPlay 2 needs UDP 319/320."
+  exit 1
+fi
 
 sed "s/WLEDPlay/${WLEDPLAY_AIRPLAY_NAME}/g" "$SHAIRPORT_SRC" > /tmp/shairport-sync.conf
+# stdout is the PCM pipe. Daemonizing closes that fd and leaves metadata working.
+if grep -Eq '^[[:space:]]*(//[[:space:]]*)?daemonise[[:space:]]*=' /tmp/shairport-sync.conf; then
+  sed -i 's|^[[:space:]]*//[[:space:]]*daemonise = .*|  daemonise = "no";|' /tmp/shairport-sync.conf
+  sed -i 's|^[[:space:]]*daemonise = .*|  daemonise = "no";|' /tmp/shairport-sync.conf
+else
+  sed -i '/^general = {/a\
+  daemonise = "no";
+' /tmp/shairport-sync.conf
+fi
 if [ -n "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
   if grep -q 'interface =' /tmp/shairport-sync.conf; then
     sed -i "s|^[[:space:]]*//[[:space:]]*interface = .*|  interface = \"${WLEDPLAY_AIRPLAY_INTERFACE}\";|" /tmp/shairport-sync.conf

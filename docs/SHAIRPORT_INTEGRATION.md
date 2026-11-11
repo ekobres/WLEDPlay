@@ -180,9 +180,9 @@ Restart policy: if shairport-sync exits, supervisor restarts full stack.
 
 Use **`network_mode: host`** because WLEDPlay requires:
 
-- Bonjour/mDNS (AirPlay advertisement)
+- Bonjour/mDNS (AirPlay advertisement). Avahi publishes IPv4 only; an IPv6 session can deliver track metadata while NQPTP never starts stdout PCM.
 - UDP multicast to WLED (`239.0.0.1:11988`)
-- AirPlay 2 PTP (NQPTP)
+- AirPlay 2 PTP (NQPTP). The entrypoint waits for `/dev/shm/nqptp` before starting Shairport.
 
 No `- /dev/snd` mount required.
 
@@ -204,8 +204,8 @@ Manual probe (Linux, same LAN as the speakers):
 
 ```bash
 pip install 'pyatv==0.16.1'
-python3 scripts/auto-join-spike.py scan --storage config/pyatv
-python3 scripts/auto-join-spike.py watch --storage config/pyatv \
+python3 scripts/auto-join-spike.py scan --storage config/pyatv/pyatv.json
+python3 scripts/auto-join-spike.py watch --storage config/pyatv/pyatv.json \
   --target-id <speaker-id> --receiver-id <wledplay-output-id>
 ```
 
@@ -217,7 +217,7 @@ Locked contract for the sidecar (`docker/autojoin_sidecar.py`, `127.0.0.1:8091`)
 | Playing | `playing` → device state `Playing` or `Loading` on the selected target only. |
 | Add output | `remote_control.add_output_devices(wledplay_output_id)` sent to the target. Only the current AirPlay leader returns the output list. |
 | Success | Shairport PCM session starts. An MRP `ok` is not success. |
-| Pairing | pyatv `FileStorage` under `config/pyatv` (gitignored). One-time `atvremote --storage config/pyatv wizard`. Never in the browser. |
+| Pairing | pyatv `FileStorage` file `config/pyatv/pyatv.json` (gitignored). One-time `atvremote --storage-filename config/pyatv/pyatv.json wizard`. A directory path is not a settings file. Never in the browser. |
 | iPhone as sender | Best-effort. If the phone owns the session, add-output usually fails. Surface `Join failed`. Direct AirPlay to WLEDPlay keeps working. |
 | HomePod / Apple TV as leader | The case this is built for: music started on that device, then WLEDPlay is added as an output. |
 

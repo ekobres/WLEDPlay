@@ -582,9 +582,11 @@
     function paintAutoJoin(aj) {
       if (!aj) return;
       const n = aj.device_count || 0;
-      $("autojoin-discovery").textContent = aj.discovery_active
+      let discovery = aj.discovery_active
         ? ("Discovery active · " + n + (n === 1 ? " device" : " devices"))
         : "Discovery inactive";
+      if (aj.discovery_error) discovery += " · " + aj.discovery_error;
+      $("autojoin-discovery").textContent = discovery;
       $("autojoin-target-status").textContent = aj.target_status || "";
       $("autojoin-runtime").textContent = aj.label || "";
     }

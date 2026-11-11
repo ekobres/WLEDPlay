@@ -8,8 +8,8 @@ Requires the `atvremote` CLI from pyatv 0.16.x on a Linux host that can
 see both the speaker and WLEDPlay via mDNS:
 
     pip install 'pyatv==0.16.1'
-    python3 scripts/auto-join-spike.py scan --storage /host-config/pyatv
-    python3 scripts/auto-join-spike.py watch --storage /host-config/pyatv \\
+    python3 scripts/auto-join-spike.py scan --storage /host-config/pyatv/pyatv.json
+    python3 scripts/auto-join-spike.py watch --storage /host-config/pyatv/pyatv.json \\
         --target-id <speaker-id> --receiver-name WLEDPlay
 
 Success is not the MRP return code. Confirm WLEDPlay logs "PCM stream
@@ -20,6 +20,7 @@ often fails here; that is a Join failed, not a broken receiver.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -43,10 +44,20 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, capture_output=True)
 
 
+def settings_file(storage: str) -> str:
+    """atvremote --storage-filename wants a file. A directory becomes pyatv.json inside it."""
+    if not storage:
+        return ""
+    if storage.endswith((".json", ".conf")) and not os.path.isdir(storage):
+        return storage
+    return os.path.join(storage, "pyatv.json")
+
+
 def base_args(storage: str) -> list[str]:
     cmd = [atvremote()]
-    if storage:
-        cmd.extend(["--storage", storage])
+    filename = settings_file(storage)
+    if filename:
+        cmd.extend(["--storage-filename", filename])
     return cmd
 
 
@@ -57,7 +68,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     print(
         "\nPersist pyatv's identifier (prefer the AirPlay output device id).\n"
         "Do not persist the display name. Pair once with:\n"
-        f"  atvremote --storage {args.storage or '<dir>'} wizard"
+        f"  atvremote --storage-filename {settings_file(args.storage) or '<file>'} wizard"
     )
     return proc.returncode
 
@@ -111,7 +122,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="WLEDPlay Auto Join pyatv spike")
-    parser.add_argument("--storage", default="", help="pyatv credential directory")
+    parser.add_argument(
+        "--storage",
+        default="",
+        help="pyatv settings file, or a directory that contains pyatv.json",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     scan = sub.add_parser("scan", help="print AirPlay devices and identifiers")

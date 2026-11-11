@@ -2,7 +2,9 @@
 """Localhost Auto Join control plane (pyatv).
 
 Binds 127.0.0.1 only. WLEDPlay's operator API remains the only UI.
-Credentials stay in PYATV_STORAGE (default /host-config/pyatv).
+Credentials stay in a pyatv settings file. PYATV_STORAGE may be that file
+or a directory; a directory is stored as <dir>/pyatv.json. FileStorage
+cannot open a directory (Errno 21), and that used to abort discovery.
 
 GET  /v1/scan?name=WLEDPlay&probe=<target-id>
 POST /v1/join   {"target_id","receiver_id"}
@@ -61,11 +63,13 @@ def iface_network(name: str):
 
 
 def address_on_network(addr: str, network) -> bool:
-    if network is None:
+    if network is None or not addr:
         return True
     try:
         return ip_address(addr) in network
-    except ValueError:
+    except (ValueError, TypeError):
+        # IPv6 addresses are not members of the IPv4 interface network.
+        # Drop the device; do not abort the rest of the scan.
         return False
 
 
@@ -212,15 +216,37 @@ async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) ->
     }
 
 
+def storage_file() -> str:
+    """FileStorage path. A directory (the Docker default) becomes pyatv.json inside it."""
+    raw = STORAGE
+    if raw.endswith((".json", ".conf")) and not os.path.isdir(raw):
+        parent = os.path.dirname(raw) or "."
+        os.makedirs(parent, exist_ok=True)
+        return raw
+    os.makedirs(raw, exist_ok=True)
+    return os.path.join(raw, "pyatv.json")
+
+
 def _storage(loop):
-    os.makedirs(STORAGE, exist_ok=True)
     try:
         from pyatv.storage.file_storage import FileStorage
 
-        storage = FileStorage(STORAGE, loop)
-        return storage
+        return FileStorage(storage_file(), loop)
     except Exception:
         return None
+
+
+async def _load_storage(storage) -> str:
+    """Load credentials. Failure returns an error string and must not cancel a scan."""
+    if storage is None or not hasattr(storage, "load"):
+        return ""
+    try:
+        load = storage.load()
+        if asyncio.iscoroutine(load):
+            await load
+        return ""
+    except Exception as exc:
+        return str(exc)
 
 
 def refresh(probe_id: str, receiver_name: str) -> None:
@@ -229,13 +255,14 @@ def refresh(probe_id: str, receiver_name: str) -> None:
         loop = asyncio.new_event_loop()
         try:
             storage = _storage(loop)
-            if storage is not None and hasattr(storage, "load"):
-                load = storage.load()
-                if asyncio.iscoroutine(load):
-                    loop.run_until_complete(load)
+            storage_error = loop.run_until_complete(_load_storage(storage))
+            if storage_error:
+                storage = None
             payload = loop.run_until_complete(
                 scan_once(storage, probe_id, receiver_name, network)
             )
+            if storage_error and not payload.get("error"):
+                payload["error"] = storage_error
         finally:
             loop.close()
     except Exception as exc:
@@ -259,10 +286,8 @@ def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
 
         loop = asyncio.get_running_loop()
         storage = _storage(loop)
-        if storage is not None and hasattr(storage, "load"):
-            load = storage.load()
-            if asyncio.iscoroutine(load):
-                await load
+        if await _load_storage(storage):
+            storage = None
         try:
             confs = await pyatv.scan(timeout=4, storage=storage)
         except TypeError:
