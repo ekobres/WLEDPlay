@@ -1,6 +1,6 @@
 //! Tell stock NQPTP which clock to follow.
 //!
-//! Shairport Sync 5.5.1 builds this list during AirPlay 2 group setup and then
+//! Shairport Sync 5.6.3 builds this list during AirPlay 2 group setup and then
 //! leaves it unsent until the audio stream exists. The sender's address is
 //! already on the metadata pipe (`ssnc`/`conn`) at that moment. NQPTP's control
 //! port is the same socket Shairport uses later: `/nqptp T <ip>` then `/nqptp B`,

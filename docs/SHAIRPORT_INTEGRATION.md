@@ -10,8 +10,8 @@ WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceab
 
 | Component | Recommendation | Notes |
 |-----------|----------------|-------|
-| Shairport Sync | **5.5.1** (pinned in Docker) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr`, `--with-metadata` |
-| NQPTP | **1.2.8** (pinned in Docker) | Required for AirPlay 2 timing (`smi10`) |
+| Shairport Sync | **5.6.3** (pinned in Docker) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr`, `--with-metadata` |
+| NQPTP | **1.2.9** (pinned in Docker) | Required for AirPlay 2 timing (`smi11`). Must match the Shairport Sync shared-memory version. |
 
 Pin exact versions in Docker image tags for reproducibility.
 

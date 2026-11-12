@@ -2,8 +2,8 @@
 # AirPlay 2 stack for Linux hosts (network_mode: host).
 # Official Shairport AP2 cannot run on macOS — NQPTP needs UDP 319/320.
 
-ARG SHAIRPORT_VERSION=5.5.1
-ARG NQPTP_VERSION=1.2.8
+ARG SHAIRPORT_VERSION=5.6.3
+ARG NQPTP_VERSION=1.2.9
 
 FROM rust:1.89-bookworm AS wledplay-build
 WORKDIR /src
@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium-dev libavutil-dev libavcodec-dev libavformat-dev xxd \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+# Stock 5.6.3. It must be built with NQPTP 1.2.9: both use shared-memory version 11.
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \

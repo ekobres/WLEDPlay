@@ -21,7 +21,7 @@ Send delay semantics (for lead `-1.2` → on-time = `1200` ms):
 ## Procedure
 
 1. On Linux: `./scripts/run-airplay.sh` or `docker compose up -d --build` with host networking.
-2. Confirm `shairport-sync -V` contains `AirPlay2` and `nqptp -V` reports the same SMI version (`smi10` for 5.5.1 / 1.2.8).
+2. Confirm `shairport-sync -V` contains `AirPlay2` and `nqptp -V` reports the same SMI version (`smi11` for 5.6.3 / 1.2.9).
 3. In Control Center, start a group that includes **WLEDPlay** and a known-good speaker.
 4. Play a track with sharp transients (metronome, clap, kick).
 5. Watch WLED (PS GEQ 2D) vs the speaker.
