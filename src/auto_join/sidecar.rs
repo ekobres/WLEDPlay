@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 const RECV_SLICE: Duration = Duration::from_millis(50);
 const SCAN_EVERY: Duration = Duration::from_secs(2);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+const JOIN_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Default)]
 struct Discovery {
@@ -284,7 +285,7 @@ fn fetch_scan(base: &str, name: &str, probe: &str) -> Result<ScanBody, String> {
         query_escape(name),
         query_escape(probe)
     );
-    let (code, body) = http_exchange(base, "GET", &path, None)?;
+    let (code, body) = http_exchange(base, "GET", &path, None, HTTP_TIMEOUT)?;
     if !(200..300).contains(&code) {
         return Err(if body.is_empty() {
             format!("scan http {code}")
@@ -301,7 +302,8 @@ fn post_join(base: &str, req: &JoinRequest) -> Result<(), String> {
         "receiver_id": req.receiver_id,
     })
     .to_string();
-    let (code, body) = http_exchange(base, "POST", "/v1/join", Some(payload.as_bytes()))?;
+    let (code, body) =
+        http_exchange(base, "POST", "/v1/join", Some(payload.as_bytes()), JOIN_HTTP_TIMEOUT)?;
     if !(200..300).contains(&code) {
         if body.is_empty() {
             return Err(format!("join http {code}"));
@@ -341,6 +343,7 @@ fn http_exchange(
     method: &str,
     path: &str,
     body: Option<&[u8]>,
+    timeout: Duration,
 ) -> Result<(u16, String), String> {
     let (host, port) = parse_http_base(base)?;
     let addr = SocketAddr::new(
@@ -348,10 +351,9 @@ fn http_exchange(
             .map_err(|_| "auto join url must be http://host:port".to_string())?,
         port,
     );
-    let mut stream =
-        TcpStream::connect_timeout(&addr, HTTP_TIMEOUT).map_err(|err| err.to_string())?;
-    let _ = stream.set_read_timeout(Some(HTTP_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(HTTP_TIMEOUT));
+    let mut stream = TcpStream::connect_timeout(&addr, timeout).map_err(|err| err.to_string())?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
     let body = body.unwrap_or_default();
     let request = format!(
         "{method} {path} HTTP/1.0\r\nHost: {host}:{port}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -437,8 +439,8 @@ mod tests {
             parse_http(b"HTTP/1.1 204 Empty\r\n\r\nhi").unwrap(),
             (204, "hi".into())
         );
-        assert!(http_exchange("http://127.0.0.1:1", "GET", "/", None).is_err());
-        assert!(http_exchange("http://not a host:80", "GET", "/", None).is_err());
+        assert!(http_exchange("http://127.0.0.1:1", "GET", "/", None, HTTP_TIMEOUT).is_err());
+        assert!(http_exchange("http://not a host:80", "GET", "/", None, HTTP_TIMEOUT).is_err());
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -447,7 +449,13 @@ mod tests {
             let mut buf = [0u8; 128];
             let _ = sock.read(&mut buf);
         });
-        let empty = http_exchange(&format!("http://127.0.0.1:{port}"), "GET", "/v1/scan", None);
+        let empty = http_exchange(
+            &format!("http://127.0.0.1:{port}"),
+            "GET",
+            "/v1/scan",
+            None,
+            HTTP_TIMEOUT,
+        );
         assert!(empty.is_err());
         let _ = handle.join();
     }

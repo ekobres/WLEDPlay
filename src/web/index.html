@@ -543,6 +543,16 @@
       return (devices || []).map((d) => (d.id || "") + "\t" + (d.label || d.name || "")).sort().join("\n");
     }
 
+    function sortedDevices(devices) {
+      return (devices || []).slice().sort(function (a, b) {
+        const an = (a.name || a.label || a.id || "").toLocaleLowerCase();
+        const bn = (b.name || b.label || b.id || "").toLocaleLowerCase();
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      });
+    }
+
     function renderTargets(keepId, keepName, devices) {
       const sel = $("ctl-autojoin-target");
       // Rebuilding while the menu is open moves the row under the cursor.
@@ -557,8 +567,9 @@
       blank.textContent = "No target";
       blank.dataset.name = "";
       sel.appendChild(blank);
+      const rows = sortedDevices(devices);
       let found = !previous;
-      (devices || []).forEach((d) => {
+      rows.forEach((d) => {
         const o = document.createElement("option");
         o.value = d.id;
         o.textContent = d.label || d.name || d.id;
@@ -572,7 +583,17 @@
         const name = keepName || previous;
         o.textContent = name + " — currently unavailable";
         o.dataset.name = name;
-        sel.appendChild(o);
+        const nameKey = name.toLocaleLowerCase();
+        let placed = false;
+        for (const existing of Array.from(sel.options).slice(1)) {
+          const existingName = (existing.dataset.name || existing.textContent || "").toLocaleLowerCase();
+          if (nameKey < existingName) {
+            sel.insertBefore(o, existing);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) sel.appendChild(o);
       }
       sel.value = previous;
     }
@@ -599,7 +620,9 @@
       if (aj.discovery_error) discovery += " · " + aj.discovery_error;
       $("autojoin-discovery").textContent = discovery;
       $("autojoin-target-status").textContent = aj.target_status || "";
-      $("autojoin-runtime").textContent = aj.label || "";
+      let runtime = aj.label || "";
+      if (aj.last_error) runtime += " · " + aj.last_error;
+      $("autojoin-runtime").textContent = runtime;
     }
 
     function formSnapshot() {

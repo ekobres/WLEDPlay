@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 pub const IDLE_DEBOUNCE_MS: u64 = 3_000;
 pub const JOIN_TIMEOUT_MS: u64 = 8_000;
-pub const REQUEST_TIMEOUT_MS: u64 = 5_000;
+pub const REQUEST_TIMEOUT_MS: u64 = 20_000;
 const RETRY_DELAYS_MS: [u64; 5] = [0, 500, 1_000, 2_000, 4_000];
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -614,6 +614,12 @@ pub fn device_choices(
             playing: false,
         });
     }
+    choices.sort_by(|a, b| {
+        a.label
+            .to_ascii_lowercase()
+            .cmp(&b.label.to_ascii_lowercase())
+            .then_with(|| a.id.cmp(&b.id))
+    });
     choices
 }
 
@@ -1299,6 +1305,10 @@ mod tests {
             .iter()
             .any(|c| c.label.contains("currently unavailable")));
         assert!(!choices.iter().any(|c| c.id == "self" || c.id == "old"));
+        let labels: Vec<_> = choices.iter().map(|c| c.label.to_ascii_lowercase()).collect();
+        let mut ordered = labels.clone();
+        ordered.sort();
+        assert_eq!(labels, ordered);
         assert_eq!(detected_count(&list, "self", "WLEDPlay"), 5);
         assert!(find_target(&[], "").is_none());
         assert_eq!(display_target("", ""), "(none)");
