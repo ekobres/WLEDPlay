@@ -2,7 +2,8 @@
 # AirPlay 2 stack for Linux hosts (network_mode: host).
 # Official Shairport AP2 cannot run on macOS — NQPTP needs UDP 319/320.
 
-ARG SHAIRPORT_VERSION=5.6.3
+ARG SHAIRPORT_REPO=https://github.com/ekobres/shairport-sync.git
+ARG SHAIRPORT_REF=seamless-group-join
 ARG NQPTP_VERSION=1.2.9
 
 FROM rust:1.89-bookworm AS wledplay-build
@@ -12,7 +13,8 @@ COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim AS shairport-build
-ARG SHAIRPORT_VERSION
+ARG SHAIRPORT_REPO
+ARG SHAIRPORT_REF
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool pkg-config \
@@ -21,9 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium-dev libavutil-dev libavcodec-dev libavformat-dev xxd \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-# Stock 5.6.3. It must be built with NQPTP 1.2.9: both use shared-memory version 11.
-RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
-      https://github.com/mikebrady/shairport-sync.git && \
+# seamless-group-join on the fork, cut from 5.6.3. NQPTP stays 1.2.9 (smi11).
+RUN git clone --depth 1 --branch "${SHAIRPORT_REF}" \
+      "${SHAIRPORT_REPO}" && \
     cd shairport-sync && \
     autoreconf -fi && \
     ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata && \
