@@ -358,15 +358,68 @@ def output_lists_receiver(current, receiver_ids: list[str], receiver_name: str) 
     return False
 
 
+def group_edit_supported(atv) -> bool:
+    """add_output_devices lives on pyatv's audio interface, not remote_control."""
+    features = getattr(atv, "features", None)
+    if features is not None:
+        try:
+            from pyatv.const import FeatureName, FeatureState
+
+            state = features.get_feature(FeatureName.AddOutputDevices).state
+            return state == FeatureState.Available
+        except Exception:
+            pass
+    audio = getattr(atv, "audio", None)
+    return callable(getattr(audio, "add_output_devices", None))
+
+
+def audio_controls(atv):
+    audio = getattr(atv, "audio", None)
+    if audio is not None and callable(getattr(audio, "add_output_devices", None)):
+        return audio
+    remote = getattr(atv, "remote_control", None)
+    if remote is not None and callable(getattr(remote, "add_output_devices", None)):
+        return remote
+    return None
+
+
+def ranked_ids(target_id: str, props_by_id: dict, names: dict, receiver_name: str) -> list[str]:
+    """Group leaders first, then the selected speaker, then other session members."""
+    if target_id not in props_by_id:
+        return []
+    mine = props_by_id.get(target_id, {})
+    leaders = []
+    others = []
+    for ident, peer in props_by_id.items():
+        if ident == target_id:
+            continue
+        if receiver_name and (names.get(ident) or "").lower() == receiver_name.lower():
+            continue
+        if not shares_session(mine, peer) and not shares_session(peer, mine):
+            continue
+        if is_group_leader_txt(peer):
+            leaders.append(ident)
+        else:
+            others.append(ident)
+    ordered = list(leaders)
+    ordered.append(target_id)
+    for ident in others[:2]:
+        if ident not in ordered:
+            ordered.append(ident)
+    return ordered
+
+
 async def add_receiver(conf, receiver_ids: list[str], receiver_name: str, storage) -> tuple[bool, str]:
     """Ask the group leader to add WLEDPlay. Success requires it to show up."""
     atv = await connect_device(conf, storage)
     try:
-        rc = getattr(atv, "remote_control", None)
-        add = getattr(rc, "add_output_devices", None)
-        if rc is None or not callable(add):
+        if not group_edit_supported(atv):
             return False, "group modification not supported"
-        current = await output_snapshot(rc)
+        audio = audio_controls(atv)
+        add = getattr(audio, "add_output_devices", None)
+        if audio is None or not callable(add):
+            return False, "group modification not supported"
+        current = await output_snapshot(audio)
         if output_lists_receiver(current, receiver_ids, receiver_name):
             return True, "already in group"
         last = "group leader did not add WLEDPlay"
@@ -379,7 +432,7 @@ async def add_receiver(conf, receiver_ids: list[str], receiver_name: str, storag
                     return False, "group modification not supported"
                 last = str(exc)
                 continue
-            current = await output_snapshot(rc)
+            current = await output_snapshot(audio)
             if output_lists_receiver(current, receiver_ids, receiver_name):
                 return True, ""
         return False, last
@@ -560,48 +613,6 @@ def refresh(probe_id: str, receiver_name: str) -> None:
         _cache.update(payload)
 
 
-async def playing_leader(target_id, by_id, props_by_id, names, receiver_name, storage):
-    """The selected speaker when it owns playback, otherwise its group leader."""
-    target = by_id.get(target_id)
-    if target is None:
-        return None, "unable to identify group leader"
-    props = props_by_id.get(target_id, {})
-    target_error = ""
-    try:
-        if await probe_playing(target, storage):
-            return target, ""
-    except Exception as exc:
-        target_error = str(exc)
-    leaders = []
-    others = []
-    for ident, conf in by_id.items():
-        if ident == target_id:
-            continue
-        if receiver_name and (names.get(ident) or "").lower() == receiver_name.lower():
-            continue
-        peer = props_by_id.get(ident, {})
-        if not shares_session(props, peer):
-            continue
-        if is_group_leader_txt(peer):
-            leaders.append(conf)
-        else:
-            others.append(conf)
-    saw = ""
-    for conf in (leaders + others)[:3]:
-        try:
-            if await probe_playing(conf, storage):
-                return conf, ""
-        except Exception as exc:
-            saw = str(exc)
-    if receiving_audio(props):
-        return None, "group leader is not controllable"
-    if target_error:
-        return None, target_error
-    if saw:
-        return None, saw
-    return None, "target is not playing"
-
-
 def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
     if not target_id or not receiver_id:
         return False, "target_id and receiver_id are required"
@@ -628,21 +639,44 @@ def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
                 self_deviceid = scanned_id
         if not self_deviceid:
             self_deviceid = index.get("self_deviceid") or ""
-        leader, err = await playing_leader(
-            target_id, by_id, props_by_id, _names, receiver_name, storage
-        )
-        if leader is None:
-            return False, err
         output_ids = receiver_output_ids(self_deviceid, receiver_id)
         if not output_ids:
             return False, "unable to identify WLEDPlay receiver"
-        try:
-            return await add_receiver(leader, output_ids, receiver_name, storage)
-        except Exception as exc:
-            text = str(exc).lower()
-            if "not supported" in text or "unsupported" in text:
-                return False, "group modification not supported"
-            return False, str(exc)
+        if target_id not in by_id:
+            return False, "unable to identify group leader"
+        last = "target is not playing"
+        tried = False
+        for ident in ranked_ids(target_id, props_by_id, _names, receiver_name):
+            conf = by_id.get(ident)
+            if conf is None:
+                continue
+            try:
+                playing = await probe_playing(conf, storage)
+            except Exception as exc:
+                if ident == target_id and not tried:
+                    last = str(exc)
+                continue
+            if not playing and not (
+                ident == target_id and receiving_audio(props_by_id.get(target_id, {}))
+            ):
+                continue
+            tried = True
+            try:
+                ok, err = await add_receiver(conf, output_ids, receiver_name, storage)
+            except Exception as exc:
+                text = str(exc).lower()
+                if "not supported" in text or "unsupported" in text:
+                    last = "group modification not supported"
+                    continue
+                return False, str(exc)
+            if ok:
+                return True, err
+            if err != "group modification not supported":
+                return False, err
+            last = err
+        if not tried and receiving_audio(props_by_id.get(target_id, {})):
+            return False, "group leader is not controllable"
+        return False, last
 
     try:
         return asyncio.run(_run())

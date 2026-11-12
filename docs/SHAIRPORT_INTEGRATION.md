@@ -215,7 +215,7 @@ Locked contract for the sidecar (`docker/autojoin_sidecar.py`, `127.0.0.1:8091`)
 |---|---|
 | Stable id | pyatv AirPlay **output device id** when present, otherwise the scan `identifier`. Never the display name. |
 | Playing | `playing` → device state `Playing` or `Loading` on the selected target, or on the AirPlay group leader that currently has that speaker in its group. |
-| Add output | `remote_control.add_output_devices` is sent to that group leader, using WLEDPlay’s AirPlay `deviceid` (MAC). The leader’s output list must include WLEDPlay before the add counts as sent. |
+| Add output | `audio.add_output_devices` is sent to that group leader, using WLEDPlay’s AirPlay `deviceid` (MAC). pyatv exposes group edits on the audio interface. The leader’s output list must include WLEDPlay before the add counts as sent. |
 | Success | Shairport PCM session starts. An MRP `ok` is not success. |
 | Pairing | pyatv `FileStorage` file `config/pyatv/pyatv.json` (gitignored). Run the wizard from the compose directory so that relative path exists: `mkdir -p config/pyatv && atvremote --storage-filename config/pyatv/pyatv.json wizard`. Pin `srptools==1.0.1`; srptools 2.0 rejects pyatv's SRP call. A directory path is not a settings file. Never in the browser. |
 | iPhone as sender | Best-effort. If the phone owns the session, add-output usually fails. Surface `Join failed`. Direct AirPlay to WLEDPlay keeps working. |
