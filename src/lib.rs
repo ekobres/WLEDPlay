@@ -5,6 +5,7 @@ pub mod config;
 pub mod control;
 pub mod metadata;
 pub mod netif;
+pub mod nqptp;
 pub mod pcm;
 pub mod runtime;
 pub mod timing;

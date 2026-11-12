@@ -1286,7 +1286,10 @@ mod tests {
         );
         assert!(expired.logs.iter().any(|l| l.contains("timed out waiting")));
         assert_eq!(expired.view.state, "error");
-        assert!(expired.view.label.contains("timed out waiting for inbound AirPlay session"));
+        assert!(expired
+            .view
+            .label
+            .contains("timed out waiting for inbound AirPlay session"));
         assert!(expired.join.is_none());
         let still = tick(
             &mut svc,
@@ -1341,7 +1344,10 @@ mod tests {
             .iter()
             .any(|c| c.label.contains("currently unavailable")));
         assert!(!choices.iter().any(|c| c.id == "self" || c.id == "old"));
-        let labels: Vec<_> = choices.iter().map(|c| c.label.to_ascii_lowercase()).collect();
+        let labels: Vec<_> = choices
+            .iter()
+            .map(|c| c.label.to_ascii_lowercase())
+            .collect();
         let mut ordered = labels.clone();
         ordered.sort();
         assert_eq!(labels, ordered);

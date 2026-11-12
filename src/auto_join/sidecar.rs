@@ -302,8 +302,13 @@ fn post_join(base: &str, req: &JoinRequest) -> Result<(), String> {
         "receiver_id": req.receiver_id,
     })
     .to_string();
-    let (code, body) =
-        http_exchange(base, "POST", "/v1/join", Some(payload.as_bytes()), JOIN_HTTP_TIMEOUT)?;
+    let (code, body) = http_exchange(
+        base,
+        "POST",
+        "/v1/join",
+        Some(payload.as_bytes()),
+        JOIN_HTTP_TIMEOUT,
+    )?;
     if !(200..300).contains(&code) {
         if body.is_empty() {
             return Err(format!("join http {code}"));

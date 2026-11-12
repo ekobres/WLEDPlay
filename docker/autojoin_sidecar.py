@@ -16,6 +16,8 @@ import asyncio
 import json
 import os
 import re
+import socket
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
@@ -25,6 +27,8 @@ LISTEN = os.environ.get("AUTOJOIN_LISTEN", "127.0.0.1:8091")
 STORAGE = os.environ.get("PYATV_STORAGE", "/host-config/pyatv")
 RECEIVER_NAME = os.environ.get("WLEDPLAY_AIRPLAY_NAME", "WLEDPlay")
 AIRPLAY_IFACE = os.environ.get("WLEDPLAY_AIRPLAY_INTERFACE", "").strip()
+NQPTP_HOST = os.environ.get("NQPTP_CONTROL_HOST", "127.0.0.1")
+NQPTP_PORT = int(os.environ.get("NQPTP_CONTROL_PORT", "9000"))
 
 _lock = threading.Lock()
 _cache = {
@@ -62,6 +66,36 @@ def iface_network(name: str):
         except ValueError:
             continue
     return None
+
+
+def nqptp_arm(ip: str) -> bool:
+    """Ask stock NQPTP to follow this address and mark the clock active.
+
+    Shairport sends the same datagrams when audio setup starts. Group setup
+    needs them earlier, or the leader never opens the audio stream. A bad
+    address or a missing NQPTP must not fail the group add.
+    """
+    text = (ip or "").strip().strip("[]")
+    if not text:
+        return False
+    try:
+        ip_address(text)
+    except ValueError:
+        return False
+    timing = f"/nqptp T {text}\0".encode()
+    play = b"/nqptp B\0"
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.sendto(timing, (NQPTP_HOST, NQPTP_PORT))
+            sock.sendto(play, (NQPTP_HOST, NQPTP_PORT))
+        finally:
+            sock.close()
+    except OSError as exc:
+        print(f"Auto Join NQPTP arm failed: {exc}", file=sys.stderr, flush=True)
+        return False
+    print(f"Auto Join NQPTP following {text}", file=sys.stderr, flush=True)
+    return True
 
 
 def address_on_network(addr: str, network) -> bool:
@@ -409,8 +443,11 @@ def ranked_ids(target_id: str, props_by_id: dict, names: dict, receiver_name: st
     return ordered
 
 
-async def add_receiver(conf, receiver_ids: list[str], receiver_name: str, storage) -> tuple[bool, str]:
+async def add_receiver(
+    conf, receiver_ids: list[str], receiver_name: str, storage, leader_address: str
+) -> tuple[bool, str]:
     """Ask the group leader to add WLEDPlay. Success requires it to show up."""
+    nqptp_arm(leader_address)
     atv = await connect_device(conf, storage)
     try:
         if not group_edit_supported(atv):
@@ -661,8 +698,11 @@ def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
             ):
                 continue
             tried = True
+            leader_address = str(getattr(conf, "address", "") or "")
             try:
-                ok, err = await add_receiver(conf, output_ids, receiver_name, storage)
+                ok, err = await add_receiver(
+                    conf, output_ids, receiver_name, storage, leader_address
+                )
             except Exception as exc:
                 text = str(exc).lower()
                 if "not supported" in text or "unsupported" in text:
