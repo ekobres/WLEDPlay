@@ -6,7 +6,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/ensure-config.sh"
 PREFIX="${WLEDPLAY_PREFIX:-$ROOT/vendor}"
-SHAIRPORT_VERSION="${SHAIRPORT_VERSION:-5.6.3}"
+# Upstream base: mikebrady/shairport-sync 5.6.3 (7ce90d89).
+# The fork's master tracks that upstream. This script builds the seamless-group-join
+# branch. SHAIRPORT_REF may be a branch name or a commit.
+SHAIRPORT_REPO="${SHAIRPORT_REPO:-https://github.com/ekobres/shairport-sync.git}"
+SHAIRPORT_REF="${SHAIRPORT_REF:-seamless-group-join}"
 NQPTP_VERSION="${NQPTP_VERSION:-1.2.9}"
 SRC="$PREFIX/src"
 mkdir -p "$PREFIX/bin" "$SRC"
@@ -39,6 +43,20 @@ clone_tag() {
   fi
 }
 
+clone_ref() {
+  local url="$1" dest="$2" ref="$3"
+  if [[ ! -d "$dest/.git" ]]; then
+    git init -q "$dest"
+  fi
+  if git -C "$dest" remote get-url origin >/dev/null 2>&1; then
+    git -C "$dest" remote set-url origin "$url"
+  else
+    git -C "$dest" remote add origin "$url"
+  fi
+  git -C "$dest" fetch --depth 1 origin "$ref"
+  git -C "$dest" checkout -f --detach FETCH_HEAD
+}
+
 echo "Building nqptp ${NQPTP_VERSION}..."
 clone_tag https://github.com/mikebrady/nqptp.git "$SRC/nqptp" "$NQPTP_VERSION"
 (
@@ -49,8 +67,8 @@ clone_tag https://github.com/mikebrady/nqptp.git "$SRC/nqptp" "$NQPTP_VERSION"
   make install
 )
 
-echo "Building shairport-sync ${SHAIRPORT_VERSION} (AirPlay 2 + stdout)..."
-clone_tag https://github.com/mikebrady/shairport-sync.git "$SRC/shairport-sync" "$SHAIRPORT_VERSION"
+echo "Building shairport-sync ${SHAIRPORT_REF} from ${SHAIRPORT_REPO} (AirPlay 2 + stdout)..."
+clone_ref "$SHAIRPORT_REPO" "$SRC/shairport-sync" "$SHAIRPORT_REF"
 (
   cd "$SRC/shairport-sync"
   autoreconf -fi
