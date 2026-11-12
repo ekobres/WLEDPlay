@@ -126,8 +126,7 @@
 
 --- a/player.c	2026-11-11 14:24:45
 +++ b/player.c	2026-11-11 14:24:45
-@@ -2063,5 +2063,7 @@
-   do {
+@@ -2064,5 +2064,7 @@
      // debug(3, "buffer_get_frame is iterating");
 -    // we must have timing information before we can do anything here
 -    if ((have_timestamp_timing_information(conn)) && (conn->input_format_is_valid != 0)) {
@@ -136,9 +135,8 @@
 +    if ((conn->input_format_is_valid != 0) &&
 +        (have_timestamp_timing_information(conn) || (config.output->delay == NULL))) {
  
-@@ -2453,6 +2455,9 @@
-                 frame_to_local_time(conn->first_packet_timestamp, // this will go modulo 2^32
-                                     &should_be_time, conn);
+ /*
+@@ -2455,4 +2457,7 @@
  
                  conn->first_packet_time_to_play = should_be_time;
 +                if ((config.output->delay == NULL) &&
@@ -146,11 +144,7 @@
 +                  conn->first_packet_time_to_play = get_absolute_time_in_ns();
  
                  int64_t lt = conn->first_packet_time_to_play - get_absolute_time_in_ns();
-@@ -2712,8 +2717,10 @@
-               debug(2, "packet rtptime: %u, reference_timestamp: %u", curframe->timestamp,
-                     conn->anchor_rtptime);
- 
-               do_wait = 0; // let it go
+@@ -2716,6 +2721,8 @@
              }
            }
 -        }
@@ -158,3 +152,5 @@
 +          do_wait = 0;
 +        }
        }
+       if (do_wait == 0)
+         // wait if the buffer is empty
