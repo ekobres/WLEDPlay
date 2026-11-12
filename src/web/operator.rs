@@ -193,6 +193,7 @@ mod tests {
         assert!(html.contains("id=\"ctl-autojoin\""));
         assert!(html.contains("id=\"ctl-autojoin-target\""));
         assert!(html.contains("id=\"autojoin-discovery\""));
+        assert!(html.contains("document.activeElement === sel"));
         assert!(html.contains("aj.discovery_error"));
         assert!(html.contains("id=\"autojoin-target-status\""));
         assert!(html.contains("id=\"autojoin-runtime\""));

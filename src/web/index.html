@@ -537,9 +537,20 @@
       return opt && opt.dataset.name ? opt.dataset.name : "";
     }
 
+    let renderedTargets = "";
+
+    function deviceSignature(devices) {
+      return (devices || []).map((d) => (d.id || "") + "\t" + (d.label || d.name || "")).sort().join("\n");
+    }
+
     function renderTargets(keepId, keepName, devices) {
       const sel = $("ctl-autojoin-target");
+      // Rebuilding while the menu is open moves the row under the cursor.
+      if (document.activeElement === sel) return;
       const previous = keepId || "";
+      const sig = deviceSignature(devices) + "\0" + previous + "\0" + (keepName || "");
+      if (sig === renderedTargets && sel.value === previous) return;
+      renderedTargets = sig;
       sel.innerHTML = "";
       const blank = document.createElement("option");
       blank.value = "";

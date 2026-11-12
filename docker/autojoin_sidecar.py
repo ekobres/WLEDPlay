@@ -158,16 +158,23 @@ async def connect_device(conf, storage):
         return await pyatv.connect(conf, storage=storage)
 
 
-async def probe_playing(conf, storage) -> bool:
+async def read_playing(atv) -> bool:
+    """pyatv 0.16 exposes playing() as a coroutine method, not a property."""
     from pyatv.const import DeviceState
 
+    playing = atv.metadata.playing
+    if callable(playing):
+        playing = playing()
+    if asyncio.iscoroutine(playing):
+        playing = await playing
+    state = getattr(playing, "device_state", None)
+    return state in (DeviceState.Playing, DeviceState.Loading)
+
+
+async def probe_playing(conf, storage) -> bool:
     atv = await connect_device(conf, storage)
     try:
-        playing = atv.metadata.playing
-        if asyncio.iscoroutine(playing):
-            playing = await playing
-        state = getattr(playing, "device_state", None)
-        return state in (DeviceState.Playing, DeviceState.Loading)
+        return await read_playing(atv)
     finally:
         await _close(atv)
 
@@ -203,6 +210,10 @@ async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) ->
         if rec is None:
             continue
         if not address_on_network(rec["address"], network):
+            continue
+        # One row per id. A second address family must not add another option
+        # with the same value, or the select jumps to the first match.
+        if rec["id"] in by_id:
             continue
         by_id[rec["id"]] = conf
         if receiver_name and rec["name"].lower() == receiver_name.lower():
