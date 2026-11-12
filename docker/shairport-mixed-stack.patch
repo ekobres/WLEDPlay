@@ -10,7 +10,7 @@
  
 --- a/rtsp.c	2026-11-11 14:24:45
 +++ b/rtsp.c	2026-11-11 14:24:45
-@@ -579,11 +579,50 @@
+@@ -579,11 +579,51 @@
  }
  
  #ifdef CONFIG_AIRPLAY_2
@@ -56,7 +56,8 @@
 -  strncat(timing_list_message, "T ", sizeof(timing_list_message) - 1 - strlen(timing_list_message));
 -  strncat(timing_list_message, (const char *)&conn->client_ip_string,
 -          sizeof(timing_list_message) - 1 - strlen(timing_list_message));
-+  if (conn->timing_peer_list[0] == 'T') {
++  /* A bare "T" tells NQPTP to delete every clock. Only a list with an address is usable. */
++  if ((conn->timing_peer_list[0] == 'T') && (strchr(conn->timing_peer_list, ' ') != NULL)) {
 +    ptp_send_control_message_string(conn->timing_peer_list);
 +    return;
 +  }
@@ -111,7 +112,7 @@
                      inet_ntop(AF_INET6, (void *)&addr6->sin6_addr, buf, sizeof(buf));
                      plist_array_append_item(addresses, plist_new_string(buf));
                      // debug(1, "Own address IPv6: %s", buf);
-@@ -2660,6 +2700,9 @@
+@@ -2660,7 +2700,10 @@
                      conn->connection_number);
              }
  
@@ -121,3 +122,39 @@
              // since the GID from the client has been acquired, update the airplay bonjour strings.
              build_bonjour_strings(conn);
              debug(2, "Connection %d: SETUP mdns_update on %s.", conn->connection_number,
+                   get_category_string(conn->airplay_stream_category));
+
+--- a/player.c	2026-11-11 14:24:45
++++ b/player.c	2026-11-11 14:24:45
+@@ -2063,5 +2063,7 @@
+   do {
+     // debug(3, "buffer_get_frame is iterating");
+-    // we must have timing information before we can do anything here
+-    if ((have_timestamp_timing_information(conn)) && (conn->input_format_is_valid != 0)) {
++    // stdout has no delay callback, so a missing PTP lock must not hold audio.
++    // A group add can deliver metadata and packets before any clock locks.
++    if ((conn->input_format_is_valid != 0) &&
++        (have_timestamp_timing_information(conn) || (config.output->delay == NULL))) {
+ 
+@@ -2453,6 +2455,9 @@
+                 frame_to_local_time(conn->first_packet_timestamp, // this will go modulo 2^32
+                                     &should_be_time, conn);
+ 
+                 conn->first_packet_time_to_play = should_be_time;
++                if ((config.output->delay == NULL) &&
++                    (have_timestamp_timing_information(conn) == 0))
++                  conn->first_packet_time_to_play = get_absolute_time_in_ns();
+ 
+                 int64_t lt = conn->first_packet_time_to_play - get_absolute_time_in_ns();
+@@ -2712,8 +2717,10 @@
+               debug(2, "packet rtptime: %u, reference_timestamp: %u", curframe->timestamp,
+                     conn->anchor_rtptime);
+ 
+               do_wait = 0; // let it go
+             }
+           }
+-        }
++        } else if (config.output->delay == NULL) {
++          do_wait = 0;
++        }
+       }

@@ -8,7 +8,7 @@ use crate::web::{AirPlayDeviceInfo, AutoJoinStatus};
 use serde::Deserialize;
 
 pub const IDLE_DEBOUNCE_MS: u64 = 3_000;
-pub const JOIN_TIMEOUT_MS: u64 = 8_000;
+pub const JOIN_TIMEOUT_MS: u64 = 45_000;
 pub const REQUEST_TIMEOUT_MS: u64 = 20_000;
 const RETRY_DELAYS_MS: [u64; 5] = [0, 500, 1_000, 2_000, 4_000];
 
@@ -171,7 +171,7 @@ impl AutoJoinService {
         }
 
         if input.raw_busy {
-            if self.phase == Phase::Joining || self.awaiting_pcm {
+            if self.phase == Phase::Joining || self.awaiting_pcm || self.phase == Phase::Error {
                 self.succeed(&mut logs);
             } else if self.phase != Phase::Joined {
                 self.phase = Phase::Busy;
@@ -433,6 +433,11 @@ impl AutoJoinService {
         self.outstanding = false;
         self.last_error = err.to_string();
         self.attempt = self.attempt.saturating_add(1);
+        // Another add uses session interruption and drops the RTSP session that
+        // already delivered metadata. Leave that session up and wait for PCM.
+        if err == "timed out waiting for inbound AirPlay session" {
+            self.attempt = RETRY_DELAYS_MS.len();
+        }
         if self.attempt >= RETRY_DELAYS_MS.len() {
             self.phase = Phase::Error;
         } else {
@@ -496,7 +501,7 @@ impl AutoJoinService {
             Phase::Joining => "Joining group".to_string(),
             Phase::Joined => "Joined".to_string(),
             Phase::Busy => "WLEDPlay busy".to_string(),
-            Phase::Error => "Join failed".to_string(),
+            Phase::Error => format!("Join failed · {}", self.last_error),
         };
         if self.pending || self.hold {
             label = "Waiting until idle".into();
@@ -1280,6 +1285,37 @@ mod tests {
             &[],
         );
         assert!(expired.logs.iter().any(|l| l.contains("timed out waiting")));
+        assert_eq!(expired.view.state, "error");
+        assert!(expired.view.label.contains("timed out waiting for inbound AirPlay session"));
+        assert!(expired.join.is_none());
+        let still = tick(
+            &mut svc,
+            6 + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing,
+            true,
+            &[],
+        );
+        assert!(still.join.is_none());
+        assert_eq!(still.view.state, "error");
+        let late = tick(
+            &mut svc,
+            7 + JOIN_TIMEOUT_MS,
+            true,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing,
+            true,
+            &[],
+        );
+        assert_eq!(late.view.state, "joined");
+        assert!(late.view.last_error.is_empty());
 
         let mut homepod = dev("h1", "Kitchen", false);
         homepod.model = "HomePod".into();

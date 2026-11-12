@@ -127,6 +127,7 @@
     button.danger { background: #5a2433; }
     button:disabled { opacity: 0.4; cursor: default; }
     .hint { color: var(--muted); font-size: 0.85rem; }
+    .alert { color: var(--peak); font-size: 0.95rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     .check input { width: auto; }
     .viz-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -621,8 +622,10 @@
       $("autojoin-discovery").textContent = discovery;
       $("autojoin-target-status").textContent = aj.target_status || "";
       let runtime = aj.label || "";
-      if (aj.last_error) runtime += " · " + aj.last_error;
-      $("autojoin-runtime").textContent = runtime;
+      if (aj.last_error && !runtime.includes(aj.last_error)) runtime += " · " + aj.last_error;
+      const runtimeEl = $("autojoin-runtime");
+      runtimeEl.textContent = runtime;
+      runtimeEl.className = aj.state === "error" ? "alert" : "hint";
     }
 
     function formSnapshot() {
