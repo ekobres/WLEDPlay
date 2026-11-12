@@ -112,13 +112,15 @@
                      inet_ntop(AF_INET6, (void *)&addr6->sin6_addr, buf, sizeof(buf));
                      plist_array_append_item(addresses, plist_new_string(buf));
                      // debug(1, "Own address IPv6: %s", buf);
-@@ -2660,7 +2700,10 @@
+@@ -2660,7 +2700,12 @@
                      conn->connection_number);
              }
  
 +            snprintf(conn->timing_peer_list, sizeof(conn->timing_peer_list), "%s",
 +                     timing_list_message);
-+
++            /* A HomePod group waits for this clock before it opens the audio stream. */
++            set_client_as_ptp_clock(conn);
++            ptp_send_control_message_string("B");
              // since the GID from the client has been acquired, update the airplay bonjour strings.
              build_bonjour_strings(conn);
              debug(2, "Connection %d: SETUP mdns_update on %s.", conn->connection_number,
