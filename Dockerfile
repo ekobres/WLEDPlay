@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 # seamless-group-join on the fork, cut from 5.6.3. NQPTP stays 1.2.9 (smi11).
+# The clone below is cached from the Dockerfile text, not from GitHub. This
+# request changes when the branch tip moves, so the clone runs again.
+ADD "https://api.github.com/repos/ekobres/shairport-sync/commits/${SHAIRPORT_REF}" /tmp/shairport-ref.json
 RUN git clone --depth 1 --branch "${SHAIRPORT_REF}" \
       "${SHAIRPORT_REPO}" && \
     cd shairport-sync && \
