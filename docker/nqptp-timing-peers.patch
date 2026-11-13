@@ -1,0 +1,25 @@
+--- a/nqptp-message-handlers.c
++++ b/nqptp-message-handlers.c
+@@ -158,19 +158,15 @@
+                 clock_private_info[i].follow_up_number = 0;
+               }
+ 
+-              // take the first ip and make it the master, permanently
+-
+-              if (ip_list != NULL) {
++              // Monitor every address. The clock that locks becomes master.
++              while (ip_list != NULL) {
+                 char *new_ip = strsep(&ip_list, " ");
+-                // look for the IP in the list of clocks, and create an inert entry if not there
+                 if ((new_ip != NULL) && (new_ip[0] != 0)) {
+                   int t = find_clock_source_record(new_ip, clock_private_info);
+                   if (t == -1)
+                     t = create_clock_source_record(new_ip, clock_private_info);
+-                  if (t != -1) { // if the clock table is not full, okay
++                  if (t != -1)
+                     debug(2, "Monitor clock at %s.", new_ip);
+-                  }
+-                  // otherwise, drop it
+                 }
+               }
+               // a new clock timing record will be started now

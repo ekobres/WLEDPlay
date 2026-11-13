@@ -2,7 +2,6 @@ use crate::config::{Config, PcmFormat};
 use crate::control::Control;
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceBind;
-use crate::nqptp;
 use crate::pcm::PcmDecoder;
 use crate::runtime::{
     self, event_loop_wait, http_listen, mark_stream_connected, mark_stream_ended, next_due_at,
@@ -640,7 +639,6 @@ pub fn apply_metadata_line(
 ) {
     raw.push_str(line);
     for item in metadata::drain_items(raw) {
-        nqptp::note_client(&item.type_code, &item.code, &item.data);
         let mut art = artwork.lock().unwrap();
         if metadata::apply_item(meta, &mut art, &item) {
             if item.code == "minm" || item.code == "asar" {

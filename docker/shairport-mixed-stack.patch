@@ -1,0 +1,218 @@
+--- a/player.h
++++ b/player.h
+@@ -402,6 +402,7 @@
+ 
+   char client_ip_string[INET6_ADDRSTRLEN]; // the ip string of the client
+   uint16_t client_rtsp_port;
++  char timing_peer_list[4096]; // "T <ip>..." every client address, IPv4 and IPv6
+   char self_ip_string[INET6_ADDRSTRLEN]; // the ip string being used by this program -- it
+   uint16_t self_rtsp_port;               // could be one of many, so we need to know it
+ 
+--- a/rtsp.c
++++ b/rtsp.c
+@@ -591,11 +591,51 @@
+ }
+ 
+ #ifdef CONFIG_AIRPLAY_2
++/* Canonicalise an address and append it once. NQPTP matches inet_ntop text,
++ * so a client list that mixes IPv4 and IPv6 must use that spelling. */
++static void append_timing_peer(char *message, size_t message_size, const char *raw) {
++  struct addrinfo hints, *res = NULL;
++  char canon[INET6_ADDRSTRLEN];
++  char token[INET6_ADDRSTRLEN + 3];
++  char padded[4096];
++  void *addr = NULL;
++
++  if ((raw == NULL) || (raw[0] == '\0'))
++    return;
++  memset(&hints, 0, sizeof(hints));
++  hints.ai_family = AF_UNSPEC;
++  hints.ai_flags = AI_NUMERICHOST;
++  if ((getaddrinfo(raw, NULL, &hints, &res) != 0) || (res == NULL))
++    return;
++  if (res->ai_family == AF_INET)
++    addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
++  else if (res->ai_family == AF_INET6)
++    addr = &((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
++  else {
++    freeaddrinfo(res);
++    return;
++  }
++  if (inet_ntop(res->ai_family, addr, canon, sizeof(canon)) == NULL) {
++    freeaddrinfo(res);
++    return;
++  }
++  freeaddrinfo(res);
++  snprintf(token, sizeof(token), " %s ", canon);
++  snprintf(padded, sizeof(padded), " %s ", message);
++  if (strstr(padded, token) != NULL)
++    return;
++  strncat(message, " ", message_size - 1 - strlen(message));
++  strncat(message, canon, message_size - 1 - strlen(message));
++}
++
+ void set_client_as_ptp_clock(rtsp_conn_info *conn) {
+-  char timing_list_message[4096] = "";
+-  strncat(timing_list_message, "T ", sizeof(timing_list_message) - 1 - strlen(timing_list_message));
+-  strncat(timing_list_message, (const char *)&conn->client_ip_string,
+-          sizeof(timing_list_message) - 1 - strlen(timing_list_message));
++  /* A bare "T" tells NQPTP to delete every clock. Only a list with an address is usable. */
++  if ((conn->timing_peer_list[0] == 'T') && (strchr(conn->timing_peer_list, ' ') != NULL)) {
++    ptp_send_control_message_string(conn->timing_peer_list);
++    return;
++  }
++  char timing_list_message[4096] = "T";
++  append_timing_peer(timing_list_message, sizeof(timing_list_message), conn->client_ip_string);
+   ptp_send_control_message_string(timing_list_message);
+ }
+ #endif
+@@ -2236,38 +2276,30 @@
+   debug(2, "Connection %d: SETPEERS %s Content-Length %d", conn->connection_number, req->path,
+         req->contentlength);
+   debug_log_rtsp_message(3, "SETPEERS request", req);
+-  /*
+-    char timing_list_message[4096];
+-    timing_list_message[0] = 'T';
+-    timing_list_message[1] = 0;
+-
+-    // ensure the client itself is first -- it's okay if it's duplicated later
+-    strncat(timing_list_message, " ", sizeof(timing_list_message) - 1 -
+-    strlen(timing_list_message)); strncat(timing_list_message, (const char
+-    *)&conn->client_ip_string, sizeof(timing_list_message) - 1 - strlen(timing_list_message));
+-
+-    plist_t addresses_array = NULL;
++  /* The client is first. Every address it offers is kept; NQPTP watches them all. */
++  char timing_list_message[4096] = "T";
++  append_timing_peer(timing_list_message, sizeof(timing_list_message), conn->client_ip_string);
++  plist_t addresses_array = NULL;
++  if (req->contentlength > 0)
+     plist_from_memory(req->content, req->contentlength, &addresses_array);
++  if ((addresses_array != NULL) && (plist_get_node_type(addresses_array) == PLIST_ARRAY)) {
+     uint32_t items = plist_array_get_size(addresses_array);
+-    if (items) {
+-      uint32_t item;
+-      for (item = 0; item < items; item++) {
+-        plist_t n = plist_array_get_item(addresses_array, item);
+-        char *ip_address = NULL;
+-        plist_get_string_val(n, &ip_address);
+-        // debug(1,ip_address);
+-        strncat(timing_list_message, " ",
+-                sizeof(timing_list_message) - 1 - strlen(timing_list_message));
+-        strncat(timing_list_message, ip_address,
+-                sizeof(timing_list_message) - 1 - strlen(timing_list_message));
+-        if (ip_address != NULL)
+-          free(ip_address);
++    uint32_t item;
++    for (item = 0; item < items; item++) {
++      char *ip_address = NULL;
++      plist_get_string_val(plist_array_get_item(addresses_array, item), &ip_address);
++      if (ip_address != NULL) {
++        append_timing_peer(timing_list_message, sizeof(timing_list_message), ip_address);
++        free(ip_address);
+       }
+-      ptp_send_control_message_string(timing_list_message);
+     }
++  }
++  if (addresses_array != NULL)
+     plist_free(addresses_array);
+-  */
+-  // set_client_as_ptp_clock(conn);
++  if (strchr(timing_list_message, ' ') != NULL) {
++    snprintf(conn->timing_peer_list, sizeof(conn->timing_peer_list), "%s", timing_list_message);
++    set_client_as_ptp_clock(conn);
++  }
+   resp->respcode = 200;
+ }
+ void handle_setpeersx(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp) {
+@@ -2620,6 +2652,25 @@
+             plist_array_append_item(addresses, plist_new_string(conn->self_ip_string));
+             //            debug(1,"self ip: \"%s\"", conn->self_ip_string);
+ 
++            // The RTSP address is first. Addresses the client offered are added after it.
++            char timing_list_message[4096] = "T";
++            append_timing_peer(timing_list_message, sizeof(timing_list_message),
++                               conn->client_ip_string);
++            plist_t offered = plist_dict_get_item(timing_peer_info, "Addresses");
++            if ((offered != NULL) && (plist_get_node_type(offered) == PLIST_ARRAY)) {
++              uint32_t offered_count = plist_array_get_size(offered);
++              uint32_t offered_index;
++              for (offered_index = 0; offered_index < offered_count; offered_index++) {
++                char *offered_address = NULL;
++                plist_get_string_val(plist_array_get_item(offered, offered_index), &offered_address);
++                if (offered_address != NULL) {
++                  append_timing_peer(timing_list_message, sizeof(timing_list_message),
++                                     offered_address);
++                  free(offered_address);
++                }
++              }
++            }
++
+             int oldState;
+             pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState); // make this un-cancellable
+             struct ifaddrs *addrs, *iap;
+@@ -2628,11 +2679,16 @@
+               // debug(1, "Interface index %d, name: \"%s\"",if_nametoindex(iap->ifa_name),
+               // iap->ifa_name);
+               if ((iap->ifa_addr) && (iap->ifa_netmask) && (iap->ifa_flags & IFF_UP) &&
+-                  ((iap->ifa_flags & IFF_LOOPBACK) == 0)) {
++                  ((iap->ifa_flags & IFF_LOOPBACK) == 0) &&
++                  ((config.interface == NULL) ||
++                   (strcmp(iap->ifa_name, config.interface) == 0))) {
+                 char buf[INET6_ADDRSTRLEN + 1]; // +1 for a NUL
+                 memset(buf, 0, sizeof(buf));
+                 if (iap->ifa_addr->sa_family == AF_INET6) {
+                   struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)(iap->ifa_addr);
++                  /* Link-local needs a zone id the client does not have. Global and ULA stay. */
++                  if (IN6_IS_ADDR_LINKLOCAL(&addr6->sin6_addr))
++                    continue;
+                   inet_ntop(AF_INET6, (void *)&addr6->sin6_addr, buf, sizeof(buf));
+                   plist_array_append_item(addresses, plist_new_string(buf));
+                 } else {
+@@ -2649,6 +2705,13 @@
+             plist_dict_set_item(timingPeerInfoPlist, "ID",
+                                 plist_new_string(conn->self_ip_string));
+             plist_dict_set_item(setupResponsePlist, "timingPeerInfo", timingPeerInfoPlist);
++            if (strchr(timing_list_message, ' ') != NULL) {
++              snprintf(conn->timing_peer_list, sizeof(conn->timing_peer_list), "%s",
++                       timing_list_message);
++              /* A HomePod group waits for this clock before it opens the audio stream. */
++              set_client_as_ptp_clock(conn);
++              ptp_send_control_message_string("B");
++            }
+           } else {
+             debug(1, "SETUP on Connection %d: PTP setup -- no timingPeerInfo plist.",
+                   conn->connection_number);
+--- a/player.c
++++ b/player.c
+@@ -2134,8 +2134,10 @@
+                        (void *)conn); // undo what's been done so far
+   do {
+     // debug(3, "buffer_get_frame is iterating");
+-    // we must have timing information before we can do anything here
+-    if ((have_timestamp_timing_information(conn)) && (conn->input_format_is_valid != 0)) {
++    // stdout has no delay callback, so a missing PTP lock must not hold audio.
++    // A group add can deliver metadata and packets before any clock locks.
++    if ((conn->input_format_is_valid != 0) &&
++        (have_timestamp_timing_information(conn) || (config.output->delay == NULL))) {
+ 
+       /*
+             int rco = get_requested_connection_state_to_output();
+@@ -2529,6 +2531,9 @@
+                                     &should_be_time, conn);
+ 
+                 conn->first_packet_time_to_play = should_be_time;
++                if ((config.output->delay == NULL) &&
++                    (have_timestamp_timing_information(conn) == 0))
++                  conn->first_packet_time_to_play = get_absolute_time_in_ns();
+ 
+                 int64_t lt = conn->first_packet_time_to_play - get_absolute_time_in_ns();
+ 
+@@ -2793,6 +2798,8 @@
+               do_wait = 0; // let it go
+             }
+           }
++        } else if (config.output->delay == NULL) {
++          do_wait = 0;
+         }
+       }
+       if (do_wait == 0)

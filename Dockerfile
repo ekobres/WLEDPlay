@@ -2,8 +2,7 @@
 # AirPlay 2 stack for Linux hosts (network_mode: host).
 # Official Shairport AP2 cannot run on macOS — NQPTP needs UDP 319/320.
 
-ARG SHAIRPORT_REPO=https://github.com/ekobres/shairport-sync.git
-ARG SHAIRPORT_REF=seamless-group-join
+ARG SHAIRPORT_VERSION=5.6.3
 ARG NQPTP_VERSION=1.2.9
 
 FROM rust:1.89-bookworm AS wledplay-build
@@ -13,8 +12,7 @@ COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim AS shairport-build
-ARG SHAIRPORT_REPO
-ARG SHAIRPORT_REF
+ARG SHAIRPORT_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool pkg-config \
@@ -23,13 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsodium-dev libavutil-dev libavcodec-dev libavformat-dev xxd \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-# seamless-group-join on the fork, cut from 5.6.3. NQPTP stays 1.2.9 (smi11).
-# The clone below is cached from the Dockerfile text, not from GitHub. This
-# request changes when the branch tip moves, so the clone runs again.
-ADD "https://api.github.com/repos/ekobres/shairport-sync/commits/${SHAIRPORT_REF}" /tmp/shairport-ref.json
-RUN git clone --depth 1 --branch "${SHAIRPORT_REF}" \
-      "${SHAIRPORT_REPO}" && \
+COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
+# Upstream 5.6.3. The patch sends the timing-peer list and B at group setup,
+# limits advertised addresses to the AirPlay interface, and lets stdout play
+# before a PTP lock exists.
+RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
+      https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
+    git apply /tmp/shairport-mixed-stack.patch && \
     autoreconf -fi && \
     ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata && \
     make -j"$(nproc)" && \
@@ -42,9 +41,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential git autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+COPY docker/nqptp-timing-peers.patch /tmp/nqptp-timing-peers.patch
+# Upstream 1.2.9. A T command lists every address the client offered.
+# Stock keeps the first and drops the rest.
 RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
       https://github.com/mikebrady/nqptp.git && \
     cd nqptp && \
+    git apply /tmp/nqptp-timing-peers.patch && \
     autoreconf -fi && \
     ./configure && \
     make -j"$(nproc)" && \
