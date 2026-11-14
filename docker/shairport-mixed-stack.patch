@@ -124,33 +124,7 @@
    resp->respcode = 200;
  }
  void handle_setpeersx(rtsp_conn_info *conn, rtsp_message *req, rtsp_message *resp) {
-@@ -2619,6 +2651,25 @@
-             plist_t addresses = plist_new_array(); // to hold the device's interfaces
-             plist_array_append_item(addresses, plist_new_string(conn->self_ip_string));
-             //            debug(1,"self ip: \"%s\"", conn->self_ip_string);
-+
-+            // The RTSP address is first. Addresses the client offered are added after it.
-+            char timing_list_message[4096] = "T";
-+            append_timing_peer(timing_list_message, sizeof(timing_list_message),
-+                               conn->client_ip_string);
-+            plist_t offered = plist_dict_get_item(timing_peer_info, "Addresses");
-+            if ((offered != NULL) && (plist_get_node_type(offered) == PLIST_ARRAY)) {
-+              uint32_t offered_count = plist_array_get_size(offered);
-+              uint32_t offered_index;
-+              for (offered_index = 0; offered_index < offered_count; offered_index++) {
-+                char *offered_address = NULL;
-+                plist_get_string_val(plist_array_get_item(offered, offered_index), &offered_address);
-+                if (offered_address != NULL) {
-+                  append_timing_peer(timing_list_message, sizeof(timing_list_message),
-+                                     offered_address);
-+                  free(offered_address);
-+                }
-+              }
-+            }
- 
-             int oldState;
-             pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState); // make this un-cancellable
-@@ -2628,11 +2679,16 @@
+@@ -2628,11 +2660,16 @@
                // debug(1, "Interface index %d, name: \"%s\"",if_nametoindex(iap->ifa_name),
                // iap->ifa_name);
                if ((iap->ifa_addr) && (iap->ifa_netmask) && (iap->ifa_flags & IFF_UP) &&
@@ -168,35 +142,6 @@
                    inet_ntop(AF_INET6, (void *)&addr6->sin6_addr, buf, sizeof(buf));
                    plist_array_append_item(addresses, plist_new_string(buf));
                  } else {
-@@ -2649,11 +2705,27 @@
-             plist_dict_set_item(timingPeerInfoPlist, "ID",
-                                 plist_new_string(conn->self_ip_string));
-             plist_dict_set_item(setupResponsePlist, "timingPeerInfo", timingPeerInfoPlist);
-+            if (strchr(timing_list_message, ' ') != NULL) {
-+              snprintf(conn->timing_peer_list, sizeof(conn->timing_peer_list), "%s",
-+                       timing_list_message);
-+              set_client_as_ptp_clock(conn);
-+              ptp_send_control_message_string("B");
-+            }
-           } else {
-             debug(1, "SETUP on Connection %d: PTP setup -- no timingPeerInfo plist.",
-                   conn->connection_number);
-           }
--          resp->respcode = 200;
-+          /* The initial SETUP, not the later audio SETUP, is what makes this
-+           * connection the principal connection. 5.6.3 moved that to the audio
-+           * SETUP. A group add never sends the audio SETUP while
-+           * ReceiverSessionIsActive is clear. */
-+          if (get_play_lock(conn, 1) == play_lock_aquisition_failed) {
-+            debug(1, "SETUP on Connection %d: could not become principal conn.",
-+                  conn->connection_number);
-+            resp->respcode = 453;
-+          } else {
-+            resp->respcode = 200;
-+          }
-         } else if (conn->airplay_stream_category == ntp_stream) {
-           debug(1, "SETUP on Connection %d: ntp stream handling is not implemented!",
-                 conn->connection_number);
 --- a/player.c
 +++ b/player.c
 @@ -2134,8 +2134,10 @@
