@@ -21,6 +21,11 @@ pub struct AirPlayDevice {
     pub available: bool,
     pub playing: bool,
     pub airplay2: bool,
+    /// The target is receiving audio from a sender Auto Join cannot ask.
+    /// That sender may be a phone, iPad, Mac, or Apple TV. It is not one of
+    /// the speakers in discovery.
+    #[serde(default)]
+    pub phone_owned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +55,7 @@ enum Phase {
     Joined,
     Busy,
     Error,
+    PhoneOwned,
 }
 
 impl Phase {
@@ -64,6 +70,7 @@ impl Phase {
             Self::Joined => "joined",
             Self::Busy => "busy",
             Self::Error => "error",
+            Self::PhoneOwned => "phone_owned",
         }
     }
 }
@@ -224,6 +231,17 @@ impl AutoJoinService {
                 ),
             );
             self.was_playing = true;
+        }
+        if device.is_some_and(|d| d.phone_owned) {
+            self.cancel_join();
+            self.phase = Phase::PhoneOwned;
+            self.attempt = 0;
+            self.last_error.clear();
+            self.log(
+                &mut logs,
+                "Auto Join cannot ask the device that is sending audio".into(),
+            );
+            return self.finish(&input, None, logs);
         }
         if self.phase == Phase::Error {
             return self.finish(&input, None, logs);
@@ -410,6 +428,16 @@ impl AutoJoinService {
                     logs,
                     "Auto Join join request succeeded; waiting for inbound AirPlay session".into(),
                 );
+            } else if result.error == "another device is sending audio" {
+                self.awaiting_pcm = false;
+                self.outstanding = false;
+                self.attempt = 0;
+                self.phase = Phase::PhoneOwned;
+                self.last_error.clear();
+                self.log(
+                    logs,
+                    "Auto Join cannot ask the device that is sending audio".into(),
+                );
             } else if self.phase != Phase::Joined && self.phase != Phase::Busy {
                 self.fail(input.now_ms, &result.error, logs);
             }
@@ -502,6 +530,9 @@ impl AutoJoinService {
             Phase::Joined => "Joined".to_string(),
             Phase::Busy => "WLEDPlay busy".to_string(),
             Phase::Error => format!("Join failed · {}", self.last_error),
+            Phase::PhoneOwned => format!(
+                "Another device is sending audio. Auto Join can join when {name} owns playback."
+            ),
         };
         if self.pending || self.hold {
             label = "Waiting until idle".into();
@@ -661,6 +692,7 @@ mod tests {
             available: true,
             playing,
             airplay2: true,
+            phone_owned: false,
         }
     }
 
@@ -1234,6 +1266,69 @@ mod tests {
         );
         assert!(no_self.view.last_error.contains("unable to identify"));
         assert!(no_self.join.is_none());
+    }
+
+    #[test]
+    fn phone_owned_playback_is_a_status_not_a_join() {
+        let mut svc = AutoJoinService::new();
+        let mut playing = dev("aa", "Bar Siri", true);
+        playing.phone_owned = true;
+        let held = tick(
+            &mut svc, 0, false, true, "aa", "Bar Siri", "self", &[playing.clone()], true, &[],
+        );
+        assert!(held.join.is_none());
+        assert_eq!(held.view.state, "phone_owned");
+        assert_eq!(
+            held.view.label,
+            "Another device is sending audio. Auto Join can join when Bar Siri owns playback."
+        );
+        assert!(held.view.last_error.is_empty());
+        assert!(held
+            .logs
+            .iter()
+            .any(|l| l.contains("cannot ask the device")));
+        let again = tick(
+            &mut svc, 5_000, false, true, "aa", "Bar Siri", "self", &[playing], true, &[],
+        );
+        assert!(again.join.is_none());
+        assert_eq!(again.view.state, "phone_owned");
+
+        let mut origin = dev("aa", "Bar Siri", true);
+        origin.phone_owned = false;
+        let ready = tick(
+            &mut svc, 6_000, false, true, "aa", "Bar Siri", "self", &[origin.clone()], true, &[],
+        );
+        assert!(ready.join.is_some());
+        assert_eq!(ready.view.state, "joining");
+
+        let mut raced = AutoJoinService::new();
+        let started = tick(
+            &mut raced, 0, false, true, "aa", "Bar Siri", "self", &[origin.clone()], true, &[],
+        )
+        .join
+        .unwrap();
+        origin.phone_owned = true;
+        let blocked = tick(
+            &mut raced,
+            1_000,
+            false,
+            true,
+            "aa",
+            "Bar Siri",
+            "self",
+            &[origin],
+            true,
+            &[JoinResult {
+                revision: started.revision,
+                generation: started.generation,
+                ok: false,
+                error: "another device is sending audio".into(),
+            }],
+        );
+        assert!(blocked.join.is_none());
+        assert_eq!(blocked.view.state, "phone_owned");
+        assert!(blocked.view.last_error.is_empty());
+        assert!(!blocked.view.label.contains("Join failed"));
     }
 
     #[test]

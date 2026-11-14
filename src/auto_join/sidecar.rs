@@ -731,6 +731,7 @@ mod tests {
             available: true,
             playing: true,
             airplay2: true,
+            phone_owned: false,
         }];
         hub.discovery.lock().unwrap().discovery_active = true;
         let status = Arc::new(Mutex::new(RuntimeStatus::default()));

@@ -18,6 +18,7 @@ import os
 import re
 import sys
 import threading
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
 from urllib.parse import parse_qs, urlparse
@@ -26,6 +27,7 @@ LISTEN = os.environ.get("AUTOJOIN_LISTEN", "127.0.0.1:8091")
 STORAGE = os.environ.get("PYATV_STORAGE", "/host-config/pyatv")
 RECEIVER_NAME = os.environ.get("WLEDPLAY_AIRPLAY_NAME", "WLEDPlay")
 AIRPLAY_IFACE = os.environ.get("WLEDPLAY_AIRPLAY_INTERFACE", "").strip()
+GROUP_UNSUPPORTED = "group modification not supported"
 
 _lock = threading.Lock()
 _cache = {
@@ -129,6 +131,7 @@ def device_record(conf) -> dict | None:
         "available": True,
         "playing": False,
         "airplay2": True,
+        "phone_owned": False,
     }
 
 
@@ -266,6 +269,29 @@ def is_group_leader_txt(props: dict) -> bool:
     return (props.get("igl") or "").strip().lower() in {"1", "true", "yes"}
 
 
+def phone_owns_playback(target_id: str, props_by_id: dict) -> bool:
+    """True when every speaker we could ask is receiving someone else's audio.
+
+    An origin speaker keeps the receiver-session bits clear. Measured while
+    one HomePod owned playback and was grouped: flags 0x198404. A speaker
+    taking a stream from somewhere else sets those bits. The sender, a phone,
+    iPad, Mac, or Apple TV, is not one of those speakers.
+    """
+    mine = props_by_id.get(target_id) or {}
+    leaders = []
+    if is_group_leader_txt(mine):
+        leaders.append(mine)
+    for ident, peer in props_by_id.items():
+        if ident == target_id or not is_group_leader_txt(peer):
+            continue
+        if shares_session(mine, peer) or shares_session(peer, mine):
+            leaders.append(peer)
+    candidates = leaders or [mine]
+    if any(not receiving_audio(peer) for peer in candidates):
+        return False
+    return any(receiving_audio(peer) for peer in candidates)
+
+
 def remember_index(devices_meta: dict, self_deviceid: str, self_name: str) -> None:
     with _lock:
         _index["devices"] = devices_meta
@@ -282,38 +308,80 @@ def snapshot_index() -> dict:
         }
 
 
+def _is_receiver_name(name: str, receiver_name: str) -> bool:
+    return bool(receiver_name) and name.lower() == receiver_name.lower()
+
+
+def _is_session_peer(
+    ident: str,
+    peer: dict,
+    target_id: str,
+    mine: dict,
+    names: dict,
+    receiver_name: str,
+    skipped: set[str],
+    either_direction: bool,
+) -> bool:
+    if ident == target_id or ident in skipped:
+        return False
+    if _is_receiver_name(names.get(ident) or "", receiver_name):
+        return False
+    if either_direction and shares_session(peer, mine):
+        return True
+    return shares_session(mine, peer)
+
+
+def session_peer_ids(
+    target_id: str,
+    props_by_id: dict,
+    names: dict,
+    receiver_name: str,
+    skipped: set[str],
+    either_direction: bool,
+) -> tuple[list[str], list[str]]:
+    """Leaders, then other members, that share a playback session with the target."""
+    mine = props_by_id.get(target_id) or {}
+    leaders: list[str] = []
+    others: list[str] = []
+    for ident, peer in props_by_id.items():
+        if not _is_session_peer(
+            ident, peer, target_id, mine, names, receiver_name, skipped, either_direction
+        ):
+            continue
+        if is_group_leader_txt(peer):
+            leaders.append(ident)
+        else:
+            others.append(ident)
+    return leaders, others
+
+
+def _append_unique(hosts: list[str], addr: str) -> None:
+    if addr and addr not in hosts:
+        hosts.append(addr)
+
+
+def _host_list(devices: dict, probe_id: str, peer_ids: list[str]) -> list[str]:
+    """Target address, then peer addresses, capped at four."""
+    hosts: list[str] = []
+    target = (devices.get(probe_id) or {}).get("address") or ""
+    _append_unique(hosts, target)
+    for ident in peer_ids:
+        if len(hosts) >= 4:
+            break
+        addr = (devices.get(ident) or {}).get("address") or ""
+        _append_unique(hosts, addr)
+    return hosts
+
+
 def leader_hosts(probe_id: str, index: dict, receiver_name: str) -> list[str]:
     """Target address, then group leaders that share its playback session."""
     devices = index.get("devices") or {}
-    mine = devices.get(probe_id) or {}
-    mine_props = mine.get("props") or {}
-    leaders = []
-    others = []
-    for ident, rec in devices.items():
-        if ident == probe_id:
-            continue
-        name = rec.get("name") or ""
-        if receiver_name and name.lower() == receiver_name.lower():
-            continue
-        if not shares_session(mine_props, rec.get("props") or {}):
-            continue
-        addr = rec.get("address") or ""
-        if not addr:
-            continue
-        if is_group_leader_txt(rec.get("props") or {}):
-            leaders.append(addr)
-        else:
-            others.append(addr)
-    hosts = []
-    target = mine.get("address") or ""
-    if target:
-        hosts.append(target)
-    for addr in leaders + others:
-        if addr not in hosts:
-            hosts.append(addr)
-        if len(hosts) >= 4:
-            break
-    return hosts
+    props_by_id = {ident: (rec.get("props") or {}) for ident, rec in devices.items()}
+    names = {ident: (rec.get("name") or "") for ident, rec in devices.items()}
+    leaders, others = session_peer_ids(
+        probe_id, props_by_id, names, receiver_name, set(), False
+    )
+    return _host_list(devices, probe_id, leaders + others)
 
 
 async def read_playing(atv) -> bool:
@@ -385,30 +453,22 @@ def audio_controls(atv):
     return None
 
 
-def ranked_ids(target_id: str, props_by_id: dict, names: dict, receiver_name: str) -> list[str]:
-    """Group leaders first, then the selected speaker, then other session members."""
-    if target_id not in props_by_id:
-        return []
-    mine = props_by_id.get(target_id, {})
-    leaders = []
-    others = []
-    for ident, peer in props_by_id.items():
-        if ident == target_id:
-            continue
-        if receiver_name and (names.get(ident) or "").lower() == receiver_name.lower():
-            continue
-        if not shares_session(mine, peer) and not shares_session(peer, mine):
-            continue
-        if is_group_leader_txt(peer):
-            leaders.append(ident)
-        else:
-            others.append(ident)
-    ordered = list(leaders)
-    ordered.append(target_id)
+def _with_target(leaders: list[str], target_id: str, others: list[str]) -> list[str]:
+    ordered = [*leaders, target_id]
     for ident in others[:2]:
         if ident not in ordered:
             ordered.append(ident)
     return ordered
+
+
+def ranked_ids(target_id: str, props_by_id: dict, names: dict, receiver_name: str) -> list[str]:
+    """Group leaders first, then the selected speaker, then other session members."""
+    if target_id not in props_by_id:
+        return []
+    leaders, others = session_peer_ids(
+        target_id, props_by_id, names, receiver_name, set(), True
+    )
+    return _with_target(leaders, target_id, others)
 
 
 async def add_receiver(
@@ -418,11 +478,11 @@ async def add_receiver(
     atv = await connect_device(conf, storage)
     try:
         if not group_edit_supported(atv):
-            return False, "group modification not supported"
+            return False, GROUP_UNSUPPORTED
         audio = audio_controls(atv)
         add = getattr(audio, "add_output_devices", None)
         if audio is None or not callable(add):
-            return False, "group modification not supported"
+            return False, GROUP_UNSUPPORTED
         current = await output_snapshot(audio)
         if output_lists_receiver(current, receiver_ids, receiver_name):
             return True, "already in group"
@@ -433,7 +493,7 @@ async def add_receiver(
             except Exception as exc:
                 text = str(exc).lower()
                 if "not supported" in text or "unsupported" in text:
-                    return False, "group modification not supported"
+                    return False, GROUP_UNSUPPORTED
                 last = str(exc)
                 continue
             current = await output_snapshot(audio)
@@ -444,31 +504,24 @@ async def add_receiver(
         await _close(atv)
 
 
+async def _playing_quietly(conf, storage) -> bool:
+    try:
+        return await probe_playing(conf, storage)
+    except Exception:
+        return False
+
+
 async def member_is_playing(probe_id, self_id, receiver_name, by_id, props_by_id, names, storage) -> bool:
     """A grouped speaker is playing when its group leader is playing."""
-    mine = props_by_id.get(probe_id, {})
-    if not session_ids(mine):
+    if not session_ids(props_by_id.get(probe_id, {})):
         return False
-    leaders = []
-    others = []
-    for ident, conf in by_id.items():
-        if ident in {probe_id, self_id}:
-            continue
-        if receiver_name and (names.get(ident) or "").lower() == receiver_name.lower():
-            continue
-        peer = props_by_id.get(ident, {})
-        if not shares_session(mine, peer):
-            continue
-        if is_group_leader_txt(peer):
-            leaders.append(conf)
-        else:
-            others.append(conf)
-    for conf in (leaders + others)[:3]:
-        try:
-            if await probe_playing(conf, storage):
-                return True
-        except Exception:
-            continue
+    leaders, others = session_peer_ids(
+        probe_id, props_by_id, names, receiver_name, {self_id}, False
+    )
+    for ident in (leaders + others)[:3]:
+        conf = by_id.get(ident)
+        if conf is not None and await _playing_quietly(conf, storage):
+            return True
     return False
 
 
@@ -488,7 +541,18 @@ async def scan_hosts(storage, hosts: list[str]):
             return await scan_devices(storage)
 
 
-def collect_confs(confs, receiver_name: str, network):
+@dataclass
+class ScanIndex:
+    devices: list
+    self_id: str
+    self_deviceid: str
+    by_id: dict
+    props_by_id: dict
+    names: dict
+    meta: dict
+
+
+def collect_confs(confs, receiver_name: str, network) -> ScanIndex:
     """Index on-network AirPlay devices. WLEDPlay stays out of the target list."""
     devices = []
     self_id = ""
@@ -498,62 +562,100 @@ def collect_confs(confs, receiver_name: str, network):
     names = {}
     meta = {}
     for conf in confs:
-        rec = device_record(conf)
-        if rec is None:
+        recorded = _record_conf(conf, receiver_name, network, by_id)
+        if recorded is None:
             continue
-        if not address_on_network(rec["address"], network):
-            continue
-        # One row per id. A second address family must not add another option
-        # with the same value, or the select jumps to the first match.
-        if rec["id"] in by_id:
-            continue
-        props = service_properties(conf)
+        rec, props, is_self = recorded
         by_id[rec["id"]] = conf
         props_by_id[rec["id"]] = props
         names[rec["id"]] = rec["name"]
         meta[rec["id"]] = {"address": rec["address"], "name": rec["name"], "props": props}
-        if receiver_name and rec["name"].lower() == receiver_name.lower():
+        if is_self:
             self_id = rec["id"]
             self_deviceid = props.get("deviceid", "")
             continue
         devices.append(rec)
-    return devices, self_id, self_deviceid, by_id, props_by_id, names, meta
+    return ScanIndex(devices, self_id, self_deviceid, by_id, props_by_id, names, meta)
+
+
+def _record_conf(conf, receiver_name: str, network, by_id: dict):
+    """None when this advertisement is not a new on-network AirPlay device."""
+    rec = device_record(conf)
+    if rec is None or not address_on_network(rec["address"], network):
+        return None
+    # One row per id. A second address family must not add another option
+    # with the same value, or the select jumps to the first match.
+    if rec["id"] in by_id:
+        return None
+    props = service_properties(conf)
+    return rec, props, _is_receiver_name(rec["name"], receiver_name)
+
+
+def _has_probe(probe_id: str, found: ScanIndex) -> bool:
+    return bool(probe_id) and probe_id in found.by_id
+
+
+async def _playing_result(conf, storage) -> tuple[bool, str]:
+    try:
+        return await probe_playing(conf, storage), ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def _member_playing(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> bool:
+    try:
+        return await member_is_playing(
+            probe_id,
+            found.self_id,
+            receiver_name,
+            found.by_id,
+            found.props_by_id,
+            found.names,
+            storage,
+        )
+    except Exception:
+        return False
+
+
+async def _playing_without_target(
+    probe_id: str, found: ScanIndex, receiver_name: str, storage, error: str
+) -> tuple[bool, str]:
+    if await _member_playing(probe_id, found, receiver_name, storage):
+        return True, ""
+    if receiving_audio(found.props_by_id.get(probe_id, {})):
+        return True, ""
+    return False, error
+
+
+def _mark_playing(found: ScanIndex, probe_id: str, playing: bool) -> None:
+    for rec in found.devices:
+        rec["phone_owned"] = phone_owns_playback(rec["id"], found.props_by_id)
+        if rec["id"] == probe_id:
+            rec["playing"] = playing
+
+
+async def _mark_probe(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> str:
+    playing, error = await _playing_result(found.by_id[probe_id], storage)
+    if not playing:
+        playing, error = await _playing_without_target(
+            probe_id, found, receiver_name, storage, error
+        )
+    _mark_playing(found, probe_id, playing)
+    return error
 
 
 async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) -> dict:
     storage = loop_storage
-    confs = await scan_devices(storage)
-    devices, self_id, self_deviceid, by_id, props_by_id, names, meta = collect_confs(
-        confs, receiver_name, network
-    )
-    remember_index(meta, self_deviceid, receiver_name)
+    found = collect_confs(await scan_devices(storage), receiver_name, network)
+    remember_index(found.meta, found.self_deviceid, receiver_name)
     error = ""
-    if probe_id and probe_id in by_id:
-        try:
-            playing = await probe_playing(by_id[probe_id], storage)
-        except Exception as exc:
-            playing = False
-            error = str(exc)
-        if not playing:
-            try:
-                if await member_is_playing(
-                    probe_id, self_id, receiver_name, by_id, props_by_id, names, storage
-                ):
-                    playing = True
-                    error = ""
-            except Exception:
-                playing = False
-        if not playing and receiving_audio(props_by_id.get(probe_id, {})):
-            playing = True
-            error = ""
-        for rec in devices:
-            if rec["id"] == probe_id:
-                rec["playing"] = playing
+    if _has_probe(probe_id, found):
+        error = await _mark_probe(probe_id, found, receiver_name, storage)
     return {
-        "self_id": self_id,
+        "self_id": found.self_id,
         "discovery_active": True,
         "error": error,
-        "devices": devices,
+        "devices": found.devices,
     }
 
 
@@ -617,73 +719,162 @@ def refresh(probe_id: str, receiver_name: str) -> None:
         _cache.update(payload)
 
 
+@dataclass
+class _Located:
+    found: ScanIndex
+    output_ids: list[str]
+    receiver_name: str
+    storage: object
+    error: str = ""
+
+
+class _Attempt:
+    def __init__(self) -> None:
+        self.last = "target is not playing"
+        self.tried = False
+
+    def note_play_error(self, ident: str, target_id: str, detail: str) -> None:
+        if ident == target_id and not self.tried:
+            self.last = detail
+
+
+def _receiver_name() -> str:
+    with _lock:
+        return _probe.get("name") or _index.get("self_name") or RECEIVER_NAME
+
+
+async def _usable_storage():
+    storage = _storage(asyncio.get_running_loop())
+    if await _load_storage(storage):
+        return None
+    return storage
+
+
+def _remembered_deviceid(self_deviceid: str, index: dict) -> str:
+    return self_deviceid or index.get("self_deviceid") or ""
+
+
+async def _scan_for_target(storage, target_id: str, receiver_name: str, network, index: dict):
+    hosts = leader_hosts(target_id, index, receiver_name)
+    found = collect_confs(await scan_hosts(storage, hosts), receiver_name, network)
+    self_deviceid = found.self_deviceid
+    if target_id in found.by_id:
+        return found, _remembered_deviceid(self_deviceid, index)
+    wider = collect_confs(await scan_devices(storage), receiver_name, network)
+    if wider.self_deviceid:
+        self_deviceid = wider.self_deviceid
+    return wider, _remembered_deviceid(self_deviceid, index)
+
+
+def _locate_error(target_id: str, found: ScanIndex, output_ids: list[str]) -> str:
+    if not output_ids:
+        return "unable to identify WLEDPlay receiver"
+    if target_id not in found.by_id:
+        return "unable to identify group leader"
+    return ""
+
+
+async def _locate(target_id: str, receiver_id: str) -> _Located:
+    network = iface_network(AIRPLAY_IFACE)
+    index = snapshot_index()
+    receiver_name = _receiver_name()
+    storage = await _usable_storage()
+    found, self_deviceid = await _scan_for_target(
+        storage, target_id, receiver_name, network, index
+    )
+    output_ids = receiver_output_ids(self_deviceid, receiver_id)
+    return _Located(
+        found,
+        output_ids,
+        receiver_name,
+        storage,
+        _locate_error(target_id, found, output_ids),
+    )
+
+
+def _worth_adding(ident: str, target_id: str, playing: bool, props_by_id: dict) -> bool:
+    if playing:
+        return True
+    return ident == target_id and receiving_audio(props_by_id.get(target_id, {}))
+
+
+def _unsupported(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "not supported" in text or "unsupported" in text
+
+
+def _add_exception(state: _Attempt, exc: Exception):
+    if _unsupported(exc):
+        state.last = GROUP_UNSUPPORTED
+        return None
+    return False, str(exc)
+
+
+def _add_status(state: _Attempt, ok: bool, err: str):
+    if ok:
+        return True, err
+    if err != GROUP_UNSUPPORTED:
+        return False, err
+    state.last = err
+    return None
+
+
+async def _add_outcome(state: _Attempt, conf, located: _Located):
+    try:
+        ok, err = await add_receiver(
+            conf, located.output_ids, located.receiver_name, located.storage
+        )
+    except Exception as exc:
+        return _add_exception(state, exc)
+    return _add_status(state, ok, err)
+
+
+async def _ask_one(state: _Attempt, ident: str, target_id: str, located: _Located):
+    conf = located.found.by_id.get(ident)
+    if conf is None:
+        return None
+    playing, play_error = await _playing_result(conf, located.storage)
+    if play_error:
+        state.note_play_error(ident, target_id, play_error)
+        return None
+    if not _worth_adding(ident, target_id, playing, located.found.props_by_id):
+        return None
+    state.tried = True
+    return await _add_outcome(state, conf, located)
+
+
+def _attempt_result(state: _Attempt, props: dict) -> tuple[bool, str]:
+    if not state.tried and receiving_audio(props):
+        return False, "group leader is not controllable"
+    return False, state.last
+
+
+async def _ask_ranked(target_id: str, located: _Located) -> tuple[bool, str]:
+    state = _Attempt()
+    peers = ranked_ids(
+        target_id, located.found.props_by_id, located.found.names, located.receiver_name
+    )
+    for ident in peers:
+        done = await _ask_one(state, ident, target_id, located)
+        if done is not None:
+            return done
+    return _attempt_result(state, located.found.props_by_id.get(target_id, {}))
+
+
+async def _join(target_id: str, receiver_id: str) -> tuple[bool, str]:
+    located = await _locate(target_id, receiver_id)
+    if located.error:
+        return False, located.error
+    if phone_owns_playback(target_id, located.found.props_by_id):
+        return False, "another device is sending audio"
+    return await _ask_ranked(target_id, located)
+
+
 def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
     if not target_id or not receiver_id:
         return False, "target_id and receiver_id are required"
-    network = iface_network(AIRPLAY_IFACE)
-    index = snapshot_index()
-    with _lock:
-        receiver_name = _probe.get("name") or _index.get("self_name") or RECEIVER_NAME
-
-    async def _run():
-        storage = _storage(asyncio.get_running_loop())
-        if await _load_storage(storage):
-            storage = None
-        hosts = leader_hosts(target_id, index, receiver_name)
-        confs = await scan_hosts(storage, hosts)
-        _devices, _self_id, self_deviceid, by_id, props_by_id, _names, _meta = collect_confs(
-            confs, receiver_name, network
-        )
-        if target_id not in by_id:
-            confs = await scan_devices(storage)
-            _devices, _self_id, scanned_id, by_id, props_by_id, _names, _meta = collect_confs(
-                confs, receiver_name, network
-            )
-            if scanned_id:
-                self_deviceid = scanned_id
-        if not self_deviceid:
-            self_deviceid = index.get("self_deviceid") or ""
-        output_ids = receiver_output_ids(self_deviceid, receiver_id)
-        if not output_ids:
-            return False, "unable to identify WLEDPlay receiver"
-        if target_id not in by_id:
-            return False, "unable to identify group leader"
-        last = "target is not playing"
-        tried = False
-        for ident in ranked_ids(target_id, props_by_id, _names, receiver_name):
-            conf = by_id.get(ident)
-            if conf is None:
-                continue
-            try:
-                playing = await probe_playing(conf, storage)
-            except Exception as exc:
-                if ident == target_id and not tried:
-                    last = str(exc)
-                continue
-            if not playing and not (
-                ident == target_id and receiving_audio(props_by_id.get(target_id, {}))
-            ):
-                continue
-            tried = True
-            try:
-                ok, err = await add_receiver(conf, output_ids, receiver_name, storage)
-            except Exception as exc:
-                text = str(exc).lower()
-                if "not supported" in text or "unsupported" in text:
-                    last = "group modification not supported"
-                    continue
-                return False, str(exc)
-            if ok:
-                return True, err
-            if err != "group modification not supported":
-                return False, err
-            last = err
-        if not tried and receiving_audio(props_by_id.get(target_id, {})):
-            return False, "group leader is not controllable"
-        return False, last
-
     try:
-        return asyncio.run(_run())
+        return asyncio.run(_join(target_id, receiver_id))
     except Exception as exc:
         return False, str(exc)
 
@@ -748,13 +939,30 @@ def time_sleep() -> None:
     time.sleep(2)
 
 
-def main() -> None:
+def _listen_address() -> tuple[str, int]:
     host, _, port = LISTEN.rpartition(":")
     if not host:
         host = "127.0.0.1"
-    server = ThreadingHTTPServer((host, int(port)), Handler)
+    return host, int(port)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def main() -> None:
+    host, port = _listen_address()
+    if not _is_loopback(host):
+        raise SystemExit("Auto Join sidecar listens on loopback only")
+    server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=_scan_loop, name="autojoin-scan", daemon=True).start()
-    server.serve_forever()
+    # Loopback IPC inside the container. S5332 flags this method for every HTTPServer.
+    server.serve_forever()  # NOSONAR
 
 
 if __name__ == "__main__":

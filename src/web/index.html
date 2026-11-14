@@ -127,8 +127,13 @@
     button.danger { background: #5a2433; }
     button:disabled { opacity: 0.4; cursor: default; }
     .hint { color: var(--muted); font-size: 0.85rem; }
+    .notice { color: var(--text); font-size: 0.95rem; }
     .alert { color: var(--peak); font-size: 0.95rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+    .controls .check label {
+      display: inline; margin: 0; color: var(--text); font-size: inherit;
+      text-transform: none; letter-spacing: normal;
+    }
     .check input { width: auto; }
     .viz-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
     .viz-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -209,12 +214,12 @@
           </select>
           <label class="switch">
             <span>Decay</span>
-            <input type="checkbox" id="viz-decay" role="switch" checked aria-label="Visualizer decay">
+            <input type="checkbox" id="viz-decay" role="switch" checked aria-checked="true" aria-label="Visualizer decay">
             <span class="switch-track"></span>
           </label>
           <label class="switch">
             <span>Visualizer</span>
-            <input type="checkbox" id="viz-toggle" role="switch" checked aria-label="Live visualizer">
+            <input type="checkbox" id="viz-toggle" role="switch" checked aria-checked="true" aria-label="Live visualizer">
             <span class="switch-track"></span>
           </label>
         </div>
@@ -249,8 +254,8 @@
     <div class="card controls" style="margin-top:12px">
       <div class="label">Auto Join</div>
       <div class="check">
-        <input id="ctl-autojoin" type="checkbox" role="switch">
-        <span>Join selected speaker when idle</span>
+        <input id="ctl-autojoin" type="checkbox" role="switch" aria-checked="false">
+        <label for="ctl-autojoin">Join selected speaker when idle</label>
       </div>
       <label for="ctl-autojoin-target">Target speaker</label>
       <select id="ctl-autojoin-target" disabled>
@@ -286,7 +291,7 @@
       <select id="ctl-multicast"></select>
       <div class="check">
         <input id="ctl-mcast" type="checkbox">
-        <span>Send multicast</span>
+        <label for="ctl-mcast">Send multicast</label>
       </div>
       <label for="ctl-dest">Unicast destinations (one IP per line)</label>
       <textarea id="ctl-dest"></textarea>
@@ -504,9 +509,17 @@
       if (!document.hidden) statusTimer = setTimeout(statusTick, 1000);
     }
 
+    function syncSwitch(id) {
+      const el = $(id);
+      if (el.getAttribute("role") === "switch") {
+        el.setAttribute("aria-checked", el.checked ? "true" : "false");
+      }
+    }
+
     function setViz(on) {
       vizOn = on;
       $("viz-toggle").checked = on;
+      syncSwitch("viz-toggle");
       if (on) startLevels();
       else stopLevels();
     }
@@ -625,7 +638,7 @@
       if (aj.last_error && !runtime.includes(aj.last_error)) runtime += " · " + aj.last_error;
       const runtimeEl = $("autojoin-runtime");
       runtimeEl.textContent = runtime;
-      runtimeEl.className = aj.state === "error" ? "alert" : "hint";
+      runtimeEl.className = aj.state === "error" ? "alert" : (aj.state === "phone_owned" ? "notice" : "hint");
     }
 
     function formSnapshot() {
@@ -702,6 +715,7 @@
         fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
         fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
         $("ctl-autojoin").checked = !!v.auto_join_enabled;
+        syncSwitch("ctl-autojoin");
         renderTargets(v.auto_join_target_id || "", v.auto_join_target_name || "", lastDevices);
         $("ctl-autojoin-target").disabled = !v.auto_join_enabled;
         updateSendDelayHint(v);
@@ -766,6 +780,7 @@
     FIELD_IDS.forEach((id) => {
       $(id).addEventListener("input", () => { paintHint(lastConfig); syncActionButtons(); });
       $(id).addEventListener("change", () => {
+        syncSwitch(id);
         if (id === "ctl-autojoin") {
           $("ctl-autojoin-target").disabled = !$("ctl-autojoin").checked;
         }
@@ -811,6 +826,7 @@
 
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
     $("viz-decay").addEventListener("change", () => {
+      syncSwitch("viz-decay");
       if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
     });
     $("viz-source").addEventListener("change", () => {

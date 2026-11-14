@@ -199,6 +199,8 @@ mod tests {
         assert!(html.contains("aj.discovery_error"));
         assert!(html.contains("aj.last_error"));
         assert!(html.contains("runtime.includes(aj.last_error)"));
+        assert!(html.contains("phone_owned"));
+        assert!(html.contains("notice"));
         assert!(html.contains("class=\"alert\"") || html.contains("\"alert\""));
         assert!(html.contains("id=\"autojoin-target-status\""));
         assert!(html.contains("id=\"autojoin-runtime\""));
