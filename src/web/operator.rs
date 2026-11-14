@@ -213,6 +213,9 @@ mod tests {
         assert!(html.contains("On LEDs (sent)"));
         assert!(html.contains("Received (early)"));
         assert!(html.contains("function sourceMeters"));
+        assert!(html.contains("id=\"clock\""));
+        assert!(html.contains("PTP clock"));
+        assert!(html.contains("function paintClock"));
         assert!(html.contains("shownRms >= 0.95"));
         assert!(!html.contains("s.peak ?"));
         assert!(html.contains("id=\"viz-decay\""));

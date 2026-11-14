@@ -5,6 +5,7 @@ pub use operator::{
     parse_shairport_s, should_overwrite_fields, OperatorSnapshot,
 };
 
+use crate::clock::{self, ClockSession, ClockStatus};
 use crate::control::{ConfigPatch, Control};
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceInfo;
@@ -36,6 +37,9 @@ pub struct RuntimeStatus {
     pub counters: CounterStatus,
     pub auto_join: AutoJoinStatus,
     pub airplay_devices: Vec<AirPlayDeviceInfo>,
+    #[serde(skip)]
+    pub clock_session: ClockSession,
+    pub clock: ClockStatus,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -243,8 +247,15 @@ async fn health() -> &'static str {
 }
 
 async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
+    let (session, connected) = {
+        let s = state.status.lock().unwrap();
+        (s.clock_session.clone(), s.airplay.connected)
+    };
+    let clock = clock::read_from_dir(std::path::Path::new("/dev/shm"), clock::monotonic_ns())
+        .with_playback(&session, connected);
     let s = {
         let mut s = state.status.lock().unwrap();
+        s.clock = clock;
         let playing = s.airplay.connected;
         s.metadata.refresh_position(playing);
         s.clone()
@@ -508,6 +519,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(String::from_utf8_lossy(&body).contains("0.1.0"));
         assert!(String::from_utf8_lossy(&body).contains("auto_join"));
+        assert!(String::from_utf8_lossy(&body).contains("\"clock\""));
 
         state.status.lock().unwrap().audio.rms = 0.42;
         state.status.lock().unwrap().audio.bands[0] = 200;

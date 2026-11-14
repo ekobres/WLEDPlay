@@ -1,6 +1,7 @@
 pub mod app;
 pub mod audio;
 pub mod auto_join;
+pub mod clock;
 pub mod config;
 pub mod control;
 pub mod metadata;

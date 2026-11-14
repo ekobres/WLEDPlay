@@ -127,6 +127,7 @@
     button.danger { background: #5a2433; }
     button:disabled { opacity: 0.4; cursor: default; }
     .hint { color: var(--muted); font-size: 0.85rem; }
+    #clock-detail { white-space: pre-line; }
     .notice { color: var(--text); font-size: 0.95rem; }
     .alert { color: var(--peak); font-size: 0.95rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
@@ -202,6 +203,11 @@
       <div class="card">
         <div class="label">Stream</div>
         <div class="value" id="stream">0s · 0 connects</div>
+      </div>
+      <div class="card">
+        <div class="label">PTP clock</div>
+        <div class="value" id="clock">—</div>
+        <div class="hint" id="clock-detail"></div>
       </div>
     </div>
     <div class="card" style="margin-top:12px">
@@ -378,7 +384,7 @@
         return s;
       }
       return {
-        connected: !!s.tx_connected,
+        connected: !!s.connected,
         rms: Number(s.tx_rms ?? 0),
         peak: !!s.tx_peak,
         dominant_frequency: Number(s.tx_dominant_frequency ?? 0),
@@ -454,6 +460,7 @@
       $("sync").textContent = (s.audio.sync_offset_ms || 0) + " ms";
       $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
         + "s · " + (s.airplay.connections || 0) + " connects";
+      paintClock(s.clock);
       const c = s.counters || {};
       $("counters").textContent =
         "pcm " + (c.pcm_frames || 0)
@@ -462,6 +469,22 @@
         + "  udp_err " + (c.udp_errors || 0)
         + "  underrun " + (c.pcm_underruns || 0)
         + "  overrun " + (c.analysis_overruns || 0);
+    }
+
+    function paintClock(c) {
+      const el = $("clock");
+      const detail = $("clock-detail");
+      if (!c) {
+        el.textContent = "—";
+        el.className = "value";
+        detail.textContent = "";
+        detail.className = "hint";
+        return;
+      }
+      el.textContent = c.summary || "—";
+      el.className = "value" + (c.level === "bad" || c.level === "warn" ? " peak" : "");
+      detail.textContent = (c.detail || "").split(" · ").join("\n");
+      detail.className = c.level === "bad" ? "alert" : "hint";
     }
 
     function levelsActive() {
