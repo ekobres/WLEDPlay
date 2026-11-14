@@ -205,7 +205,7 @@
         <div class="value" id="stream">0s · 0 connects</div>
       </div>
       <div class="card">
-        <div class="label">PTP clock</div>
+        <div class="label">Playback lead</div>
         <div class="value" id="clock">—</div>
         <div class="hint" id="clock-detail"></div>
       </div>
@@ -484,7 +484,7 @@
       el.textContent = c.summary || "—";
       el.className = "value" + (c.level === "bad" || c.level === "warn" ? " peak" : "");
       detail.textContent = (c.detail || "").split(" · ").join("\n");
-      detail.className = c.level === "bad" ? "alert" : "hint";
+      detail.className = (c.detail_level || c.level) === "bad" ? "alert" : "hint";
     }
 
     function levelsActive() {

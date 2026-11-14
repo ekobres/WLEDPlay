@@ -1,9 +1,10 @@
-//! NQPTP shared-memory clock, plus the first-frame lead Shairport reports.
+//! Playback lead reported by Shairport, plus the NQPTP shared-memory clock.
 //!
+//! Lead is when a block should play minus now, on the raw monotonic clock
+//! Shairport and NQPTP share. Negative means the block was already late.
 //! The raw local-to-master offset is an epoch difference and is not shown.
-//! Sample age is how long since the last follow-up. Step is the last grandmaster
-//! change. First-frame lead is presentation time minus now when audio starts:
-//! negative means that frame was already late.
+//! Sample age uses that same raw clock, so it measures how long the PTP sample
+//! has been sitting, not the gap between the two Linux monotonic clocks.
 
 use crate::metadata::MetaItem;
 use serde::Serialize;
@@ -14,8 +15,8 @@ const SHM_BYTES: usize = 88;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ClockSession {
-    pub first_frame_lead_ms: Option<f64>,
-    pub discontinuity_frames: Option<i32>,
+    pub lead_ms: Option<f64>,
+    pub worst_lead_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -28,11 +29,12 @@ pub struct ClockStatus {
     pub sample_age_ms: Option<f64>,
     pub master_age_s: Option<f64>,
     pub step_ms: Option<f64>,
-    pub first_frame_lead_ms: Option<f64>,
-    pub discontinuity_frames: Option<i32>,
+    pub lead_ms: Option<f64>,
+    pub worst_lead_ms: Option<f64>,
     pub summary: String,
     pub detail: String,
     pub level: String,
+    pub detail_level: String,
 }
 
 impl Default for ClockStatus {
@@ -52,137 +54,179 @@ impl ClockStatus {
             sample_age_ms: None,
             master_age_s: None,
             step_ms: None,
-            first_frame_lead_ms: None,
-            discontinuity_frames: None,
+            lead_ms: None,
+            worst_lead_ms: None,
             summary: "not running".into(),
             detail: "NQPTP has not published a clock".into(),
             level: "idle".into(),
+            detail_level: "idle".into(),
         }
     }
 
     pub fn with_playback(mut self, session: &ClockSession, stream_active: bool) -> Self {
-        self.first_frame_lead_ms = session.first_frame_lead_ms;
-        self.discontinuity_frames = session.discontinuity_frames;
+        self.lead_ms = session.lead_ms;
+        self.worst_lead_ms = session.worst_lead_ms;
         self.finish(stream_active);
         self
     }
 
     fn finish(&mut self, stream_active: bool) {
-        if !self.present {
-            if let Some(lead) = self.first_frame_lead_ms {
-                let phrase = frame_phrase(lead);
-                self.summary = phrase.clone();
-                if lead.abs() >= 1_000.0 {
-                    self.level = "bad".into();
-                } else if lead.abs() >= 50.0 {
-                    self.level = "warn".into();
-                }
-                self.detail = format!("{phrase} · {}", self.detail);
-            }
-            if let Some(gap) = self.discontinuity_frames {
-                self.detail = format!("{} · gap {gap} frames", self.detail);
-            }
+        if let Some(lead) = self.lead_ms {
+            self.summary = lead_phrase(lead);
+            self.level = classify_lead(lead).into();
+        } else if !self.present {
+            self.detail_level = self.level.clone();
             return;
-        }
-        if self.version == 0 {
+        } else if self.version == 0 {
             self.summary = "waiting".into();
             self.detail = "NQPTP clock record is not initialised".into();
             self.level = "idle".into();
+            self.detail_level = level_name(level_rank(&self.level)).into();
             return;
-        }
-        if !self.version_ok {
+        } else if !self.version_ok {
             self.summary = format!("version {}", self.version);
             self.detail = format!("expected NQPTP interface version {NQPTP_VERSION}");
             self.level = "bad".into();
+            self.detail_level = level_name(level_rank(&self.level)).into();
             return;
-        }
-        if !self.consistent {
+        } else if !self.consistent {
             self.summary = "unstable".into();
             self.detail = "the two NQPTP clock records do not match".into();
             self.level = "bad".into();
+            self.detail_level = level_name(level_rank(&self.level)).into();
             return;
-        }
-        if self.master_id.is_empty() {
+        } else if self.master_id.is_empty() {
             self.summary = "no master".into();
             self.detail = "no PTP grandmaster is selected".into();
             self.level = if stream_active { "bad" } else { "idle" }.into();
+            self.detail_level = level_name(level_rank(&self.level)).into();
             return;
-        }
-
-        let step_bad = self.step_ms.is_some_and(|ms| ms.abs() >= 1_000.0);
-        let age_bad = self
-            .sample_age_ms
-            .is_some_and(|ms| ms >= 10_000.0 || ms <= -20.0);
-        let lead_bad = self
-            .first_frame_lead_ms
-            .is_some_and(|ms| ms.abs() >= 1_000.0);
-        // A few milliseconds of grandmaster movement is the discrepancy worth showing.
-        let step_warn = self.step_ms.is_some_and(|ms| ms.abs() >= 5.0);
-        let age_warn = self
-            .sample_age_ms
-            .is_some_and(|ms| ms >= 2_000.0 || ms <= -2.0);
-        let lead_warn = self.first_frame_lead_ms.is_some_and(|ms| ms.abs() >= 50.0);
-
-        self.level = if step_bad || age_bad || lead_bad {
-            "bad"
-        } else if step_warn || age_warn || lead_warn {
-            "warn"
-        } else {
-            "ok"
-        }
-        .into();
-
-        self.summary = if step_bad {
-            format!("last step {}", format_ms(self.step_ms.unwrap_or(0.0)))
-        } else if age_bad {
-            format!(
-                "sample {} old",
-                format_ms(self.sample_age_ms.unwrap_or(0.0))
-            )
-        } else if lead_bad {
-            frame_phrase(self.first_frame_lead_ms.unwrap_or(0.0))
-        } else if age_warn {
-            format!(
-                "sample {} old",
-                format_ms(self.sample_age_ms.unwrap_or(0.0))
-            )
-        } else if step_warn {
-            format!("last step {}", format_ms(self.step_ms.unwrap_or(0.0)))
-        } else if lead_warn {
-            frame_phrase(self.first_frame_lead_ms.unwrap_or(0.0))
         } else if let Some(age) = self.sample_age_ms {
-            format!("sample {} old", format_ms(age))
+            self.summary = format!("PTP sample {}", sample_phrase(age));
+            self.level = classify_age(age).into();
         } else {
-            "locked".into()
-        };
+            self.summary = "locked".into();
+            self.level = "ok".into();
+        }
 
         let mut parts = Vec::new();
-        parts.push(format!("master {}", self.master_id));
+        if let Some(worst) = self.worst_lead_ms.filter(|ms| *ms <= -20.0) {
+            parts.push(format!("worst {}", lead_phrase(worst)));
+        }
+        if let Some(age) = self.sample_age_ms {
+            parts.push(format!("PTP sample {}", sample_phrase(age)));
+        }
+        if let Some(step) = self.step_ms.filter(|ms| ms.abs() >= 5.0) {
+            parts.push(format!("last step {}", format_ms(step)));
+        }
+        if !self.master_id.is_empty() {
+            parts.push(format!("master {}", self.master_id));
+        }
         if let Some(held) = self.master_age_s {
             parts.push(format_held(held));
         }
-        if let Some(step) = self.step_ms {
-            parts.push(format!("last step {}", format_ms(step)));
+        if !self.present {
+            parts.push("NQPTP has not published a clock".into());
         }
-        if let Some(age) = self.sample_age_ms {
-            parts.push(format!("sample {} old", format_ms(age)));
+        if !parts.is_empty() {
+            self.detail = parts.join(" · ");
         }
-        if let Some(lead) = self.first_frame_lead_ms {
-            parts.push(frame_phrase(lead));
-        }
-        if let Some(gap) = self.discontinuity_frames {
-            parts.push(format!("gap {gap} frames"));
-        }
-        self.detail = parts.join(" · ");
+        self.detail_level = raised_detail_level(self);
+    }
+}
+
+fn raised_detail_level(status: &ClockStatus) -> String {
+    let mut rank = level_rank(&status.level);
+    if let Some(worst) = status.worst_lead_ms.filter(|ms| *ms <= -20.0) {
+        rank = rank.max(level_rank(classify_lead(worst)));
+    }
+    if let Some(age) = status.sample_age_ms {
+        rank = rank.max(level_rank(classify_age(age)));
+    }
+    if let Some(step) = status.step_ms {
+        rank = rank.max(level_rank(classify_step(step)));
+    }
+    level_name(rank).into()
+}
+
+fn level_rank(level: &str) -> u8 {
+    match level {
+        "bad" => 3,
+        "warn" => 2,
+        "ok" => 1,
+        _ => 0,
+    }
+}
+
+fn level_name(rank: u8) -> &'static str {
+    match rank {
+        3 => "bad",
+        2 => "warn",
+        1 => "ok",
+        _ => "idle",
+    }
+}
+
+fn classify_lead(lead_ms: f64) -> &'static str {
+    if lead_ms <= -1_000.0 || lead_ms >= 10_000.0 {
+        "bad"
+    } else if lead_ms <= -20.0 || lead_ms >= 2_000.0 {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+fn classify_age(age_ms: f64) -> &'static str {
+    if age_ms >= 10_000.0 || age_ms <= -1_000.0 {
+        "bad"
+    } else if age_ms >= 2_000.0 || age_ms <= -20.0 {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+fn classify_step(step_ms: f64) -> &'static str {
+    if step_ms.abs() >= 1_000.0 {
+        "bad"
+    } else if step_ms.abs() >= 5.0 {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+fn lead_phrase(lead_ms: f64) -> String {
+    if lead_ms < 0.0 {
+        format!("{} late", format_ms(-lead_ms))
+    } else {
+        format!("{} ahead", format_ms(lead_ms))
+    }
+}
+
+fn sample_phrase(age_ms: f64) -> String {
+    if age_ms < 0.0 {
+        format!("{} fast", format_ms(-age_ms))
+    } else {
+        format!("{} old", format_ms(age_ms))
     }
 }
 
 pub fn monotonic_ns() -> u64 {
+    read_clock(libc::CLOCK_MONOTONIC)
+}
+
+pub fn monotonic_raw_ns() -> u64 {
+    read_clock(libc::CLOCK_MONOTONIC_RAW)
+}
+
+fn read_clock(clock_id: libc::clockid_t) -> u64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    let rc = unsafe { libc::clock_gettime(clock_id, &mut ts) };
     monotonic_from(rc, ts.tv_sec, ts.tv_nsec)
 }
 
@@ -265,35 +309,29 @@ pub fn parse_shm(bytes: &[u8], now_ns: u64) -> ClockStatus {
     status
 }
 
-pub fn fold_metadata(item: &MetaItem, now_ns: u64, session: &mut ClockSession) {
+pub fn fold_metadata(item: &MetaItem, session: &mut ClockSession) {
     if item.type_code != "ssnc" {
         return;
     }
     match item.code.as_str() {
         "pend" | "pfls" => *session = ClockSession::default(),
-        "pffr" => {
-            if let Some(lead) = first_frame_lead_ms(&item.data, now_ns) {
-                session.first_frame_lead_ms = Some(lead);
-            }
-        }
-        "pdis" => {
-            if let Some(gap) = discontinuity_frames(&item.data) {
-                session.discontinuity_frames = Some(gap);
+        "lead" => {
+            if let Some(lead) = parse_lead_ms(&item.data) {
+                session.lead_ms = Some(lead);
+                session.worst_lead_ms = Some(match session.worst_lead_ms {
+                    Some(worst) => worst.min(lead),
+                    None => lead,
+                });
             }
         }
         _ => {}
     }
 }
 
-fn first_frame_lead_ms(data: &[u8], now_ns: u64) -> Option<f64> {
+fn parse_lead_ms(data: &[u8]) -> Option<f64> {
     let text = std::str::from_utf8(data).ok()?.trim();
-    let play: u64 = text.split('/').nth(1)?.trim().parse().ok()?;
-    Some((play as i128 - now_ns as i128) as f64 / 1_000_000.0)
-}
-
-fn discontinuity_frames(data: &[u8]) -> Option<i32> {
-    let text = std::str::from_utf8(data).ok()?.trim();
-    text.split('/').nth(1)?.trim().parse().ok()
+    let nanos: i64 = text.parse().ok()?;
+    Some(nanos as f64 / 1_000_000.0)
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
@@ -323,14 +361,6 @@ fn format_ms(ms: f64) -> String {
         format!("{sign}{:.0} ms", magnitude)
     } else {
         format!("{sign}{:.1} ms", magnitude)
-    }
-}
-
-fn frame_phrase(lead_ms: f64) -> String {
-    if lead_ms < 0.0 {
-        format!("first frame {} late", format_ms(-lead_ms))
-    } else {
-        format!("first frame {} early", format_ms(lead_ms))
     }
 }
 
@@ -398,38 +428,47 @@ mod tests {
         let main = record(0xe02b, now - 18_000_000, 100_000, now - 30_000_000_000);
         let ok = parse_shm(&shm(NQPTP_VERSION, &main, &main), now);
         assert_eq!(ok.level, "ok");
+        assert_eq!(ok.detail_level, "ok");
         assert_eq!(ok.master_id, "000000000000e02b");
-        assert!(ok.summary.starts_with("sample"));
+        assert!(ok.summary.starts_with("PTP sample"));
         assert!(ok.detail.contains("held 30 s"));
-        assert!(ok.detail.contains("last step"));
+        assert!(!ok.detail.contains("last step"));
 
         let stale = record(0xe02b, now - 12_000_000_000, 0, now);
         let stale = parse_shm(&shm(NQPTP_VERSION, &stale, &stale), now);
         assert_eq!(stale.level, "bad");
-        assert!(stale.summary.starts_with("sample"));
+        assert!(stale.summary.starts_with("PTP sample"));
+        assert!(!stale.detail.contains("last step"));
 
         let jumped = record(0xe02b, now - 10_000_000, -9_700_000_000, 0);
         let jumped = parse_shm(&shm(NQPTP_VERSION, &jumped, &jumped), now);
-        assert_eq!(jumped.level, "bad");
-        assert!(jumped.summary.starts_with("last step"));
-        assert!(jumped.summary.contains("9.7 s"));
-        assert!(jumped.detail.contains("sample"));
+        assert_eq!(jumped.level, "ok");
+        assert_eq!(jumped.detail_level, "bad");
+        assert!(jumped.summary.starts_with("PTP sample"));
+        assert!(jumped.detail.contains("last step"));
+        assert!(jumped.detail.contains("9.7 s"));
 
         let warned = record(0xe02b, now - 2_500_000_000, 25_000_000, now - 1_000_000_000);
         let warned = parse_shm(&shm(NQPTP_VERSION, &warned, &warned), now);
         assert_eq!(warned.level, "warn");
-        assert!(warned.summary.starts_with("sample"));
+        assert!(warned.summary.starts_with("PTP sample"));
+        assert!(warned.detail.contains("last step"));
 
         let nudged = record(0xe02b, now - 18_000_000, 250_000_000, now - 1_000_000_000);
         let nudged = parse_shm(&shm(NQPTP_VERSION, &nudged, &nudged), now);
-        assert_eq!(nudged.level, "warn");
-        assert!(nudged.summary.starts_with("last step"));
-        assert!(nudged.summary.contains("250 ms"));
+        assert_eq!(nudged.level, "ok");
+        assert_eq!(nudged.detail_level, "warn");
+        assert!(nudged.detail.contains("250 ms"));
 
         let backwards = record(0xe02b, now + 50_000_000, 0, now + 1);
         let backwards = parse_shm(&shm(NQPTP_VERSION, &backwards, &backwards), now);
-        assert_eq!(backwards.level, "bad");
+        assert_eq!(backwards.level, "warn");
+        assert!(backwards.summary.contains("fast"));
         assert!(backwards.master_age_s.is_none());
+
+        let rewound = record(0xe02b, now + 1_500_000_000, 0, now);
+        let rewound = parse_shm(&shm(NQPTP_VERSION, &rewound, &rewound), now);
+        assert_eq!(rewound.level, "bad");
     }
 
     #[test]
@@ -438,26 +477,51 @@ mod tests {
         let main = record(0xe02b, now - 5_000_000, 0, now - 150_000_000_000);
         let clock = parse_shm(&shm(NQPTP_VERSION, &main, &main), now).with_playback(
             &ClockSession {
-                first_frame_lead_ms: Some(-9_700.0),
-                discontinuity_frames: Some(1024),
+                lead_ms: Some(-9_700.0),
+                worst_lead_ms: Some(-9_700.0),
             },
             true,
         );
         assert_eq!(clock.level, "bad");
-        assert!(clock.summary.contains("9.7 s") || clock.detail.contains("late"));
-        assert!(clock.detail.contains("late"));
-        assert!(clock.detail.contains("gap 1024 frames"));
+        assert_eq!(clock.detail_level, "bad");
+        assert!(clock.summary.contains("9.7 s late"));
+        assert!(clock.detail.contains("worst"));
         assert!(clock.detail.contains("held 2 min"));
+        assert!(clock.detail.contains("PTP sample"));
+
+        let recovered = parse_shm(&shm(NQPTP_VERSION, &main, &main), now).with_playback(
+            &ClockSession {
+                lead_ms: Some(400.0),
+                worst_lead_ms: Some(-9_700.0),
+            },
+            true,
+        );
+        assert_eq!(recovered.level, "ok");
+        assert_eq!(recovered.detail_level, "bad");
+        assert!(recovered.summary.contains("ahead"));
+        assert!(recovered.detail.contains("worst"));
+        assert!(recovered.detail.contains("9.7 s late"));
 
         let early = parse_shm(&shm(NQPTP_VERSION, &main, &main), now).with_playback(
             &ClockSession {
-                first_frame_lead_ms: Some(80.0),
-                discontinuity_frames: None,
+                lead_ms: Some(2_500.0),
+                worst_lead_ms: Some(2_500.0),
             },
             false,
         );
-        assert!(early.detail.contains("early") || early.summary.contains("early"));
+        assert!(early.summary.contains("ahead"));
         assert_eq!(early.level, "warn");
+        assert!(!early.detail.contains("worst"));
+
+        let far = parse_shm(&shm(NQPTP_VERSION, &main, &main), now).with_playback(
+            &ClockSession {
+                lead_ms: Some(10_000.0),
+                worst_lead_ms: Some(-4.0),
+            },
+            false,
+        );
+        assert_eq!(far.level, "bad");
+        assert!(!far.detail.contains("worst"));
     }
 
     #[test]
@@ -469,94 +533,79 @@ mod tests {
                 code: "minm".into(),
                 data: vec![],
             },
-            0,
             &mut session,
         );
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
-                code: "pffr".into(),
-                data: b"10/5000000".to_vec(),
+                code: "lead".into(),
+                data: b"-1000000000".to_vec(),
             },
-            1_000_000,
             &mut session,
         );
-        assert!(session.first_frame_lead_ms.unwrap() > 0.0);
+        assert!((session.lead_ms.unwrap() - -1_000.0).abs() < 1e-6);
+        assert!((session.worst_lead_ms.unwrap() - -1_000.0).abs() < 1e-6);
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
-                code: "pffr".into(),
+                code: "lead".into(),
                 data: vec![0xff],
             },
-            0,
             &mut session,
         );
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
-                code: "pffr".into(),
+                code: "lead".into(),
                 data: b"not-a-lead".to_vec(),
             },
-            0,
             &mut session,
         );
+        assert!((session.lead_ms.unwrap() - -1_000.0).abs() < 1e-6);
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
-                code: "pdis".into(),
-                data: vec![0xff],
+                code: "lead".into(),
+                data: b"-500000000".to_vec(),
             },
-            0,
             &mut session,
         );
-        assert!(session.first_frame_lead_ms.is_some());
+        assert!((session.lead_ms.unwrap() - -500.0).abs() < 1e-6);
+        assert!((session.worst_lead_ms.unwrap() - -1_000.0).abs() < 1e-6);
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
-                code: "pdis".into(),
-                data: b"10/-48000".to_vec(),
+                code: "lead".into(),
+                data: b"-9700000000".to_vec(),
             },
-            0,
             &mut session,
         );
-        assert_eq!(session.discontinuity_frames, Some(-48000));
-        fold_metadata(
-            &MetaItem {
-                type_code: "ssnc".into(),
-                code: "pdis".into(),
-                data: b"nope".to_vec(),
-            },
-            0,
-            &mut session,
-        );
+        assert!((session.worst_lead_ms.unwrap() - -9_700.0).abs() < 1e-3);
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
                 code: "pend".into(),
                 data: vec![],
             },
-            0,
             &mut session,
         );
-        assert!(session.first_frame_lead_ms.is_none());
-        session.discontinuity_frames = Some(1);
+        assert!(session.lead_ms.is_none());
+        session.worst_lead_ms = Some(-1.0);
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
                 code: "pfls".into(),
                 data: vec![],
             },
-            0,
             &mut session,
         );
-        assert!(session.discontinuity_frames.is_none());
+        assert!(session.worst_lead_ms.is_none());
         fold_metadata(
             &MetaItem {
                 type_code: "ssnc".into(),
                 code: "clip".into(),
                 data: vec![],
             },
-            0,
             &mut session,
         );
     }
@@ -574,26 +623,28 @@ mod tests {
         assert_eq!(read_file(&dir.join("missing"), 0).summary, "not running");
         let late = ClockStatus::absent().with_playback(
             &ClockSession {
-                first_frame_lead_ms: Some(-9_700.0),
-                discontinuity_frames: Some(512),
+                lead_ms: Some(-9_700.0),
+                worst_lead_ms: Some(-9_700.0),
             },
             true,
         );
         assert_eq!(late.level, "bad");
         assert!(late.summary.contains("late"));
-        assert!(late.detail.contains("gap 512 frames"));
+        assert!(late.detail.contains("worst"));
+        assert!(late.detail.contains("NQPTP has not published a clock"));
         let quiet = ClockStatus::absent().with_playback(
             &ClockSession {
-                first_frame_lead_ms: Some(4.0),
-                discontinuity_frames: None,
+                lead_ms: Some(-4.0),
+                worst_lead_ms: Some(-4.0),
             },
             false,
         );
-        assert_eq!(quiet.level, "idle");
+        assert_eq!(quiet.level, "ok");
+        assert!(!quiet.detail.contains("worst"));
         let caution = ClockStatus::absent().with_playback(
             &ClockSession {
-                first_frame_lead_ms: Some(-80.0),
-                discontinuity_frames: None,
+                lead_ms: Some(-80.0),
+                worst_lead_ms: Some(-80.0),
             },
             false,
         );
@@ -621,7 +672,8 @@ mod tests {
         assert_eq!(read_from_dir(&only, now).summary, "no master");
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&only);
-        assert!(monotonic_ns() > 0 || monotonic_ns() == 0);
+        assert!(monotonic_ns() < u64::MAX);
+        assert!(monotonic_raw_ns() < u64::MAX);
         assert_eq!(monotonic_from(-1, 5, 5), 0);
         assert_eq!(monotonic_from(0, -1, -1), 0);
         assert_eq!(monotonic_from(0, 2, 3), 2_000_000_003);

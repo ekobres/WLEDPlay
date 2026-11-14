@@ -640,9 +640,8 @@ pub fn apply_metadata_line(
 ) {
     raw.push_str(line);
     let mut session = status.lock().unwrap().clock_session.clone();
-    let now_ns = clock::monotonic_ns();
     for item in metadata::drain_items(raw) {
-        clock::fold_metadata(&item, now_ns, &mut session);
+        clock::fold_metadata(&item, &mut session);
         let mut art = artwork.lock().unwrap();
         if metadata::apply_item(meta, &mut art, &item) {
             if item.code == "minm" || item.code == "asar" {
@@ -1034,25 +1033,15 @@ mod tests {
             assert!((st.metadata.position_s.unwrap() - 0.5).abs() < 1e-3);
             assert!((st.metadata.duration_s.unwrap() - 1.0).abs() < 1e-3);
         }
-        let pffr = format!(
-            "<item><type>73736e63</type><code>70666672</code><data encoding=\"base64\">{}</data></item>\n",
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"10/5000000000")
+        let lead = format!(
+            "<item><type>73736e63</type><code>6c656164</code><data encoding=\"base64\">{}</data></item>\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"-9700000000")
         );
-        apply_metadata_line(&mut raw, &pffr, &mut meta, &artwork, &status);
-        assert!(status
-            .lock()
-            .unwrap()
-            .clock_session
-            .first_frame_lead_ms
-            .is_some());
+        apply_metadata_line(&mut raw, &lead, &mut meta, &artwork, &status);
+        assert!(status.lock().unwrap().clock_session.lead_ms.unwrap() < -9_000.0);
         let pend = "<item><type>73736e63</type><code>70656e64</code></item>\n";
         apply_metadata_line(&mut raw, pend, &mut meta, &artwork, &status);
-        assert!(status
-            .lock()
-            .unwrap()
-            .clock_session
-            .first_frame_lead_ms
-            .is_none());
+        assert!(status.lock().unwrap().clock_session.lead_ms.is_none());
     }
 
     #[test]

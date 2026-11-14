@@ -251,7 +251,7 @@ async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
         let s = state.status.lock().unwrap();
         (s.clock_session.clone(), s.airplay.connected)
     };
-    let clock = clock::read_from_dir(std::path::Path::new("/dev/shm"), clock::monotonic_ns())
+    let clock = clock::read_from_dir(std::path::Path::new("/dev/shm"), clock::monotonic_raw_ns())
         .with_playback(&session, connected);
     let s = {
         let mut s = state.status.lock().unwrap();

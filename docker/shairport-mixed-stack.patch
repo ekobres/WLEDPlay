@@ -217,3 +217,62 @@
          }
        }
        if (do_wait == 0)
+
+--- a/ap2_buffered_audio_processor.c
++++ b/ap2_buffered_audio_processor.c
+@@ -38,6 +38,29 @@
+ #include "FFTConvolver/convolver.h"
+ #endif
+ 
++
++#ifdef CONFIG_METADATA
++#include "metadata/core.h"
++#include <stdio.h>
++
++/* Lead is when the block should play, minus now, on the raw monotonic clock.
++ * Negative means it is already late. Skips are reported up to five times a
++ * second so the worst one is kept. Accepted blocks are reported about once a second. */
++static void report_presentation_lead(int64_t lead_ns, int late) {
++  static uint64_t last_periodic_ns;
++  static uint64_t last_late_ns;
++  uint64_t now = get_absolute_time_in_ns();
++  uint64_t *stamp = late ? &last_late_ns : &last_periodic_ns;
++  uint64_t min_gap = late ? 200000000ULL : 1000000000ULL;
++  if ((*stamp != 0) && ((now - *stamp) < min_gap))
++    return;
++  *stamp = now;
++  char buffer[32];
++  int wrote = snprintf(buffer, sizeof(buffer), "%lld", (long long)lead_ns);
++  if (wrote > 0)
++    send_ssnc_metadata('lead', buffer, (uint32_t)wrote, 0);
++}
++#endif
+ 
+ void addADTStoPacket(uint8_t *packet, int packetLen, int rate, int channel_configuration) {
+   // https://stackoverflow.com/questions/18862715/how-to-generate-the-aac-adts-elementary-stream-with-android-mediacodec
+@@ -738,9 +761,15 @@
+                       sequence_number_for_player++;                 // simply increment
+                       expected_timestamp = timestamp + packet_size; // for the next time
+                       packets_played_in_this_sequence++;
++#ifdef CONFIG_METADATA
++                      report_presentation_lead(lead_time, 0);
++#endif
+                     }
+                   }
+                 } else {
++#ifdef CONFIG_METADATA
++                  report_presentation_lead(lead_time, 1);
++#endif
+                   debug(3,
+                         "skipped deciphering block %u with timestamp %u because its lead time is "
+                         "out of range at %g "
+@@ -773,6 +802,9 @@
+                     seq_no, 1.0 * lead_time * 1E-9, config.audio_decoded_buffer_desired_length);
+               very_early_packets_signalled = 1;
+             }
++#ifdef CONFIG_METADATA
++            report_presentation_lead(lead_time, 0);
++#endif
+             usleep(((1000000 * conn->frames_per_packet) / conn->input_rate) *
+                    2); // wait for approximately the length of two packets
+           }

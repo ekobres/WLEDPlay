@@ -23,8 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
 # Upstream 5.6.3. The patch tells NQPTP which clocks to watch at the initial
-# SETUP, limits advertised addresses to the AirPlay interface, and lets stdout
-# play before a PTP lock exists. B stays on the audio SETUP.
+# SETUP, limits advertised addresses to the AirPlay interface, lets stdout
+# play before a PTP lock exists, and reports each block's presentation lead.
+# B stays on the audio SETUP.
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
