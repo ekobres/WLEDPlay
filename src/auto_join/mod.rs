@@ -20,6 +20,10 @@ pub struct AirPlayDevice {
     pub address: String,
     pub available: bool,
     pub playing: bool,
+    /// The target has a session open and playback is paused. No PCM is expected
+    /// until play resumes. The group membership should stay up.
+    #[serde(default)]
+    pub paused: bool,
     pub airplay2: bool,
     /// The target is receiving audio from a sender Auto Join cannot ask.
     /// That sender may be a phone, iPad, Mac, or Apple TV. It is not one of
@@ -172,7 +176,7 @@ impl AutoJoinService {
         self.update_idle(input.now_ms, input.raw_busy);
         if !input.raw_busy {
             self.apply_results(&input, &mut logs);
-            self.arm_timeouts(input.now_ms, &mut logs);
+            self.arm_timeouts(input.now_ms, target_paused(&input), &mut logs);
         } else {
             self.clear_finished_requests(&input);
         }
@@ -208,13 +212,14 @@ impl AutoJoinService {
         let device = find_target(input.devices, input.target_id);
         let available = device.is_some_and(|d| d.available);
         let playing = device.is_some_and(|d| d.playing && d.available);
+        let paused = device.is_some_and(|d| d.paused && d.available);
         if !available {
             self.cancel_join();
             self.phase = Phase::TargetUnavailable;
             self.attempt = 0;
             return self.finish(&input, None, logs);
         }
-        if !playing {
+        if !playing && !paused {
             self.cancel_join();
             self.phase = Phase::IdleWaiting;
             self.attempt = 0;
@@ -223,13 +228,13 @@ impl AutoJoinService {
             return self.finish(&input, None, logs);
         }
         if !self.was_playing {
-            self.log(
-                &mut logs,
-                format!(
-                    "Auto Join target started playback: {}",
-                    display_target(&self.seen_name, input.target_id)
-                ),
-            );
+            let name = display_target(&self.seen_name, input.target_id);
+            let notice = if paused {
+                format!("Auto Join target is paused: {name}")
+            } else {
+                format!("Auto Join target started playback: {name}")
+            };
+            self.log(&mut logs, notice);
             self.was_playing = true;
         }
         if device.is_some_and(|d| d.phone_owned) {
@@ -244,6 +249,13 @@ impl AutoJoinService {
             return self.finish(&input, None, logs);
         }
         if self.phase == Phase::Error {
+            return self.finish(&input, None, logs);
+        }
+        if self.phase == Phase::Joined {
+            return self.finish(&input, None, logs);
+        }
+        if self.awaiting_pcm && paused {
+            self.hold_paused(&mut logs);
             return self.finish(&input, None, logs);
         }
         if self.outstanding {
@@ -419,15 +431,20 @@ impl AutoJoinService {
                 continue;
             }
             if result.ok {
-                self.awaiting_pcm = true;
-                self.pcm_deadline = input.now_ms.saturating_add(JOIN_TIMEOUT_MS);
-                if self.phase != Phase::Joined {
-                    self.phase = Phase::Joining;
+                if target_paused(input) {
+                    self.hold_paused(logs);
+                } else {
+                    self.awaiting_pcm = true;
+                    self.pcm_deadline = input.now_ms.saturating_add(JOIN_TIMEOUT_MS);
+                    if self.phase != Phase::Joined {
+                        self.phase = Phase::Joining;
+                    }
+                    self.log(
+                        logs,
+                        "Auto Join join request succeeded; waiting for inbound AirPlay session"
+                            .into(),
+                    );
                 }
-                self.log(
-                    logs,
-                    "Auto Join join request succeeded; waiting for inbound AirPlay session".into(),
-                );
             } else if result.error == "another device is sending audio" {
                 self.awaiting_pcm = false;
                 self.outstanding = false;
@@ -444,7 +461,7 @@ impl AutoJoinService {
         }
     }
 
-    fn arm_timeouts(&mut self, now: u64, logs: &mut Vec<String>) {
+    fn arm_timeouts(&mut self, now: u64, paused: bool, logs: &mut Vec<String>) {
         if self.outstanding && now >= self.outstanding_deadline {
             self.generation = self.generation.wrapping_add(1);
             self.outstanding = false;
@@ -452,7 +469,11 @@ impl AutoJoinService {
         }
         if self.awaiting_pcm && now >= self.pcm_deadline {
             self.awaiting_pcm = false;
-            self.fail(now, "timed out waiting for inbound AirPlay session", logs);
+            if paused {
+                self.hold_paused(logs);
+            } else {
+                self.fail(now, "timed out waiting for inbound AirPlay session", logs);
+            }
         }
     }
 
@@ -487,6 +508,14 @@ impl AutoJoinService {
         self.log(logs, "Auto Join successful".into());
     }
 
+    fn hold_paused(&mut self, logs: &mut Vec<String>) {
+        self.succeed(logs);
+        self.log(
+            logs,
+            "Auto Join holding the group while playback is paused".into(),
+        );
+    }
+
     fn cancel_join(&mut self) {
         self.outstanding = false;
         self.awaiting_pcm = false;
@@ -510,12 +539,15 @@ impl AutoJoinService {
         let device = find_target(input.devices, input.target_id);
         let target_available = device.is_some_and(|d| d.available);
         let target_playing = device.is_some_and(|d| d.playing && d.available);
+        let target_paused = device.is_some_and(|d| d.paused && d.available);
         let target_status = if input.target_id.is_empty() {
             String::new()
         } else if !target_available {
             "Offline".into()
         } else if target_playing {
             "Playing".into()
+        } else if target_paused {
+            "Paused".into()
         } else {
             "Idle".into()
         };
@@ -525,9 +557,21 @@ impl AutoJoinService {
             Phase::NoTarget => "Enabled — no target selected".to_string(),
             Phase::IdleWaiting => format!("Waiting for {name}"),
             Phase::TargetUnavailable => "Target unavailable".to_string(),
-            Phase::TargetActive => "Target playing".to_string(),
+            Phase::TargetActive => {
+                if target_paused {
+                    "Target paused".to_string()
+                } else {
+                    "Target playing".to_string()
+                }
+            }
             Phase::Joining => "Joining group".to_string(),
-            Phase::Joined => "Joined".to_string(),
+            Phase::Joined => {
+                if target_paused {
+                    "Joined, playback paused".to_string()
+                } else {
+                    "Joined".to_string()
+                }
+            }
             Phase::Busy => "WLEDPlay busy".to_string(),
             Phase::Error => format!("Join failed · {}", self.last_error),
             Phase::PhoneOwned => format!(
@@ -579,6 +623,10 @@ fn display_target(name: &str, id: &str) -> String {
     } else {
         "(none)".into()
     }
+}
+
+fn target_paused(input: &TickInput<'_>) -> bool {
+    find_target(input.devices, input.target_id).is_some_and(|d| d.paused && d.available)
 }
 
 fn find_target<'a>(devices: &'a [AirPlayDevice], id: &str) -> Option<&'a AirPlayDevice> {
@@ -691,9 +739,16 @@ mod tests {
             address: "10.0.0.8".into(),
             available: true,
             playing,
+            paused: false,
             airplay2: true,
             phone_owned: false,
         }
+    }
+
+    fn paused_dev(id: &str, name: &str) -> AirPlayDevice {
+        let mut device = dev(id, name, false);
+        device.paused = true;
+        device
     }
 
     fn tick(
@@ -1274,7 +1329,16 @@ mod tests {
         let mut playing = dev("aa", "Bar Siri", true);
         playing.phone_owned = true;
         let held = tick(
-            &mut svc, 0, false, true, "aa", "Bar Siri", "self", &[playing.clone()], true, &[],
+            &mut svc,
+            0,
+            false,
+            true,
+            "aa",
+            "Bar Siri",
+            "self",
+            &[playing.clone()],
+            true,
+            &[],
         );
         assert!(held.join.is_none());
         assert_eq!(held.view.state, "phone_owned");
@@ -1288,7 +1352,16 @@ mod tests {
             .iter()
             .any(|l| l.contains("cannot ask the device")));
         let again = tick(
-            &mut svc, 5_000, false, true, "aa", "Bar Siri", "self", &[playing], true, &[],
+            &mut svc,
+            5_000,
+            false,
+            true,
+            "aa",
+            "Bar Siri",
+            "self",
+            &[playing],
+            true,
+            &[],
         );
         assert!(again.join.is_none());
         assert_eq!(again.view.state, "phone_owned");
@@ -1296,14 +1369,32 @@ mod tests {
         let mut origin = dev("aa", "Bar Siri", true);
         origin.phone_owned = false;
         let ready = tick(
-            &mut svc, 6_000, false, true, "aa", "Bar Siri", "self", &[origin.clone()], true, &[],
+            &mut svc,
+            6_000,
+            false,
+            true,
+            "aa",
+            "Bar Siri",
+            "self",
+            &[origin.clone()],
+            true,
+            &[],
         );
         assert!(ready.join.is_some());
         assert_eq!(ready.view.state, "joining");
 
         let mut raced = AutoJoinService::new();
         let started = tick(
-            &mut raced, 0, false, true, "aa", "Bar Siri", "self", &[origin.clone()], true, &[],
+            &mut raced,
+            0,
+            false,
+            true,
+            "aa",
+            "Bar Siri",
+            "self",
+            &[origin.clone()],
+            true,
+            &[],
         )
         .join
         .unwrap();
@@ -1329,6 +1420,263 @@ mod tests {
         assert_eq!(blocked.view.state, "phone_owned");
         assert!(blocked.view.last_error.is_empty());
         assert!(!blocked.view.label.contains("Join failed"));
+    }
+
+    #[test]
+    fn paused_group_stays_joined_without_pcm() {
+        let mut svc = AutoJoinService::new();
+        let paused = [paused_dev("aa", "Kitchen")];
+        let started = tick(
+            &mut svc,
+            0,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        let req = started.join.expect("join while paused");
+        assert_eq!(started.view.target_status, "Paused");
+        assert!(started.logs.iter().any(|l| l.contains("is paused")));
+        let held = tick(
+            &mut svc,
+            10,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[JoinResult {
+                revision: req.revision,
+                generation: req.generation,
+                ok: true,
+                error: String::new(),
+            }],
+        );
+        assert_eq!(held.view.state, "joined");
+        assert_eq!(held.view.label, "Joined, playback paused");
+        assert!(held.logs.iter().any(|l| l.contains("holding the group")));
+        assert!(held.join.is_none());
+        let still = tick(
+            &mut svc,
+            20,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert!(still.join.is_none());
+        assert_eq!(still.view.state, "joined");
+        let resumed = tick(
+            &mut svc,
+            30,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &[dev("aa", "Kitchen", true)],
+            true,
+            &[],
+        );
+        assert!(resumed.join.is_none());
+        assert_eq!(resumed.view.label, "Joined");
+        let idle = tick(
+            &mut svc,
+            40,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &[dev("aa", "Kitchen", false)],
+            true,
+            &[],
+        );
+        assert_eq!(idle.view.state, "idle_waiting");
+        let mut held_svc = AutoJoinService::new();
+        let req = tick(
+            &mut held_svc,
+            0,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        )
+        .join
+        .unwrap();
+        let _ = tick(
+            &mut held_svc,
+            10,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[JoinResult {
+                revision: req.revision,
+                generation: req.generation,
+                ok: true,
+                error: String::new(),
+            }],
+        );
+        let live = tick(
+            &mut held_svc,
+            20,
+            true,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &[dev("aa", "Kitchen", true)],
+            true,
+            &[],
+        );
+        assert_eq!(live.view.state, "joined");
+
+        let mut mid = AutoJoinService::new();
+        let playing_now = [dev("aa", "Kitchen", true)];
+        let req = tick(
+            &mut mid,
+            0,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing_now,
+            true,
+            &[],
+        )
+        .join
+        .unwrap();
+        let _ = tick(
+            &mut mid,
+            5,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing_now,
+            true,
+            &[JoinResult {
+                revision: req.revision,
+                generation: req.generation,
+                ok: true,
+                error: String::new(),
+            }],
+        );
+        let switched = tick(
+            &mut mid,
+            6,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(switched.view.state, "joined");
+        assert!(switched.join.is_none());
+
+        let mut late = AutoJoinService::new();
+        let req = tick(
+            &mut late,
+            0,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing_now,
+            true,
+            &[],
+        )
+        .join
+        .unwrap();
+        let _ = tick(
+            &mut late,
+            5,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &playing_now,
+            true,
+            &[JoinResult {
+                revision: req.revision,
+                generation: req.generation,
+                ok: true,
+                error: String::new(),
+            }],
+        );
+        let at_deadline = tick(
+            &mut late,
+            5 + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(at_deadline.view.state, "joined");
+        assert!(at_deadline.view.last_error.is_empty());
+
+        let mut retry = AutoJoinService::new();
+        let req = tick(
+            &mut retry,
+            0,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        )
+        .join
+        .unwrap();
+        let failed = tick(
+            &mut retry,
+            10,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[JoinResult {
+                revision: req.revision,
+                generation: req.generation,
+                ok: false,
+                error: "nope".into(),
+            }],
+        );
+        assert_eq!(failed.view.label, "Target paused");
     }
 
     #[test]

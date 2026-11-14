@@ -730,6 +730,7 @@ mod tests {
             address: String::new(),
             available: true,
             playing: true,
+            paused: false,
             airplay2: true,
             phone_owned: false,
         }];

@@ -130,6 +130,7 @@ def device_record(conf) -> dict | None:
         "address": address,
         "available": True,
         "playing": False,
+        "paused": False,
         "airplay2": True,
         "phone_owned": False,
     }
@@ -384,8 +385,8 @@ def leader_hosts(probe_id: str, index: dict, receiver_name: str) -> list[str]:
     return _host_list(devices, probe_id, leaders + others)
 
 
-async def read_playing(atv) -> bool:
-    """pyatv 0.16 exposes playing() as a coroutine method, not a property."""
+async def read_playback(atv) -> str:
+    """playing, paused, or idle. pyatv 0.16 exposes playing() as a coroutine."""
     from pyatv.const import DeviceState
 
     playing = atv.metadata.playing
@@ -394,15 +395,23 @@ async def read_playing(atv) -> bool:
     if asyncio.iscoroutine(playing):
         playing = await playing
     state = getattr(playing, "device_state", None)
-    return state in (DeviceState.Playing, DeviceState.Loading)
+    if state in (DeviceState.Playing, DeviceState.Loading):
+        return "playing"
+    if state == DeviceState.Paused:
+        return "paused"
+    return "idle"
+
+
+async def probe_playback(conf, storage) -> str:
+    atv = await connect_device(conf, storage)
+    try:
+        return await read_playback(atv)
+    finally:
+        await _close(atv)
 
 
 async def probe_playing(conf, storage) -> bool:
-    atv = await connect_device(conf, storage)
-    try:
-        return await read_playing(atv)
-    finally:
-        await _close(atv)
+    return await probe_playback(conf, storage) == "playing"
 
 
 async def output_snapshot(rc) -> list[tuple[str, str]]:
@@ -595,11 +604,11 @@ def _has_probe(probe_id: str, found: ScanIndex) -> bool:
     return bool(probe_id) and probe_id in found.by_id
 
 
-async def _playing_result(conf, storage) -> tuple[bool, str]:
+async def _playback_result(conf, storage) -> tuple[str, str]:
     try:
-        return await probe_playing(conf, storage), ""
+        return await probe_playback(conf, storage), ""
     except Exception as exc:
-        return False, str(exc)
+        return "idle", str(exc)
 
 
 async def _member_playing(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> bool:
@@ -627,21 +636,33 @@ async def _playing_without_target(
     return False, error
 
 
-def _mark_playing(found: ScanIndex, probe_id: str, playing: bool) -> None:
+def _mark_playback(found: ScanIndex, probe_id: str, kind: str) -> None:
     for rec in found.devices:
         rec["phone_owned"] = phone_owns_playback(rec["id"], found.props_by_id)
         if rec["id"] == probe_id:
-            rec["playing"] = playing
+            rec["playing"] = kind == "playing"
+            rec["paused"] = kind == "paused"
 
 
 async def _mark_probe(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> str:
-    playing, error = await _playing_result(found.by_id[probe_id], storage)
-    if not playing:
-        playing, error = await _playing_without_target(
+    kind, error = await _playback_result(found.by_id[probe_id], storage)
+    if kind == "idle":
+        kind, error = await _idle_or_playing(
             probe_id, found, receiver_name, storage, error
         )
-    _mark_playing(found, probe_id, playing)
+    _mark_playback(found, probe_id, kind)
     return error
+
+
+async def _idle_or_playing(
+    probe_id: str, found: ScanIndex, receiver_name: str, storage, error: str
+) -> tuple[str, str]:
+    playing, error = await _playing_without_target(
+        probe_id, found, receiver_name, storage, error
+    )
+    if playing:
+        return "playing", error
+    return "idle", error
 
 
 async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) -> dict:
@@ -792,8 +813,8 @@ async def _locate(target_id: str, receiver_id: str) -> _Located:
     )
 
 
-def _worth_adding(ident: str, target_id: str, playing: bool, props_by_id: dict) -> bool:
-    if playing:
+def _worth_adding(ident: str, target_id: str, kind: str, props_by_id: dict) -> bool:
+    if kind in {"playing", "paused"}:
         return True
     return ident == target_id and receiving_audio(props_by_id.get(target_id, {}))
 
@@ -833,11 +854,11 @@ async def _ask_one(state: _Attempt, ident: str, target_id: str, located: _Locate
     conf = located.found.by_id.get(ident)
     if conf is None:
         return None
-    playing, play_error = await _playing_result(conf, located.storage)
+    kind, play_error = await _playback_result(conf, located.storage)
     if play_error:
         state.note_play_error(ident, target_id, play_error)
         return None
-    if not _worth_adding(ident, target_id, playing, located.found.props_by_id):
+    if not _worth_adding(ident, target_id, kind, located.found.props_by_id):
         return None
     state.tried = True
     return await _add_outcome(state, conf, located)
