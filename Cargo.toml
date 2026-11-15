@@ -17,7 +17,7 @@ path = "src/main.rs"
 axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
-if-addrs = "0.13"
+if-addrs = "0.15"
 libc = "0.2"
 realfft = "3"
 rustfft = "6"
