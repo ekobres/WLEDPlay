@@ -95,19 +95,37 @@ pub struct TrackMetadataStatus {
 }
 
 impl TrackMetadataStatus {
+    fn has_track(&self) -> bool {
+        self.title.is_some() || self.artist.is_some() || self.album.is_some()
+    }
+
     pub fn set_from_track(&mut self, meta: &TrackMetadata) {
+        let same_track =
+            self.title == meta.title && self.artist == meta.artist && self.album == meta.album;
         self.artist = meta.artist.clone();
         self.album = meta.album.clone();
         self.title = meta.title.clone();
         self.has_artwork = meta.has_artwork;
         self.duration_s = meta.duration_s();
-        self.position_base_s = meta.position_s();
-        self.progress_unix_ms = meta.progress_unix_ms;
+        // AirPlay 2 puts elapsed time in the now-playing plist and does not
+        // write it to the metadata pipe. A later item (lead, artwork) must
+        // not wipe a clock that is already running for this track.
+        if let Some(pos) = meta.position_s() {
+            self.position_base_s = Some(pos);
+            self.progress_unix_ms = meta.progress_unix_ms;
+        } else if !same_track {
+            self.position_s = None;
+            self.position_base_s = None;
+            self.progress_unix_ms = None;
+        }
     }
 
     pub fn refresh_position(&mut self, playing: bool) {
         if playing {
-            if self.progress_unix_ms.is_none() && self.position_base_s.is_some() {
+            if self.position_base_s.is_none() && self.has_track() {
+                self.position_base_s = Some(0.0);
+                self.progress_unix_ms = Some(metadata::unix_ms_now());
+            } else if self.progress_unix_ms.is_none() && self.position_base_s.is_some() {
                 self.progress_unix_ms = Some(metadata::unix_ms_now());
             }
             self.position_s = metadata::interpolated_position(
@@ -499,6 +517,50 @@ mod tests {
 
         md.refresh_position(true);
         assert!(md.position_s.is_none());
+    }
+
+    #[test]
+    fn track_progress_runs_when_airplay_omits_elapsed() {
+        let mut md = TrackMetadataStatus::default();
+        let mut track = TrackMetadata::default();
+        track.title = Some("Song".into());
+        track.artist = Some("Artist".into());
+        track.duration_ms = Some(180_000);
+        md.set_from_track(&track);
+        assert!(md.position_base_s.is_none());
+        assert!((md.duration_s.unwrap() - 180.0).abs() < 1e-3);
+
+        md.refresh_position(true);
+        assert!(md.position_s.unwrap() < 0.05);
+        let running = md.progress_unix_ms;
+        assert!(running.is_some());
+
+        md.progress_unix_ms = Some(unix_ms_now().saturating_sub(1500));
+        md.refresh_position(true);
+        assert!((md.position_s.unwrap() - 1.5).abs() < 0.3);
+
+        track.album = Some("Album".into());
+        md.set_from_track(&track);
+        assert!(md.progress_unix_ms.is_none());
+        assert!(md.position_base_s.is_none());
+
+        md.refresh_position(true);
+        md.progress_unix_ms = Some(unix_ms_now().saturating_sub(2000));
+        let kept = md.progress_unix_ms;
+        track.duration_ms = Some(200_000);
+        md.set_from_track(&track);
+        assert_eq!(md.progress_unix_ms, kept);
+        assert!((md.duration_s.unwrap() - 200.0).abs() < 1e-3);
+        md.refresh_position(true);
+        assert!((md.position_s.unwrap() - 2.0).abs() < 0.3);
+
+        track.rtp_start = Some(0);
+        track.rtp_current = Some(44_100);
+        track.rtp_end = Some(88_200);
+        track.progress_unix_ms = Some(unix_ms_now());
+        md.set_from_track(&track);
+        md.refresh_position(true);
+        assert!((md.position_s.unwrap() - 1.0).abs() < 0.05);
     }
 
     #[tokio::test]

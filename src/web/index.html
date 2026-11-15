@@ -124,7 +124,8 @@
       font-size: 0.72rem; line-height: 16px; flex-shrink: 0;
     }
     .tip {
-      max-width: 280px; margin: 0; background: #1d243c; color: var(--text);
+      position: fixed; inset: auto; margin: 0;
+      max-width: 280px; background: #1d243c; color: var(--text);
       border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
       font-size: 0.85rem; line-height: 1.4;
     }
@@ -1002,6 +1003,32 @@
         clearTimeout(statusTimer);
         statusTick();
       }
+    });
+
+    function placeTip(tip) {
+      const btn = document.querySelector('[popovertarget="' + tip.id + '"]');
+      if (!btn) return;
+      const anchor = btn.getBoundingClientRect();
+      const width = tip.offsetWidth;
+      const height = tip.offsetHeight;
+      const gap = 6;
+      let left = anchor.left;
+      let top = anchor.bottom + gap;
+      if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
+      if (left < 8) left = 8;
+      if (top + height > window.innerHeight - 8) top = Math.max(8, anchor.top - height - gap);
+      tip.style.left = left + "px";
+      tip.style.top = top + "px";
+    }
+
+    document.querySelectorAll(".tip").forEach((tip) => {
+      tip.addEventListener("beforetoggle", (ev) => {
+        if (ev.newState === "open") tip.style.visibility = "hidden";
+      });
+      tip.addEventListener("toggle", (ev) => {
+        if (ev.newState === "open") placeTip(tip);
+        tip.style.visibility = "";
+      });
     });
 
     setViz(true);

@@ -225,6 +225,8 @@ mod tests {
         assert!(html.contains("Applies immediately"));
         assert!(html.contains("Takes effect after restart"));
         assert!(html.contains("popovertarget"));
+        assert!(html.contains("function placeTip"));
+        assert!(html.contains("ev.newState === \"open\""));
         assert!(html.contains("shownRms >= 0.95"));
         assert!(!html.contains("s.peak ?"));
         assert!(html.contains("id=\"viz-decay\""));
