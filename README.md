@@ -139,6 +139,7 @@ Example: allow `192.0.2.10:11988/udp` from the WLEDPlay host. Substitute your co
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — processes and module map
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — unfinished requirements and later work
 - [`docs/SYNC_MEASUREMENT.md`](docs/SYNC_MEASUREMENT.md) — visual versus audible delay
 - [`SECURITY.md`](SECURITY.md) — trusted-LAN control plane
 - [`docs/LICENSING.md`](docs/LICENSING.md)

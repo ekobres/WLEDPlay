@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
 ## 0.3.0
 
 Current development snapshot.
