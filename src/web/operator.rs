@@ -230,6 +230,10 @@ mod tests {
         assert!(html.contains("function paintSession"));
         assert!(html.contains("function paintPlayers"));
         assert!(html.contains("function playerRole"));
+        assert!(html.contains("function fillChips"));
+        assert!(html.contains(".chip.target"));
+        assert!(html.contains(".chip.leader"));
+        assert!(html.contains("td.role"));
         assert!(html.contains("function flagNames"));
         assert!(html.contains("function sessionFlags"));
         let encoding_at = html.find("id=\"sess-encoding\"").unwrap();

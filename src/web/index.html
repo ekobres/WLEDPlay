@@ -64,16 +64,36 @@
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 18px; margin-top: 12px; }
     .stats .span-all { grid-column: 1 / -1; }
     .stats .value { font-size: 1rem; }
-    .session-players { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .session-players {
+      width: 100%; border-collapse: collapse; margin-top: 14px;
+      font-size: 0.72rem; line-height: 1.35;
+    }
     .session-players th, .session-players td {
-      text-align: left; vertical-align: top; padding: 8px 16px 8px 0;
+      text-align: left; vertical-align: top; padding: 6px 12px 6px 0;
     }
     .session-players th {
-      color: var(--muted); font-size: 0.75rem; font-weight: 500;
+      color: var(--muted); font-size: 0.62rem; font-weight: 500;
       letter-spacing: 0.04em; text-transform: uppercase; padding-top: 0;
+      white-space: nowrap;
     }
-    .session-players td { border-top: 1px solid var(--line); word-break: break-word; }
+    .session-players td { border-top: 1px solid var(--line); }
+    .session-players td.player { white-space: nowrap; }
+    .session-players td.role, .session-players th.role { white-space: nowrap; width: 1%; }
+    .session-players td.role .chips { flex-wrap: nowrap; }
     .session-players th:last-child, .session-players td:last-child { padding-right: 0; }
+    .chips { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+    .chip {
+      display: inline-block; white-space: nowrap;
+      border-radius: 999px; padding: 0 6px;
+      background: #1d243c; color: var(--muted);
+      font-size: 0.68rem; line-height: 1.55;
+    }
+    .chip.target { color: #9eb6ff; background: #1a2748; }
+    .chip.leader { color: var(--ok); background: #143528; }
+    .chip.hex {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+    }
     .track-bar { height: 4px; margin-top: 0; }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
     .value.peak { color: var(--peak); }
@@ -293,7 +313,7 @@
       </div>
       <table class="session-players">
         <thead>
-          <tr><th>Player</th><th>Role</th><th>Flags</th></tr>
+          <tr><th>Player</th><th class="role">Role</th><th>Flags</th></tr>
         </thead>
         <tbody id="sess-players">
           <tr><td colspan="3">—</td></tr>
@@ -616,7 +636,41 @@
       const parts = [];
       if (player.target) parts.push("Target");
       if (player.leader) parts.push("Leader");
-      return parts.length ? parts.join(", ") : "—";
+      return parts.join(", ");
+    }
+
+    function chip(text, kind) {
+      const el = document.createElement("span");
+      el.className = "chip" + (kind ? " " + kind : "");
+      el.textContent = text;
+      return el;
+    }
+
+    function fillChips(cell, items, empty) {
+      if (!items.length) {
+        if (empty) cell.textContent = empty;
+        return;
+      }
+      const wrap = document.createElement("span");
+      wrap.className = "chips";
+      items.forEach((item) => wrap.appendChild(chip(item[0], item[1])));
+      cell.appendChild(wrap);
+    }
+
+    function roleChips(player) {
+      const items = [];
+      if (player.target) items.push(["Target", "target"]);
+      if (player.leader) items.push(["Leader", "leader"]);
+      return items;
+    }
+
+    function flagChips(player) {
+      const items = [];
+      if (player.flags) items.push([player.flags, "hex"]);
+      flagNames(player.flags).forEach((name) => items.push([name, ""]));
+      if (advertisedOn(player.igl)) items.push(["group leader", ""]);
+      if (advertisedOn(player.gcgl)) items.push(["contains leader", ""]);
+      return items;
     }
 
     function paintPlayers(players) {
@@ -636,13 +690,16 @@
       }
       rows.forEach((player) => {
         const row = document.createElement("tr");
-        ["name", "role", "flags"].forEach((kind) => {
-          const cell = document.createElement("td");
-          if (kind === "name") cell.textContent = player.name || "—";
-          else if (kind === "role") cell.textContent = playerRole(player);
-          else cell.textContent = sessionFlags(player);
-          row.appendChild(cell);
-        });
+        const name = document.createElement("td");
+        name.className = "player";
+        name.textContent = player.name || "—";
+        const role = document.createElement("td");
+        role.className = "role";
+        fillChips(role, roleChips(player));
+        const flags = document.createElement("td");
+        flags.className = "flags";
+        fillChips(flags, flagChips(player), "—");
+        row.append(name, role, flags);
         body.appendChild(row);
       });
     }
