@@ -394,6 +394,7 @@ def session_view(
         name = names.get(ident) or ident
         if name and name not in members:
             members.append(name)
+    members.sort(key=str.casefold)
     return {
         "target_name": target_name,
         "flags": (mine.get("flags") or mine.get("sf") or ""),

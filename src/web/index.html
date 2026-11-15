@@ -62,6 +62,7 @@
       font-size: 0.78rem; color: var(--muted);
     }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 18px; margin-top: 12px; }
+    .stats .span-all { grid-column: 1 / -1; }
     .stats .value { font-size: 1rem; }
     .track-bar { height: 4px; margin-top: 0; }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
@@ -278,11 +279,11 @@
       <div class="label">Session</div>
       <div class="stats">
         <div><div class="label">Target</div><div class="value" id="sess-target">—</div></div>
-        <div><div class="label">Flags</div><div class="value" id="sess-flags">—</div></div>
         <div><div class="label">Leader</div><div class="value" id="sess-leader">—</div></div>
-        <div><div class="label">Group</div><div class="value" id="sess-group">—</div></div>
+        <div><div class="label">Other Group Members</div><div class="value" id="sess-group">—</div></div>
         <div><div class="label">Encoding</div><div class="value" id="sess-encoding">—</div></div>
         <div><div class="label">Client</div><div class="value" id="sess-client">—</div></div>
+        <div class="span-all"><div class="label">Flags</div><div class="value" id="sess-flags">—</div></div>
       </div>
     </div>
     <div class="card controls">
@@ -551,17 +552,57 @@
       return value ? value : "—";
     }
 
+    const STATUS_FLAG_NAMES = {
+      0: "problem",
+      1: "not configured",
+      2: "audio cable",
+      3: "PIN required",
+      4: "PIN entry",
+      5: "PIN match",
+      6: "AirPlay from cloud",
+      7: "password",
+      9: "pairing PIN",
+      10: "HomeKit access",
+      11: "relay",
+      12: "silent primary",
+      13: "tight sync leader",
+      14: "tight sync buddy unreachable",
+      15: "Apple Music",
+      16: "iCloud library",
+      17: "receiving"
+    };
+
+    function advertisedOn(value) {
+      const text = String(value || "").trim().toLowerCase();
+      return text === "1" || text === "true" || text === "yes";
+    }
+
+    function flagNames(raw) {
+      const text = String(raw || "").trim();
+      const value = Number.parseInt(text, 16);
+      if (!text || !Number.isFinite(value) || value < 0) return [];
+      const names = [];
+      for (let bit = 0; bit < 32; bit++) {
+        if (Math.floor(value / (2 ** bit)) % 2 === 0) continue;
+        names.push(STATUS_FLAG_NAMES[bit] || ("bit " + bit));
+      }
+      return names;
+    }
+
     function sessionFlags(group) {
       const parts = [];
       if (group.flags) parts.push(group.flags);
-      if (group.igl) parts.push("igl " + group.igl);
-      if (group.gcgl) parts.push("gcgl " + group.gcgl);
+      parts.push.apply(parts, flagNames(group.flags));
+      if (advertisedOn(group.igl)) parts.push("group leader");
+      if (advertisedOn(group.gcgl)) parts.push("contains leader");
       return parts.length ? parts.join(" · ") : "—";
     }
 
     function paintSession(s) {
       const group = s.session || {};
-      const members = group.members || [];
+      const members = (group.members || []).slice().sort((a, b) =>
+        String(a).localeCompare(String(b), undefined, { sensitivity: "base" })
+      );
       const airplay = s.airplay || {};
       $("sess-target").textContent = dash(group.target_name);
       $("sess-flags").textContent = sessionFlags(group);

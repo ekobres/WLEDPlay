@@ -228,7 +228,11 @@ mod tests {
         assert!(html.contains("id=\"sess-encoding\""));
         assert!(html.contains("id=\"sess-client\""));
         assert!(html.contains("function paintSession"));
+        assert!(html.contains(">Other Group Members</div>"));
+        assert!(html.contains("function flagNames"));
         assert!(html.contains("function sessionFlags"));
+        assert!(html.contains("17: \"receiving\""));
+        assert!(html.contains("contains leader"));
         let session_at = html.find(">Session</div>").unwrap();
         let control_at = html.find(">Control</div>").unwrap();
         let bands_at = html.find("id=\"bands\"").unwrap();
