@@ -474,7 +474,7 @@ mod tests {
     fn scan_and_join_http_branches() {
         let (port, handle) = serve(
             "HTTP/1.1 200 OK",
-            r#"{"self_id":"self","discovery_active":true,"error":"","devices":[],"session":{"target_name":"Kitchen","flags":"0x198404","igl":"1","gcgl":"0","gid":"group","leader":"Kitchen","members":["Bar"]}}"#,
+            r#"{"self_id":"self","discovery_active":true,"error":"","devices":[],"session":{"target_name":"Kitchen","flags":"0x198404","igl":"1","gcgl":"0","gid":"group","leader":"Kitchen","members":["Bar"],"players":[{"name":"Bar","flags":"0x20004","igl":"0","gcgl":"1","target":true,"leader":false}]}}"#,
         );
         let base = format!("http://127.0.0.1:{port}");
         let scan = fetch_scan(&base, "WLED Play", "aa").unwrap();
@@ -483,6 +483,11 @@ mod tests {
         assert_eq!(scan.session.leader, "Kitchen");
         assert_eq!(scan.session.flags, "0x198404");
         assert_eq!(scan.session.members, vec!["Bar".to_string()]);
+        assert_eq!(scan.session.players.len(), 1);
+        assert_eq!(scan.session.players[0].name, "Bar");
+        assert!(scan.session.players[0].target);
+        assert!(!scan.session.players[0].leader);
+        assert_eq!(scan.session.players[0].flags, "0x20004");
         let _ = handle.join();
 
         let (port, handle) = serve("HTTP/1.1 500 ERR", "");
@@ -596,6 +601,7 @@ mod tests {
                     gid: "group".into(),
                     leader: "Kitchen".into(),
                     members: vec!["Bar".into()],
+                    players: vec![],
                 },
             }),
         );

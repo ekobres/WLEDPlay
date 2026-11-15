@@ -28,6 +28,22 @@ pub struct AppState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AirPlayPlayer {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub flags: String,
+    #[serde(default)]
+    pub igl: String,
+    #[serde(default)]
+    pub gcgl: String,
+    #[serde(default)]
+    pub target: bool,
+    #[serde(default)]
+    pub leader: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AirPlaySession {
     #[serde(default)]
     pub target_name: String,
@@ -43,6 +59,8 @@ pub struct AirPlaySession {
     pub leader: String,
     #[serde(default)]
     pub members: Vec<String>,
+    #[serde(default)]
+    pub players: Vec<AirPlayPlayer>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -614,6 +632,14 @@ mod tests {
                 gid: "group".into(),
                 leader: "Kitchen".into(),
                 members: vec!["Bar".into()],
+                players: vec![AirPlayPlayer {
+                    name: "Bar".into(),
+                    flags: "0x20004".into(),
+                    igl: "0".into(),
+                    gcgl: "1".into(),
+                    target: false,
+                    leader: false,
+                }],
             };
         }
         let (status, body) = send(
@@ -630,6 +656,9 @@ mod tests {
         assert!(published.contains("\"target_name\":\"Kitchen\""));
         assert!(published.contains("\"leader\":\"Kitchen\""));
         assert!(published.contains("\"members\":[\"Bar\"]"));
+        assert!(published.contains("\"name\":\"Bar\""));
+        assert!(published.contains("\"flags\":\"0x20004\""));
+        assert!(published.contains("\"gcgl\":\"1\""));
 
         state.status.lock().unwrap().audio.rms = 0.42;
         state.status.lock().unwrap().audio.bands[0] = 200;

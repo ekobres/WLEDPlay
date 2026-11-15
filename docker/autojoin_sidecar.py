@@ -374,6 +374,37 @@ def _host_list(devices: dict, probe_id: str, peer_ids: list[str]) -> list[str]:
     return hosts
 
 
+def _player_row(ident: str, props: dict, names: dict, target_id: str) -> dict:
+    return {
+        "name": names.get(ident) or ident,
+        "flags": (props.get("flags") or props.get("sf") or ""),
+        "igl": props.get("igl") or "",
+        "gcgl": props.get("gcgl") or "",
+        "target": ident == target_id,
+        "leader": is_group_leader_txt(props),
+    }
+
+
+def session_players(
+    probe_id: str, props_by_id: dict, names: dict
+) -> list[dict]:
+    """Every speaker in the selected session, including this player."""
+    if not probe_id:
+        return []
+    leaders, others = session_peer_ids(probe_id, props_by_id, names, "", set(), True)
+    idents = [probe_id]
+    for ident in leaders + others:
+        if ident not in idents:
+            idents.append(ident)
+    rows = [
+        _player_row(ident, props_by_id.get(ident) or {}, names, probe_id)
+        for ident in idents
+        if names.get(ident) or ident
+    ]
+    rows.sort(key=lambda row: row["name"].casefold())
+    return rows
+
+
 def session_view(
     probe_id: str, props_by_id: dict, names: dict, receiver_name: str
 ) -> dict:
@@ -403,6 +434,7 @@ def session_view(
         "gid": mine.get("gid") or "",
         "leader": leader,
         "members": members,
+        "players": session_players(probe_id, props_by_id, names),
     }
 
 

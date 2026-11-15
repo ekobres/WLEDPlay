@@ -64,6 +64,16 @@
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 18px; margin-top: 12px; }
     .stats .span-all { grid-column: 1 / -1; }
     .stats .value { font-size: 1rem; }
+    .session-players { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .session-players th, .session-players td {
+      text-align: left; vertical-align: top; padding: 8px 16px 8px 0;
+    }
+    .session-players th {
+      color: var(--muted); font-size: 0.75rem; font-weight: 500;
+      letter-spacing: 0.04em; text-transform: uppercase; padding-top: 0;
+    }
+    .session-players td { border-top: 1px solid var(--line); word-break: break-word; }
+    .session-players th:last-child, .session-players td:last-child { padding-right: 0; }
     .track-bar { height: 4px; margin-top: 0; }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
     .value.peak { color: var(--peak); }
@@ -278,13 +288,17 @@
     <div class="card">
       <div class="label">Session</div>
       <div class="stats">
-        <div><div class="label">Target</div><div class="value" id="sess-target">—</div></div>
-        <div><div class="label">Leader</div><div class="value" id="sess-leader">—</div></div>
-        <div><div class="label">Other Group Members</div><div class="value" id="sess-group">—</div></div>
         <div><div class="label">Encoding</div><div class="value" id="sess-encoding">—</div></div>
         <div><div class="label">Client</div><div class="value" id="sess-client">—</div></div>
-        <div class="span-all"><div class="label">Flags</div><div class="value" id="sess-flags">—</div></div>
       </div>
+      <table class="session-players">
+        <thead>
+          <tr><th>Player</th><th>Role</th><th>Flags</th></tr>
+        </thead>
+        <tbody id="sess-players">
+          <tr><td colspan="3">—</td></tr>
+        </tbody>
+      </table>
     </div>
     <div class="card controls">
       <div class="label">Control</div>
@@ -598,18 +612,47 @@
       return parts.length ? parts.join(" · ") : "—";
     }
 
+    function playerRole(player) {
+      const parts = [];
+      if (player.target) parts.push("Target");
+      if (player.leader) parts.push("Leader");
+      return parts.length ? parts.join(", ") : "—";
+    }
+
+    function paintPlayers(players) {
+      const body = $("sess-players");
+      const rows = (players || []).slice().sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" })
+      );
+      body.replaceChildren();
+      if (!rows.length) {
+        const empty = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 3;
+        cell.textContent = "—";
+        empty.appendChild(cell);
+        body.appendChild(empty);
+        return;
+      }
+      rows.forEach((player) => {
+        const row = document.createElement("tr");
+        ["name", "role", "flags"].forEach((kind) => {
+          const cell = document.createElement("td");
+          if (kind === "name") cell.textContent = player.name || "—";
+          else if (kind === "role") cell.textContent = playerRole(player);
+          else cell.textContent = sessionFlags(player);
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
     function paintSession(s) {
       const group = s.session || {};
-      const members = (group.members || []).slice().sort((a, b) =>
-        String(a).localeCompare(String(b), undefined, { sensitivity: "base" })
-      );
       const airplay = s.airplay || {};
-      $("sess-target").textContent = dash(group.target_name);
-      $("sess-flags").textContent = sessionFlags(group);
-      $("sess-leader").textContent = dash(group.leader);
-      $("sess-group").textContent = members.length ? members.join(", ") : "—";
       $("sess-encoding").textContent = dash(airplay.encoding);
       $("sess-client").textContent = dash(airplay.source);
+      paintPlayers(group.players);
     }
 
     function paintClock(c) {
