@@ -210,7 +210,12 @@ mod tests {
         assert!(html.contains("function isDirty()"));
         assert!(!html.contains("Visualizer on"));
         assert!(html.contains(">Visualizer</span>"));
-        assert!(html.contains("viz-when-open"));
+        assert!(html.contains("function idleSpectrum"));
+        let body_viz = html.find("id=\"body-viz\"").expect("body-viz");
+        let toggle_at = html.find("id=\"viz-toggle\"").expect("viz-toggle");
+        let source_at = html.find("id=\"viz-source\"").expect("viz-source");
+        let decay_at = html.find("id=\"viz-decay\"").expect("viz-decay");
+        assert!(toggle_at < body_viz && body_viz < source_at && source_at < decay_at);
         assert!(html.contains("band-hz"));
         assert!(html.contains("function compactHz"));
         assert!(html.contains("id=\"viz-source\""));

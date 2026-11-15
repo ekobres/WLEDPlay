@@ -171,7 +171,6 @@
       color: var(--muted); font-size: 0.52rem; line-height: 1.05;
       font-variant-numeric: tabular-nums; letter-spacing: -0.03em;
     }
-    .card.collapsed .viz-when-open { display: none; }
     .viz-level { flex: 1; min-width: 72px; height: 8px; margin-top: 0; }
     pre { margin: 8px 0 0; color: var(--muted); font-size: 0.78rem; overflow: auto; }
     .controls label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -211,7 +210,7 @@
     .check input { width: auto; }
     .viz-head { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: wrap; }
     .card.collapsed .viz-head { flex-wrap: nowrap; }
-    .viz-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .viz-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
     .viz-source {
       width: auto; max-width: 220px; background: #0e1424; color: var(--text);
       border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
@@ -305,32 +304,31 @@
           <span class="chevron" aria-hidden="true"></span>
           <span class="label">Visualizer</span>
         </button>
-        <span class="card-summary" id="sum-viz">0% · — Hz</span>
         <div class="meter viz-volume viz-level" id="levelmeter"><span id="levelbar"></span></div>
-        <div class="viz-controls viz-when-open">
-          <select id="viz-source" aria-label="Spectrum source">
-            <option value="tx" selected>On LEDs (sent)</option>
-            <option value="rx">Received (early)</option>
-          </select>
-          <button type="button" class="info" popovertarget="tip-viz-source" aria-label="About spectrum source">?</button>
-          <label class="switch">
-            <span>Decay</span>
-            <input type="checkbox" id="viz-decay" role="switch" checked aria-checked="true" aria-label="Visualizer decay">
-            <span class="switch-track"></span>
-          </label>
-          <button type="button" class="info" popovertarget="tip-viz-decay" aria-label="About decay">?</button>
-        </div>
         <label class="switch">
           <span>Visualizer</span>
           <input type="checkbox" id="viz-toggle" role="switch" checked aria-checked="true" aria-label="Live visualizer">
           <span class="switch-track"></span>
         </label>
-        <button type="button" class="info viz-when-open" popovertarget="tip-viz-toggle" aria-label="About the visualizer">?</button>
+        <button type="button" class="info" popovertarget="tip-viz-toggle" aria-label="About the visualizer">?</button>
       </div>
       <div id="tip-viz-source" popover class="tip">On LEDs shows the bands in the packet that was sent. Received shows the analyzer before the send delay.</div>
       <div id="tip-viz-decay" popover class="tip">Bars fall smoothly between updates. Off holds each reading until the next one.</div>
       <div id="tip-viz-toggle" popover class="tip">Turns the spectrum animation on or off. The lights keep receiving packets either way.</div>
       <div class="card-body" id="body-viz">
+      <div class="viz-controls">
+        <select id="viz-source" aria-label="Spectrum source">
+          <option value="tx" selected>On LEDs (sent)</option>
+          <option value="rx">Received (early)</option>
+        </select>
+        <button type="button" class="info" popovertarget="tip-viz-source" aria-label="About spectrum source">?</button>
+        <label class="switch">
+          <span>Decay</span>
+          <input type="checkbox" id="viz-decay" role="switch" checked aria-checked="true" aria-label="Visualizer decay">
+          <span class="switch-track"></span>
+        </label>
+        <button type="button" class="info" popovertarget="tip-viz-decay" aria-label="About decay">?</button>
+      </div>
       <div class="bands" id="bands"></div>
       <div class="viz-meters">
         <div class="viz-meter-head">
@@ -545,6 +543,23 @@
       shownBands.fill(0);
     }
 
+    function idleSpectrum() {
+      resetShown();
+      $("level").textContent = "  0%";
+      $("level").className = "viz-num";
+      $("level-peak").classList.remove("on");
+      $("levelbar").style.width = "0%";
+      $("levelmeter").classList.remove("hot");
+      $("beatbar").style.width = "0%";
+      $("beat-led").style.background = "#1d243c";
+      $("beat-led").style.borderColor = "var(--line)";
+      $("beat-led").style.boxShadow = "none";
+      $("beat-led").style.opacity = "0.35";
+      $("freq").textContent = "      — Hz";
+      $("agc").textContent = "    off";
+      bars.forEach((bar) => { bar.style.height = "0%"; });
+    }
+
     function fallToward(current, target, dt) {
       if (target >= current) return target;
       if (dt <= 0) return current;
@@ -635,7 +650,6 @@
       $("beat-led").style.opacity = (0.35 + 0.65 * shownBeat).toFixed(3);
       const hz = Number(s.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1).padStart(7, " ") + " Hz" : "      — Hz";
-      $("sum-viz").textContent = $("level").textContent.trim() + " · " + $("freq").textContent.trim();
       if (!s.agc_on) {
         $("agc").textContent = "    off";
       } else {
@@ -896,7 +910,9 @@
       if (!levelsActive()) return;
       const started = performance.now();
       try {
-        paintFromLevels(await fetch("/levels").then((r) => r.json()));
+        const s = await fetch("/levels").then((r) => r.json());
+        if (!levelsActive()) return;
+        paintFromLevels(s);
       } catch { /* ignore */ }
       if (!levelsActive()) return;
       const period = 1000 / Math.max(1, updateHz);
@@ -937,7 +953,7 @@
       $("viz-toggle").checked = on;
       syncSwitch("viz-toggle");
       if (on) startLevels();
-      else stopLevels();
+      else { stopLevels(); idleSpectrum(); }
     }
 
     const FIELD_IDS = [
@@ -1313,12 +1329,13 @@
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
     $("viz-decay").addEventListener("change", () => {
       syncSwitch("viz-decay");
-      if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
+      if (vizOn && lastLevels) paintSpectrum(sourceMeters(lastLevels));
     });
     $("viz-source").addEventListener("change", () => {
       resetShown();
+      if (!vizOn) return;
       if (lastLevels) paintSpectrum(sourceMeters(lastLevels));
-      if (vizOn) startLevels();
+      startLevels();
     });
 
     document.addEventListener("visibilitychange", () => {
