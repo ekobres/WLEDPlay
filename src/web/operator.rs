@@ -209,6 +209,10 @@ mod tests {
         assert!(html.contains("/airplay/devices"));
         assert!(html.contains("function isDirty()"));
         assert!(!html.contains("Visualizer on"));
+        assert!(html.contains(">Visualizer</span>"));
+        assert!(html.contains("viz-when-open"));
+        assert!(html.contains("band-hz"));
+        assert!(html.contains("function compactHz"));
         assert!(html.contains("id=\"viz-source\""));
         assert!(html.contains("On LEDs (sent)"));
         assert!(html.contains("Received (early)"));
@@ -286,7 +290,7 @@ mod tests {
         let bands_at = html.find("id=\"bands\"").expect("bands");
         let level_at = html.find("id=\"levelbar\"").expect("levelbar");
         let stats_at = html.find("id=\"counters\"").expect("counters");
-        assert!(stats_at < bands_at && bands_at < level_at);
+        assert!(stats_at < level_at && level_at < bands_at);
     }
 
     #[test]
