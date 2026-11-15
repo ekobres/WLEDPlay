@@ -42,6 +42,27 @@
       padding: 14px 16px;
     }
     .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    button.card-toggle {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: none; border: 0; border-radius: 0; padding: 0;
+      color: inherit; cursor: pointer; flex-shrink: 0;
+    }
+    button.card-toggle:focus-visible { outline: 2px solid var(--bar); outline-offset: 3px; }
+    .chevron {
+      width: 0; height: 0; flex-shrink: 0;
+      border-left: 4px solid transparent; border-right: 4px solid transparent;
+      border-top: 5px solid var(--muted);
+    }
+    .card.collapsed .chevron { transform: rotate(-90deg); }
+    .card-summary { display: none; }
+    .card.collapsed .card-summary {
+      display: block; flex: 1; min-width: 0; margin-left: auto;
+      color: var(--text); font-size: 0.82rem; text-align: right;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .card-body { margin-top: 12px; }
+    .card.collapsed .card-body { display: none; }
     .track-card { display: flex; gap: 16px; align-items: center; }
     #art {
       width: 96px; height: 96px; object-fit: cover; border-radius: 8px;
@@ -216,10 +237,17 @@
     <span id="ver" class="pill"></span>
   </header>
   <main>
-    <div class="card track-card">
+    <div class="card" data-card="now">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-now">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Now playing</span>
+        </button>
+        <span class="card-summary" id="sum-now">No metadata yet</span>
+      </div>
+      <div class="card-body track-card" id="body-now">
       <img id="art" alt="" hidden>
       <div class="track-meta">
-        <div class="label">Now playing</div>
         <div class="value" id="track">No metadata yet</div>
         <div class="track-progress">
           <span id="track-pos">00:00</span>
@@ -227,9 +255,17 @@
           <span id="track-dur">00:00</span>
         </div>
       </div>
+      </div>
     </div>
-    <div class="card">
-      <div class="label">Statistics</div>
+    <div class="card" data-card="stats">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-stats">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Statistics</span>
+        </button>
+        <span class="card-summary" id="sum-stats">0 /s · —</span>
+      </div>
+      <div class="card-body" id="body-stats">
       <div class="stats">
         <div>
           <div class="label">Packet rate</div>
@@ -253,10 +289,15 @@
         </div>
       </div>
       <pre id="counters"></pre>
+      </div>
     </div>
-    <div class="card">
-      <div class="viz-head">
-        <div class="label">16 FFT bands</div>
+    <div class="card" data-card="viz">
+      <div class="card-head viz-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-viz">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">16 FFT bands</span>
+        </button>
+        <span class="card-summary" id="sum-viz">0% · — Hz</span>
         <div class="viz-controls">
           <select id="viz-source" aria-label="Spectrum source">
             <option value="tx" selected>On LEDs (sent)</option>
@@ -280,6 +321,7 @@
       <div id="tip-viz-source" popover class="tip">On LEDs shows the bands in the packet that was sent. Received shows the analyzer before the send delay.</div>
       <div id="tip-viz-decay" popover class="tip">Bars fall smoothly between updates. Off holds each reading until the next one.</div>
       <div id="tip-viz-toggle" popover class="tip">Turns the spectrum animation on or off. The lights keep receiving packets either way.</div>
+      <div class="card-body" id="body-viz">
       <div class="bands" id="bands"></div>
       <div class="viz-meters">
         <div class="viz-meter-head">
@@ -304,9 +346,17 @@
         </div>
         <div class="meter viz-volume" id="levelmeter"><span id="levelbar"></span></div>
       </div>
+      </div>
     </div>
-    <div class="card">
-      <div class="label">Session</div>
+    <div class="card" data-card="session">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-session">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Session</span>
+        </button>
+        <span class="card-summary" id="sum-session">— · 0 players</span>
+      </div>
+      <div class="card-body" id="body-session">
       <div class="stats">
         <div><div class="label">Encoding</div><div class="value" id="sess-encoding">—</div></div>
         <div><div class="label">Client</div><div class="value" id="sess-client">—</div></div>
@@ -319,9 +369,16 @@
           <tr><td colspan="3">—</td></tr>
         </tbody>
       </table>
+      </div>
     </div>
-    <div class="card controls">
-      <div class="label">Control</div>
+    <div class="card controls" data-card="control">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-control">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Control</span>
+        </button>
+      </div>
+      <div class="card-body" id="body-control">
       <div class="check">
         <input id="ctl-autojoin" type="checkbox" role="switch" aria-checked="false">
         <label for="ctl-autojoin">Join selected speaker when idle</label>
@@ -373,9 +430,16 @@
         <button id="ctl-cancel" type="button" disabled>Cancel</button>
         <span class="hint" id="ctl-msg">Applies immediately</span>
       </div>
+      </div>
     </div>
-    <div class="card controls">
-      <div class="label">Configuration</div>
+    <div class="card controls" data-card="config">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-config">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Configuration</span>
+        </button>
+      </div>
+      <div class="card-body" id="body-config">
       <div class="field-head">
         <label for="ctl-shairport">Shairport lead (s)</label>
         <button type="button" class="info" popovertarget="tip-shairport" aria-label="About Shairport lead">?</button>
@@ -418,6 +482,7 @@
         <button id="ctl-restart" class="danger" type="button">Restart stack</button>
         <span class="hint" id="ctl-msg-config">Takes effect after restart</span>
       </div>
+      </div>
     </div>
   </main>
   <script>
@@ -458,6 +523,7 @@
     }
 
     let trackSnap = { pos: null, dur: null, at: 0 };
+    let trackTitle = "No metadata yet";
 
     function adoptTrackProgress(md) {
       if (md.position_s == null && md.duration_s == null && !md.title && !md.artist) {
@@ -483,6 +549,8 @@
       $("track-dur").textContent = haveDur ? formatClock(dur) : "00:00";
       $("trackbar").style.width = haveDur && pos != null
         ? Math.min(100, Math.max(0, pos / dur * 100)) + "%" : "0%";
+      const remain = haveDur && pos != null ? "−" + formatClock(Math.max(0, dur - pos)) : "";
+      $("sum-now").textContent = remain ? trackTitle + " · " + remain : trackTitle;
     }
 
     function paintConn(live) {
@@ -530,6 +598,7 @@
       $("beat-led").style.opacity = (0.35 + 0.65 * shownBeat).toFixed(3);
       const hz = Number(s.dominant_frequency || 0);
       $("freq").textContent = hz > 1 ? hz.toFixed(1).padStart(7, " ") + " Hz" : "      — Hz";
+      $("sum-viz").textContent = $("level").textContent.trim() + " · " + $("freq").textContent.trim();
       if (!s.agc_on) {
         $("agc").textContent = "    off";
       } else {
@@ -547,6 +616,7 @@
       $("ver").textContent = s.version || "";
       const md = s.metadata || {};
       const parts = [md.title, md.artist, md.album].filter(Boolean);
+      trackTitle = md.title || (parts.length ? parts.join(" · ") : "No metadata yet");
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
       adoptTrackProgress(md);
       paintTrackProgress(!!s.airplay.connected);
@@ -571,6 +641,7 @@
       $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
         + "s · " + (s.airplay.connections || 0) + " connects";
       paintClock(s.clock);
+      $("sum-stats").textContent = $("pps").textContent + " · " + $("clock").textContent;
       paintSession(s);
       const c = s.counters || {};
       $("counters").textContent =
@@ -710,6 +781,48 @@
       $("sess-encoding").textContent = dash(airplay.encoding);
       $("sess-client").textContent = dash(airplay.source);
       paintPlayers(group.players);
+      const count = (group.players || []).length;
+      $("sum-session").textContent = dash(airplay.encoding)
+        + " · " + count + (count === 1 ? " player" : " players");
+    }
+
+    const CARD_STORE = "wledplay.cards";
+
+    function readCardState() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(CARD_STORE) || "{}");
+        return raw && typeof raw === "object" ? raw : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function cardExpanded(id) {
+      const saved = readCardState();
+      return saved[id] !== false;
+    }
+
+    function setCardExpanded(id, open) {
+      const card = document.querySelector('[data-card="' + id + '"]');
+      if (!card) return;
+      card.classList.toggle("collapsed", !open);
+      const toggle = card.querySelector(".card-toggle");
+      if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      const saved = readCardState();
+      saved[id] = open;
+      localStorage.setItem(CARD_STORE, JSON.stringify(saved));
+    }
+
+    function initCards() {
+      document.querySelectorAll("[data-card]").forEach((card) => {
+        const id = card.dataset.card;
+        const open = cardExpanded(id);
+        card.classList.toggle("collapsed", !open);
+        const toggle = card.querySelector(".card-toggle");
+        if (!toggle) return;
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.addEventListener("click", () => setCardExpanded(id, card.classList.contains("collapsed")));
+      });
     }
 
     function paintClock(c) {
@@ -1208,6 +1321,7 @@
       });
     });
 
+    initCards();
     setViz(true);
     statusTick();
     loadConfig();
