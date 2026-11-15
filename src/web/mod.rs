@@ -27,6 +27,24 @@ pub struct AppState {
     pub control: Option<Control>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AirPlaySession {
+    #[serde(default)]
+    pub target_name: String,
+    #[serde(default)]
+    pub flags: String,
+    #[serde(default)]
+    pub igl: String,
+    #[serde(default)]
+    pub gcgl: String,
+    #[serde(default)]
+    pub gid: String,
+    #[serde(default)]
+    pub leader: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RuntimeStatus {
     pub version: String,
@@ -36,6 +54,7 @@ pub struct RuntimeStatus {
     pub metadata: TrackMetadataStatus,
     pub counters: CounterStatus,
     pub auto_join: AutoJoinStatus,
+    pub session: AirPlaySession,
     pub airplay_devices: Vec<AirPlayDeviceInfo>,
     #[serde(skip)]
     pub clock_session: ClockSession,
@@ -49,6 +68,7 @@ pub struct AirplayStatus {
     pub connections: u64,
     pub stream_duration_s: f32,
     pub source: Option<String>,
+    pub encoding: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -395,7 +415,7 @@ mod tests {
     fn bare_state() -> AppState {
         AppState {
             status: Arc::new(Mutex::new(RuntimeStatus {
-                version: "0.2.0".into(),
+                version: "0.2.1".into(),
                 ..Default::default()
             })),
             artwork: Arc::new(Mutex::new(None)),
@@ -579,9 +599,37 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8_lossy(&body).contains("0.2.0"));
+        assert!(String::from_utf8_lossy(&body).contains("0.2.1"));
         assert!(String::from_utf8_lossy(&body).contains("auto_join"));
         assert!(String::from_utf8_lossy(&body).contains("\"clock\""));
+        {
+            let mut s = state.status.lock().unwrap();
+            s.airplay.encoding = "ALAC · 44100/16/2".into();
+            s.airplay.source = Some("10.0.0.8".into());
+            s.session = AirPlaySession {
+                target_name: "Kitchen".into(),
+                flags: "0x198404".into(),
+                igl: "1".into(),
+                gcgl: "0".into(),
+                gid: "group".into(),
+                leader: "Kitchen".into(),
+                members: vec!["Bar".into()],
+            };
+        }
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let published = String::from_utf8_lossy(&body);
+        assert!(published.contains("\"encoding\":\"ALAC · 44100/16/2\""));
+        assert!(published.contains("\"target_name\":\"Kitchen\""));
+        assert!(published.contains("\"leader\":\"Kitchen\""));
+        assert!(published.contains("\"members\":[\"Bar\"]"));
 
         state.status.lock().unwrap().audio.rms = 0.42;
         state.status.lock().unwrap().audio.bands[0] = 200;

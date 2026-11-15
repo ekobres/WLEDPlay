@@ -660,6 +660,10 @@ pub fn apply_metadata_line(
     let playing = s.airplay.connected;
     s.metadata.refresh_position(playing);
     s.airplay.source = meta.source.clone();
+    s.airplay.encoding = metadata::stream_encoding(
+        meta.stream_type.as_deref(),
+        meta.stream_description.as_deref(),
+    );
 }
 
 #[cfg(test)]
@@ -1039,9 +1043,21 @@ mod tests {
         );
         apply_metadata_line(&mut raw, &lead, &mut meta, &artwork, &status);
         assert!(status.lock().unwrap().clock_session.lead_ms.unwrap() < -9_000.0);
+        let styp = format!(
+            "<item><type>73736e63</type><code>73747970</code><data encoding=\"base64\">{}</data></item>\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"ALAC")
+        );
+        let sdsc = format!(
+            "<item><type>73736e63</type><code>73647363</code><data encoding=\"base64\">{}</data></item>\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"44100/16/2")
+        );
+        apply_metadata_line(&mut raw, &styp, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &sdsc, &mut meta, &artwork, &status);
+        assert_eq!(status.lock().unwrap().airplay.encoding, "ALAC · 44100/16/2");
         let pend = "<item><type>73736e63</type><code>70656e64</code></item>\n";
         apply_metadata_line(&mut raw, pend, &mut meta, &artwork, &status);
         assert!(status.lock().unwrap().clock_session.lead_ms.is_none());
+        assert!(status.lock().unwrap().airplay.encoding.is_empty());
     }
 
     #[test]

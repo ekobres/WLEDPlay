@@ -14,6 +14,8 @@ pub struct TrackMetadata {
     pub album: Option<String>,
     pub title: Option<String>,
     pub source: Option<String>,
+    pub stream_type: Option<String>,
+    pub stream_description: Option<String>,
     pub has_artwork: bool,
     pub rtp_start: Option<u32>,
     pub rtp_current: Option<u32>,
@@ -32,6 +34,22 @@ pub struct Artwork {
 pub type SharedArtwork = Arc<Mutex<Option<Artwork>>>;
 
 pub const RTP_PROGRESS_RATE: f32 = 44100.0;
+
+pub fn stream_encoding(kind: Option<&str>, description: Option<&str>) -> String {
+    match (nonempty(kind), nonempty(description)) {
+        (Some(kind), Some(description)) => format!("{kind} · {description}"),
+        (Some(kind), None) => kind.to_string(),
+        (None, Some(description)) => description.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    match value {
+        Some(text) if !text.is_empty() => Some(text),
+        _ => None,
+    }
+}
 
 impl TrackMetadata {
     pub fn duration_s(&self) -> Option<f32> {
@@ -169,6 +187,14 @@ pub fn apply_item(
         }
         ("ssnc", "clip") => {
             meta.source = utf8_opt(&item.data);
+            true
+        }
+        ("ssnc", "styp") => {
+            meta.stream_type = utf8_opt(&item.data);
+            true
+        }
+        ("ssnc", "sdsc") => {
+            meta.stream_description = utf8_opt(&item.data);
             true
         }
         ("ssnc", "mdst") => true,
@@ -394,6 +420,29 @@ mod tests {
         };
         assert!(apply_item(&mut meta, &mut art, &clip));
         assert_eq!(meta.source.as_deref(), Some("iPhone"));
+        let styp = MetaItem {
+            type_code: "ssnc".into(),
+            code: "styp".into(),
+            data: b"ALAC".to_vec(),
+        };
+        let sdsc = MetaItem {
+            type_code: "ssnc".into(),
+            code: "sdsc".into(),
+            data: b"44100/16/2".to_vec(),
+        };
+        assert!(apply_item(&mut meta, &mut art, &styp));
+        assert!(apply_item(&mut meta, &mut art, &sdsc));
+        assert_eq!(
+            stream_encoding(
+                meta.stream_type.as_deref(),
+                meta.stream_description.as_deref()
+            ),
+            "ALAC · 44100/16/2"
+        );
+        assert_eq!(stream_encoding(Some("AAC"), None), "AAC");
+        assert_eq!(stream_encoding(None, Some("AAC-LC")), "AAC-LC");
+        assert_eq!(stream_encoding(Some(""), Some("")), "");
+        assert_eq!(stream_encoding(None, None), "");
 
         let mdst = MetaItem {
             type_code: "ssnc".into(),
@@ -411,6 +460,9 @@ mod tests {
         };
         assert!(apply_item(&mut meta, &mut art, &pfls));
         assert!(art.is_none());
+        assert!(meta.stream_type.is_none());
+        assert!(meta.stream_description.is_none());
+        assert_eq!(meta.source.as_deref(), Some("iPhone"));
 
         assert!(utf8_opt(b"   ").is_none());
         assert_eq!(utf8_opt(b" hi ").as_deref(), Some("hi"));

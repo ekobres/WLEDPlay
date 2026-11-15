@@ -274,6 +274,17 @@
         <div class="meter viz-volume" id="levelmeter"><span id="levelbar"></span></div>
       </div>
     </div>
+    <div class="card">
+      <div class="label">Session</div>
+      <div class="stats">
+        <div><div class="label">Target</div><div class="value" id="sess-target">—</div></div>
+        <div><div class="label">Flags</div><div class="value" id="sess-flags">—</div></div>
+        <div><div class="label">Leader</div><div class="value" id="sess-leader">—</div></div>
+        <div><div class="label">Group</div><div class="value" id="sess-group">—</div></div>
+        <div><div class="label">Encoding</div><div class="value" id="sess-encoding">—</div></div>
+        <div><div class="label">Client</div><div class="value" id="sess-client">—</div></div>
+      </div>
+    </div>
     <div class="card controls">
       <div class="label">Control</div>
       <div class="check">
@@ -525,6 +536,7 @@
       $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
         + "s · " + (s.airplay.connections || 0) + " connects";
       paintClock(s.clock);
+      paintSession(s);
       const c = s.counters || {};
       $("counters").textContent =
         "pcm " + (c.pcm_frames || 0)
@@ -533,6 +545,30 @@
         + "  udp_err " + (c.udp_errors || 0)
         + "  underrun " + (c.pcm_underruns || 0)
         + "  overrun " + (c.analysis_overruns || 0);
+    }
+
+    function dash(value) {
+      return value ? value : "—";
+    }
+
+    function sessionFlags(group) {
+      const parts = [];
+      if (group.flags) parts.push(group.flags);
+      if (group.igl) parts.push("igl " + group.igl);
+      if (group.gcgl) parts.push("gcgl " + group.gcgl);
+      return parts.length ? parts.join(" · ") : "—";
+    }
+
+    function paintSession(s) {
+      const group = s.session || {};
+      const members = group.members || [];
+      const airplay = s.airplay || {};
+      $("sess-target").textContent = dash(group.target_name);
+      $("sess-flags").textContent = sessionFlags(group);
+      $("sess-leader").textContent = dash(group.leader);
+      $("sess-group").textContent = members.length ? members.join(", ") : "—";
+      $("sess-encoding").textContent = dash(airplay.encoding);
+      $("sess-client").textContent = dash(airplay.source);
     }
 
     function paintClock(c) {

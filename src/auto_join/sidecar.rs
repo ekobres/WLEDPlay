@@ -5,7 +5,7 @@ use super::{
     TickInput,
 };
 use crate::config::AutoJoinConfig;
-use crate::web::{AutoJoinStatus, SharedStatus};
+use crate::web::{AirPlaySession, AutoJoinStatus, SharedStatus};
 use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -25,6 +25,7 @@ struct Discovery {
     self_id: String,
     discovery_active: bool,
     error: String,
+    session: AirPlaySession,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,7 +39,7 @@ enum WorkerMsg {
     Join(JoinRequest),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ScanBody {
     #[serde(default)]
     self_id: String,
@@ -48,6 +49,8 @@ struct ScanBody {
     error: String,
     #[serde(default)]
     devices: Vec<AirPlayDevice>,
+    #[serde(default)]
+    session: AirPlaySession,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,6 +140,7 @@ impl AutoJoinHub {
         view.device_count = detected_count(&discovery.devices, &discovery.self_id, receiver_name);
         let mut status = status.lock().unwrap();
         status.auto_join = view;
+        status.session = discovery.session;
         status.airplay_devices = choices;
     }
 }
@@ -244,6 +248,7 @@ fn apply_scan(dest: &mut Discovery, found: Result<ScanBody, String>) {
             dest.devices = scan.devices;
             dest.self_id = scan.self_id;
             dest.discovery_active = scan.discovery_active;
+            dest.session = scan.session;
         }
         Err(err) => {
             dest.discovery_active = false;
@@ -469,12 +474,15 @@ mod tests {
     fn scan_and_join_http_branches() {
         let (port, handle) = serve(
             "HTTP/1.1 200 OK",
-            r#"{"self_id":"self","discovery_active":true,"error":"","devices":[]}"#,
+            r#"{"self_id":"self","discovery_active":true,"error":"","devices":[],"session":{"target_name":"Kitchen","flags":"0x198404","igl":"1","gcgl":"0","gid":"group","leader":"Kitchen","members":["Bar"]}}"#,
         );
         let base = format!("http://127.0.0.1:{port}");
         let scan = fetch_scan(&base, "WLED Play", "aa").unwrap();
         assert_eq!(scan.self_id, "self");
         assert!(scan.discovery_active);
+        assert_eq!(scan.session.leader, "Kitchen");
+        assert_eq!(scan.session.flags, "0x198404");
+        assert_eq!(scan.session.members, vec!["Bar".to_string()]);
         let _ = handle.join();
 
         let (port, handle) = serve("HTTP/1.1 500 ERR", "");
@@ -558,6 +566,7 @@ mod tests {
                 discovery_active: false,
                 error: String::new(),
                 devices: vec![],
+                session: AirPlaySession::default(),
             }
         );
         let _ = format!(
@@ -579,9 +588,20 @@ mod tests {
                 discovery_active: true,
                 error: String::new(),
                 devices: vec![],
+                session: AirPlaySession {
+                    target_name: "Kitchen".into(),
+                    flags: "0x198404".into(),
+                    igl: "1".into(),
+                    gcgl: "0".into(),
+                    gid: "group".into(),
+                    leader: "Kitchen".into(),
+                    members: vec!["Bar".into()],
+                },
             }),
         );
         assert!(dest.discovery_active);
+        assert_eq!(dest.session.leader, "Kitchen");
+        assert_eq!(dest.session.members, vec!["Bar".to_string()]);
         apply_scan(
             &mut dest,
             Ok(ScanBody {
@@ -589,9 +609,11 @@ mod tests {
                 discovery_active: true,
                 error: "pairing required".into(),
                 devices: vec![],
+                session: AirPlaySession::default(),
             }),
         );
         assert_eq!(dest.error, "pairing required");
+        assert!(dest.session.leader.is_empty());
         apply_scan(
             &mut dest,
             Ok(ScanBody {
@@ -599,6 +621,7 @@ mod tests {
                 discovery_active: true,
                 error: String::new(),
                 devices: vec![],
+                session: AirPlaySession::default(),
             }),
         );
         assert!(dest.error.is_empty());
@@ -609,9 +632,14 @@ mod tests {
                 discovery_active: true,
                 error: "pairing required".into(),
                 devices: vec![],
+                session: AirPlaySession {
+                    leader: "Kept".into(),
+                    ..AirPlaySession::default()
+                },
             }),
         );
         apply_scan(&mut dest, Err("down".into()));
+        assert_eq!(dest.session.leader, "Kept");
         assert!(!dest.discovery_active);
         assert_eq!(dest.error, "down");
         apply_scan(&mut dest, Err("down".into()));
@@ -627,8 +655,19 @@ mod tests {
             target_id: "aa".into(),
             target_name: "Kitchen".into(),
         };
+        hub.discovery.lock().unwrap().session = AirPlaySession {
+            target_name: "Kitchen".into(),
+            leader: "Kitchen".into(),
+            members: vec!["Bar".into()],
+            ..AirPlaySession::default()
+        };
         hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
         let view = status.lock().unwrap().auto_join.clone();
+        assert_eq!(status.lock().unwrap().session.leader, "Kitchen");
+        assert_eq!(
+            status.lock().unwrap().session.members,
+            vec!["Bar".to_string()]
+        );
         assert_eq!(view.target_id, "aa");
         assert!(!view.discovery_active);
         assert!(status

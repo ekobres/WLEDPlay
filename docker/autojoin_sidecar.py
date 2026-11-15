@@ -374,6 +374,37 @@ def _host_list(devices: dict, probe_id: str, peer_ids: list[str]) -> list[str]:
     return hosts
 
 
+def session_view(
+    probe_id: str, props_by_id: dict, names: dict, receiver_name: str
+) -> dict:
+    """Selected speaker's advertised flags and the other speakers in its session."""
+    mine = props_by_id.get(probe_id) or {}
+    target_name = names.get(probe_id) or ""
+    leaders, others = session_peer_ids(
+        probe_id, props_by_id, names, receiver_name, set(), True
+    )
+    if is_group_leader_txt(mine):
+        leader = target_name
+        member_ids = leaders + others
+    else:
+        leader = names.get(leaders[0], "") if leaders else ""
+        member_ids = leaders[1:] + others
+    members = []
+    for ident in member_ids:
+        name = names.get(ident) or ident
+        if name and name not in members:
+            members.append(name)
+    return {
+        "target_name": target_name,
+        "flags": (mine.get("flags") or mine.get("sf") or ""),
+        "igl": mine.get("igl") or "",
+        "gcgl": mine.get("gcgl") or "",
+        "gid": mine.get("gid") or "",
+        "leader": leader,
+        "members": members,
+    }
+
+
 def leader_hosts(probe_id: str, index: dict, receiver_name: str) -> list[str]:
     """Target address, then group leaders that share its playback session."""
     devices = index.get("devices") or {}
@@ -677,6 +708,9 @@ async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) ->
         "discovery_active": True,
         "error": error,
         "devices": found.devices,
+        "session": session_view(
+            probe_id, found.props_by_id, found.names, receiver_name
+        ),
     }
 
 
