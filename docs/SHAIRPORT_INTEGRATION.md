@@ -15,6 +15,23 @@ WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceab
 
 Pin exact versions in Docker image tags for reproducibility.
 
+The image applies two local patches by default. Both are build args, and both default to `1`, so a normal `docker compose build` matches the patched image.
+
+| Arg | `1` (default) | `0` |
+|-----|----------------|-----|
+| `WLEDPLAY_SHAIRPORT_PATCH` | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata | Stock 5.6.3 |
+| `WLEDPLAY_NQPTP_PATCH` | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command | Stock 1.2.9, which keeps the first address and drops the rest |
+
+`scripts/build-airplay.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
+
+Build a stock image without replacing the working one by tagging it yourself:
+
+```bash
+WLEDPLAY_SHAIRPORT_PATCH=0 WLEDPLAY_NQPTP_PATCH=0 docker compose build
+```
+
+Auto Join does not depend on either patch. It still succeeds only when PCM arrives. Stock Shairport holds stdout until a PTP lock exists, so a group add that delivers audio before the clock locks produces no samples. The NQPTP patch does nothing useful unless the Shairport patch is also on, because stock Shairport sends a single address. Shairport patched with NQPTP stock sends several addresses and NQPTP keeps only the first.
+
 ---
 
 ## Platform requirements
@@ -180,13 +197,15 @@ Restart policy: if shairport-sync exits, supervisor restarts full stack.
 
 Use **`network_mode: host`** because WLEDPlay requires:
 
-- Bonjour/mDNS (AirPlay advertisement) on IPv4 and IPv6. The AirPlay interface's global addresses, both families, are the timing peers. Link-local addresses and other NICs are left out, so a dual-stack client does not aim the PTP clock at an unreachable address. NQPTP watches every address the client offers.
+- Bonjour/mDNS (AirPlay advertisement) on IPv4 and IPv6. With the default Shairport patch, timing peers are the AirPlay interface's global addresses, both families. Link-local addresses and other NICs are left out, and NQPTP watches every address the client offers. A stock build advertises every up, non-loopback address on every NIC.
 - UDP multicast to WLED (`239.0.0.1:11988`)
 - AirPlay 2 PTP (NQPTP). The entrypoint waits for `/dev/shm/nqptp` before starting Shairport.
 
 No `- /dev/snd` mount required.
 
 Per-traffic NIC selection (HTTP, AirPlay/mDNS, unicast, multicast) is configured via `network.*` in YAML or the matching `WLEDPLAY_*_INTERFACE` env vars.
+
+`WLEDPLAY_IPV4_ONLY=1` rewrites the container Avahi config to `use-ipv6=no`. mDNS is then IPv4 only. The container uses the host network namespace, so this does not disable IPv6 on the host and does not change the timing-peer list Shairport builds from its own interfaces. Other IPv4 NICs are still advertised. It is a test lever, not a substitute for the interface filter in the Shairport patch.
 
 ---
 

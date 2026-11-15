@@ -53,6 +53,7 @@ if [ -z "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="$(sed -n 's/^[[:space:]]*shairport_latency_offset_s:[[:space:]]*//p' "$CFG_YAML" 2>/dev/null | head -1)"
 fi
 ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
+WLEDPLAY_IPV4_ONLY="${WLEDPLAY_IPV4_ONLY:-0}"
 PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
 SIDECAR_PID=""
@@ -98,6 +99,10 @@ start_mdns() {
       sed -i "/^\\[server\\]/a allow-interfaces=${WLEDPLAY_AIRPLAY_INTERFACE}" "$avahi_conf"
     fi
     echo "Avahi allow-interfaces: ${WLEDPLAY_AIRPLAY_INTERFACE}"
+  fi
+  if [ "$WLEDPLAY_IPV4_ONLY" = "1" ]; then
+    sed -i 's/^use-ipv6=yes/use-ipv6=no/' "$avahi_conf"
+    echo "Avahi IPv6 disabled (mDNS only; timing peers are unchanged)"
   fi
 
   echo "Starting avahi-daemon..."

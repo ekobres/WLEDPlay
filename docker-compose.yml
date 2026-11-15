@@ -1,6 +1,10 @@
 services:
   wledplay:
-    build: .
+    build:
+      context: .
+      args:
+        WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-1}
+        WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-1}
     image: ghcr.io/wledplay/wledplay:latest
     container_name: wledplay
     network_mode: host
@@ -25,3 +29,4 @@ services:
       WLEDPLAY_SHAIRPORT_LATENCY_OFFSET: "${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
       WLEDPLAY_PCM_RATE: "48000"
       ENABLE_AVAHI: "${ENABLE_AVAHI:-1}"
+      WLEDPLAY_IPV4_ONLY: "${WLEDPLAY_IPV4_ONLY:-0}"

@@ -13,6 +13,7 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim AS shairport-build
 ARG SHAIRPORT_VERSION
+ARG WLEDPLAY_SHAIRPORT_PATCH=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool pkg-config \
@@ -22,14 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
-# Upstream 5.6.3. The patch tells NQPTP which clocks to watch at the initial
-# SETUP, limits advertised addresses to the AirPlay interface, lets stdout
-# play before a PTP lock exists, and reports each block's presentation lead.
-# B stays on the audio SETUP.
+# Upstream 5.6.3. WLEDPLAY_SHAIRPORT_PATCH=1 (the default) tells NQPTP which
+# clocks to watch at the initial SETUP, limits advertised addresses to the
+# AirPlay interface, lets stdout play before a PTP lock exists, and reports
+# each block's presentation lead. B stays on the audio SETUP. Set the arg to
+# 0 for an unpatched tag build.
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
-    git apply /tmp/shairport-mixed-stack.patch && \
+    if [ "$WLEDPLAY_SHAIRPORT_PATCH" = "1" ]; then git apply /tmp/shairport-mixed-stack.patch; fi && \
     autoreconf -fi && \
     ./configure --with-stdout --with-airplay-2 --with-avahi --with-ssl=openssl --with-soxr --with-metadata && \
     make -j"$(nproc)" && \
@@ -37,18 +39,20 @@ RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
 
 FROM debian:bookworm-slim AS nqptp-build
 ARG NQPTP_VERSION
+ARG WLEDPLAY_NQPTP_PATCH=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/nqptp-timing-peers.patch /tmp/nqptp-timing-peers.patch
-# Upstream 1.2.9. A T command lists every address the client offered.
-# Stock keeps the first and drops the rest.
+# Upstream 1.2.9. WLEDPLAY_NQPTP_PATCH=1 (the default) watches every address
+# in a T command. Stock keeps the first and drops the rest. Set the arg to 0
+# for an unpatched tag build.
 RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
       https://github.com/mikebrady/nqptp.git && \
     cd nqptp && \
-    git apply /tmp/nqptp-timing-peers.patch && \
+    if [ "$WLEDPLAY_NQPTP_PATCH" = "1" ]; then git apply /tmp/nqptp-timing-peers.patch; fi && \
     autoreconf -fi && \
     ./configure && \
     make -j"$(nproc)" && \
@@ -96,7 +100,8 @@ ENV WLEDPLAY_AIRPLAY_NAME=WLEDPlay \
     WLEDPLAY_METADATA_PIPE=/run/wledplay.meta \
     WLEDPLAY_AUTOJOIN_URL=http://127.0.0.1:8091 \
     PYATV_STORAGE=/host-config/pyatv \
-    ENABLE_AVAHI=1
+    ENABLE_AVAHI=1 \
+    WLEDPLAY_IPV4_ONLY=0
 
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
