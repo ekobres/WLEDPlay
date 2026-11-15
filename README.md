@@ -34,12 +34,14 @@ Or Docker with host networking:
 
 ```bash
 ./scripts/ensure-config.sh
-WLEDPLAY_DESTINATION=10.11.1.124 \
+WLEDPLAY_DESTINATION=192.0.2.10 \
 WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
 WLEDPLAY_UNICAST_INTERFACE=eth2 \
 WLEDPLAY_MULTICAST_INTERFACE=eth2 \
 docker compose up -d --build
 ```
+
+`192.0.2.10` is a documentation address. Substitute your WLED controller. Compose builds the image on this machine and tags it `ghcr.io/wledplay/wledplay`. That name is not a published registry image; do not `docker pull` it.
 
 On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin — HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus + Avahi; if the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
 
@@ -80,12 +82,14 @@ Environment overrides:
 | `WLEDPLAY_IPV4_ONLY` | `1` sets Avahi `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
 | `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `1` (default) applies `docker/shairport-mixed-stack.patch`; `0` builds stock 5.6.3 |
 | `WLEDPLAY_NQPTP_PATCH` | Build arg. `1` (default) applies `docker/nqptp-timing-peers.patch`; `0` builds stock 1.2.9 |
-| `WLEDPLAY_SYNC_OFFSET_MS` | Timing compensation (reserved) |
+| `WLEDPLAY_SYNC_OFFSET_MS` | Live send delay in milliseconds (`audio.sync_offset_ms`). Negative values clamp to `0` |
 | `WLEDPLAY_LOG_LEVEL` | Log level |
 
 ## HTTP status
 
-- `GET /` — debug UI and operator controls
+The operator UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /config` and `POST /restart` are open to anyone who can reach that port. Bind `network.http` or `WLEDPLAY_HTTP_INTERFACE` to a management NIC, or firewall TCP 8080. See [`SECURITY.md`](SECURITY.md).
+
+- `GET /` — operator UI
 - `GET /health` — liveness
 - `GET /status` — JSON runtime state (default `:8080`)
 - `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) for the UI poll
@@ -100,7 +104,7 @@ Requires **host networking** (mDNS, multicast, AirPlay 2 PTP). This does not wor
 
 ```bash
 ./scripts/ensure-config.sh
-WLEDPLAY_DESTINATION=10.11.1.124 \
+WLEDPLAY_DESTINATION=192.0.2.10 \
 WLEDPLAY_AIRPLAY_INTERFACE=eth1 \
 WLEDPLAY_UNICAST_INTERFACE=eth2 \
 WLEDPLAY_MULTICAST_INTERFACE=eth2 \
@@ -120,28 +124,39 @@ No `/dev/snd` required.
 
 ### VLAN / firewall requirement
 
-WLEDPlay sends **UDP** to your controller. If your Mac/PC and WLED are on **different VLANs** (e.g. Mac on `10.3.x`, WLED on `10.11.x`), HTTP to the WLED web UI may work while **UDP 11988 is blocked**. WLED will show **Audio Source: UDP sound sync - idle** even when WLEDPlay is running.
+WLEDPlay sends **UDP** to your controller. If the computer running WLEDPlay and the WLED controller are on different VLANs, HTTP to the WLED web UI may work while **UDP 11988 is blocked**. WLED will show **Audio Source: UDP sound sync - idle** even when WLEDPlay is running.
 
 Verify:
 
 ```bash
-python3 scripts/verify_wled_sync.py 10.11.1.124
+python3 scripts/verify_wled_sync.py 192.0.2.10
 ```
 
-**Fix:** run WLEDPlay on a host in the **same VLAN as WLED** (IoT / `10.11.x`), or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path. On a multi-homed host set `network.unicast` / `network.multicast` (or the matching env vars) to the WLED VLAN NIC so `239.0.0.1` is not sent out the management default route. IGMP snooping may keep that group off the router trunk if no receiver on that path has joined.
+**Fix:** run WLEDPlay on a host in the **same VLAN as WLED**, or add a firewall rule allowing **UDP 11988** to the WLED IP. Multicast (`239.0.0.1`) does not cross VLANs; unicast to the device IP from the same VLAN is the reliable path. On a multi-homed host set `network.unicast` / `network.multicast` (or the matching env vars) to the WLED VLAN NIC so `239.0.0.1` is not sent out the management default route. IGMP snooping may keep that group off the router trunk if no receiver on that path has joined.
 
-On UniFi: create a rule allowing `10.11.1.124:11988/udp` from your WLEDPlay host (or the IoT VLAN).
+Example: allow `192.0.2.10:11988/udp` from the WLEDPlay host. Substitute your controller address.
 
 ## Documentation
 
-Research docs (authoritative upstream analysis):
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — processes and module map
+- [`docs/SYNC_MEASUREMENT.md`](docs/SYNC_MEASUREMENT.md) — visual versus audible delay
+- [`SECURITY.md`](SECURITY.md) — trusted-LAN control plane
+- [`docs/LICENSING.md`](docs/LICENSING.md)
+
+Research docs (upstream analysis):
 
 - [`docs/WLED_AUDIO_SYNC.md`](docs/WLED_AUDIO_SYNC.md)
 - [`docs/WLED_AUDIO_ANALYSIS.md`](docs/WLED_AUDIO_ANALYSIS.md)
 - [`docs/SHAIRPORT_INTEGRATION.md`](docs/SHAIRPORT_INTEGRATION.md)
-- [`docs/LICENSING.md`](docs/LICENSING.md)
+
+Design records, not the operator manual:
+
+- [`docs/design/software-requirements.md`](docs/design/software-requirements.md)
+- [`docs/design/auto-join.md`](docs/design/auto-join.md)
 
 ## Development
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The toolchain is Rust 1.89 ([`rust-toolchain.toml`](rust-toolchain.toml)).
 
 ```bash
 cargo fmt           # format (uses rustfmt.toml)

@@ -4,7 +4,7 @@ use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub airplay: AirplayConfig,
@@ -83,18 +83,13 @@ pub struct AudioConfig {
 }
 
 /// WLED Audio Reactive `soundAgc`: 0=Off, 1=Normal, 2=Vivid, 3=Lazy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgcMode {
     Off,
+    #[default]
     Normal,
     Vivid,
     Lazy,
-}
-
-impl Default for AgcMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl AgcMode {
@@ -312,22 +307,6 @@ fn default_multicast_enabled() -> bool {
     true
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            airplay: AirplayConfig::default(),
-            audio: AudioConfig::default(),
-            wled: WledConfig::default(),
-            logging: LoggingConfig::default(),
-            web: WebConfig::default(),
-            pcm: PcmFormat::default(),
-            network: NetworkConfig::default(),
-            metadata: MetadataConfig::default(),
-            auto_join: AutoJoinConfig::default(),
-        }
-    }
-}
-
 impl Config {
     pub fn load(path: Option<&Path>) -> Self {
         let mut cfg = if let Some(p) = path {
@@ -504,10 +483,10 @@ mod tests {
     fn parses_ip_only_destination_with_default_port() {
         let mut cfg = Config::default();
         cfg.wled.port = 11988;
-        cfg.wled.destinations = vec!["10.11.1.124".into()];
+        cfg.wled.destinations = vec!["192.0.2.10".into()];
         assert_eq!(
             cfg.unicast_sockets(),
-            vec!["10.11.1.124:11988".parse().unwrap()]
+            vec!["192.0.2.10:11988".parse().unwrap()]
         );
     }
 
@@ -515,10 +494,10 @@ mod tests {
     fn parses_host_port_destination() {
         let mut cfg = Config::default();
         cfg.wled.port = 11988;
-        cfg.wled.destinations = vec!["10.11.1.124:12000".into()];
+        cfg.wled.destinations = vec!["192.0.2.10:12000".into()];
         assert_eq!(
             cfg.unicast_sockets(),
-            vec!["10.11.1.124:12000".parse().unwrap()]
+            vec!["192.0.2.10:12000".parse().unwrap()]
         );
     }
 
@@ -616,7 +595,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.network.http = "eth0".into();
         cfg.network.airplay = "eth1".into();
-        cfg.wled.destinations = vec!["10.11.1.124".into()];
+        cfg.wled.destinations = vec!["192.0.2.10".into()];
         cfg.audio.shairport_latency_offset_s = -1.2;
         cfg.audio.gain = AgcMode::Lazy;
         cfg.auto_join.enabled = true;
@@ -626,7 +605,7 @@ mod tests {
         let parsed: Config = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.network.http, "eth0");
         assert_eq!(parsed.network.airplay, "eth1");
-        assert_eq!(parsed.wled.destinations, vec!["10.11.1.124"]);
+        assert_eq!(parsed.wled.destinations, vec!["192.0.2.10"]);
         assert!((parsed.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
         assert_eq!(parsed.audio.gain, AgcMode::Lazy);
         assert!(parsed.auto_join.enabled);
@@ -671,8 +650,10 @@ mod tests {
     #[test]
     fn pcm_format_bytes_per_sample() {
         assert_eq!(PcmFormat::default().bytes_per_sample(), 2);
-        let mut pcm = PcmFormat::default();
-        pcm.format = "s32le".into();
+        let pcm = PcmFormat {
+            format: "s32le".into(),
+            ..PcmFormat::default()
+        };
         assert_eq!(pcm.bytes_per_sample(), 4);
     }
 

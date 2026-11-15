@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Verify WLED receives Audio Sync UDP packets (diagnoses VLAN/firewall issues)."""
+"""Verify WLED receives Audio Sync UDP packets (diagnoses VLAN/firewall issues).
+
+Pass the controller address. 192.0.2.10 is a documentation placeholder.
+"""
 import json
 import struct
 import sys
 import time
 import urllib.request
 
-WLED_IP = sys.argv[1] if len(sys.argv) > 1 else "10.11.1.124"
+WLED_IP = sys.argv[1] if len(sys.argv) > 1 else "192.0.2.10"
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 11988
 
 
@@ -63,7 +66,7 @@ def main() -> int:
     print("HTTP to WLED may work while UDP 11988 is blocked by firewall rules.")
     print()
     print("Fix options:")
-    print("  1. Run WLEDPlay on a host in the SAME VLAN as WLED (e.g. IoT VLAN 10.11.x)")
+    print("  1. Run WLEDPlay on a host in the SAME VLAN as WLED")
     print("  2. Add a firewall rule allowing UDP port 11988 to the WLED IP")
     print("  3. Avoid cross-VLAN multicast; use unicast to the WLED IP from same VLAN")
     return 1

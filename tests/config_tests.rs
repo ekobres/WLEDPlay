@@ -12,7 +12,7 @@ airplay:
   name: "TestReceiver"
 wled:
   destinations:
-    - "10.11.1.124"
+    - "192.0.2.10"
 network:
   airplay: "eth1"
 "#
@@ -21,7 +21,7 @@ network:
 
     let cfg = Config::load(Some(file.path()));
     assert_eq!(cfg.airplay.name, "TestReceiver");
-    assert_eq!(cfg.wled.destinations, vec!["10.11.1.124"]);
+    assert_eq!(cfg.wled.destinations, vec!["192.0.2.10"]);
     assert_eq!(cfg.network.airplay, "eth1");
     assert_eq!(cfg.web.port, 8080);
 }

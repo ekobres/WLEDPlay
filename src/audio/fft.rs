@@ -14,6 +14,12 @@ pub struct FftEngine {
     r2c: std::sync::Arc<dyn realfft::RealToComplex<f32>>,
 }
 
+impl Default for FftEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FftEngine {
     pub fn new() -> Self {
         let mut planner = RealFftPlanner::<f32>::new();
@@ -82,8 +88,9 @@ fn blackman_harris(n: usize, n_fft: usize) -> f32 {
 
 pub fn fft_add_avg(mags: &[f32], from: usize, to: usize) -> f32 {
     let mut result = 0.0f32;
-    for i in from..=to.min(mags.len() - 1) {
-        result += mags[i];
+    let end = to.min(mags.len() - 1);
+    for mag in mags.iter().take(end + 1).skip(from) {
+        result += mag;
     }
     result *= 0.0625;
     result / (to - from + 1) as f32

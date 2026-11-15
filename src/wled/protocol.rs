@@ -140,8 +140,10 @@ mod tests {
 
     #[test]
     fn encode_clamps_major_peak() {
-        let mut pkt = AudioSyncPacket::default();
-        pkt.fft_major_peak = 50_000.0;
+        let pkt = AudioSyncPacket {
+            fft_major_peak: 50_000.0,
+            ..AudioSyncPacket::default()
+        };
         let encoded = pkt.encode();
         let decoded = AudioSyncPacket::decode(&encoded).unwrap();
         assert_eq!(decoded.fft_major_peak, 11025.0);

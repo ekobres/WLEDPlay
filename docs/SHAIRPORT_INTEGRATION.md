@@ -10,10 +10,10 @@ WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceab
 
 | Component | Recommendation | Notes |
 |-----------|----------------|-------|
-| Shairport Sync | **5.6.3** (pinned in Docker) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr`, `--with-metadata` |
-| NQPTP | **1.2.9** (pinned in Docker) | Required for AirPlay 2 timing (`smi11`). Must match the Shairport Sync shared-memory version. |
+| Shairport Sync | **5.6.3** (git tag in the Dockerfile) | Build with `--with-stdout`, `--with-airplay-2`, `--with-soxr`, `--with-metadata` |
+| NQPTP | **1.2.9** (git tag in the Dockerfile) | Required for AirPlay 2 timing (`smi11`). Must match the Shairport Sync shared-memory version. |
 
-Pin exact versions in Docker image tags for reproducibility.
+The Dockerfile clones those tags with `git clone --depth 1 --branch`. That pins the tag name, not a commit SHA. A moved tag would change the build. Commit pins are a follow-up for the next version bump.
 
 The image applies two local patches by default. Both are build args, and both default to `1`, so a normal `docker compose build` matches the patched image.
 

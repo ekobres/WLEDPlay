@@ -1,8 +1,24 @@
-WLEDPlay Docker image includes separately licensed software:
+WLEDPlay Docker image includes separately licensed software.
+The WLEDPlay analyzer is MIT. See /LICENSE. It does not link the GPL programs;
+they run as separate processes.
 
-- Shairport Sync (GPL-2.0+) — https://github.com/mikebrady/shairport-sync
-- NQPTP (GPL-2.0) — https://github.com/mikebrady/nqptp
+Shairport Sync 5.6.3 (GPL-2.0-or-later)
+  Upstream: https://github.com/mikebrady/shairport-sync
+  Tag: 5.6.3
+  Local patch, applied when WLEDPLAY_SHAIRPORT_PATCH=1 (the default):
+    docker/shairport-mixed-stack.patch
+  Corresponding source is that upstream tag plus this patch.
 
-WLEDPlay analyzer binary is MIT licensed. See /LICENSE.
+NQPTP 1.2.9 (GPL-2.0)
+  Upstream: https://github.com/mikebrady/nqptp
+  Tag: 1.2.9
+  Local patch, applied when WLEDPLAY_NQPTP_PATCH=1 (the default):
+    docker/nqptp-timing-peers.patch
+  Corresponding source is that upstream tag plus this patch.
 
-Source code for GPL components is available at the URLs above.
+Set either build arg to 0 to ship the unmodified tag instead.
+
+Also installed from pip, and not linked into the WLEDPlay binary:
+
+  pyatv 0.16.1 (MIT) — https://github.com/postlund/pyatv
+  srptools 1.0.1 (BSD-3-Clause) — https://github.com/idlesign/srptools

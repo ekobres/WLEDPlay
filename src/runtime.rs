@@ -260,24 +260,13 @@ pub enum LoopAction {
     Exit,
 }
 
+#[derive(Default)]
 pub struct SendLoop {
     pub udp_active: bool,
     pub idle_packets_sent: u64,
     pub announced_end: bool,
     pub underrun_open: bool,
     pub delay_q: VecDeque<(Instant, AudioSyncPacket)>,
-}
-
-impl Default for SendLoop {
-    fn default() -> Self {
-        Self {
-            udp_active: false,
-            idle_packets_sent: 0,
-            announced_end: false,
-            underrun_open: false,
-            delay_q: VecDeque::new(),
-        }
-    }
 }
 
 impl SendLoop {
@@ -349,6 +338,7 @@ pub fn start_ms(start: Instant, now: Instant) -> u64 {
     now.saturating_duration_since(start).as_millis() as u64
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_status(
     status: &SharedStatus,
     rt: &PcmRuntime,
@@ -745,7 +735,7 @@ mod tests {
             LoopAction::Continue
         );
         assert!(sl.udp_active);
-        assert!(sl.delay_q.len() >= 1);
+        assert!(!sl.delay_q.is_empty());
 
         rt.last_pcm = Some(now - Duration::from_secs(5));
         rt.stream_since = Some(now - Duration::from_secs(5));
@@ -816,9 +806,10 @@ mod tests {
         let status = status();
         let cfg = Config::default();
         let mut rt = PcmRuntime::new(AgcMode::Off);
-        let mut sl = SendLoop::default();
-        sl.udp_active = true;
-        sl.idle_packets_sent = 0;
+        let mut sl = SendLoop {
+            udp_active: true,
+            ..SendLoop::default()
+        };
         assert_eq!(
             sl.on_update(&mut rt, &status, &cfg, true, Instant::now()),
             LoopAction::Continue

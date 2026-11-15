@@ -433,7 +433,7 @@ mod tests {
     fn bare_state() -> AppState {
         AppState {
             status: Arc::new(Mutex::new(RuntimeStatus {
-                version: "0.2.1".into(),
+                version: "0.3.0".into(),
                 ..Default::default()
             })),
             artwork: Arc::new(Mutex::new(None)),
@@ -523,12 +523,14 @@ mod tests {
         md.refresh_position(false);
         assert!(md.position_s.is_none());
 
-        let mut track = TrackMetadata::default();
-        track.rtp_start = Some(0);
-        track.rtp_current = Some(22050);
-        track.rtp_end = Some(44100);
-        track.duration_ms = Some(60_000);
-        track.progress_unix_ms = None;
+        let track = TrackMetadata {
+            rtp_start: Some(0),
+            rtp_current: Some(22050),
+            rtp_end: Some(44100),
+            duration_ms: Some(60_000),
+            progress_unix_ms: None,
+            ..TrackMetadata::default()
+        };
         md.set_from_track(&track);
         md.refresh_position(true);
         assert!((md.position_s.unwrap() - 0.5).abs() < 0.05);
@@ -560,10 +562,12 @@ mod tests {
     #[test]
     fn track_progress_runs_when_airplay_omits_elapsed() {
         let mut md = TrackMetadataStatus::default();
-        let mut track = TrackMetadata::default();
-        track.title = Some("Song".into());
-        track.artist = Some("Artist".into());
-        track.duration_ms = Some(180_000);
+        let mut track = TrackMetadata {
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+            duration_ms: Some(180_000),
+            ..TrackMetadata::default()
+        };
         md.set_from_track(&track);
         assert!(md.position_base_s.is_none());
         assert!((md.duration_s.unwrap() - 180.0).abs() < 1e-3);
@@ -617,7 +621,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8_lossy(&body).contains("0.2.1"));
+        assert!(String::from_utf8_lossy(&body).contains("0.3.0"));
         assert!(String::from_utf8_lossy(&body).contains("auto_join"));
         assert!(String::from_utf8_lossy(&body).contains("\"clock\""));
         {

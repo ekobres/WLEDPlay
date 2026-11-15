@@ -1,0 +1,34 @@
+---
+description: Keep operator docs current and flag conflicts with the software requirements
+alwaysApply: true
+---
+
+# Docs stay current; requirements conflicts are surfaced
+
+When a change alters behavior, config, the HTTP API, environment variables, Docker, or the operator UI, update the operator docs in the same change. Leave design records alone unless the user asks to change the requirements.
+
+## Update these when the matching fact changes
+
+- `README.md` — setup, env vars, HTTP routes, Docker
+- `config/config-example.yaml` — any new or renamed setting
+- `docs/ARCHITECTURE.md` — processes, modules, invariants
+- `SECURITY.md` — listen address, auth, exposed ports
+- `docs/LICENSING.md` and `docker/NOTICE` — bundled versions, patches, licenses
+- `docs/SHAIRPORT_INTEGRATION.md` — Shairport or NQPTP versions, build flags, patches
+- `CHANGELOG.md` — user-visible changes under `Unreleased`
+
+`docs/WLED_AUDIO_SYNC.md` and `docs/WLED_AUDIO_ANALYSIS.md` describe upstream WLED. Update them only when a claim about WLED, or about matching it, changes.
+
+## Requirements conflicts
+
+`docs/design/software-requirements.md` and `docs/design/auto-join.md` are design records, not the operator manual. Before implementing a request, check them. If the request needs a requirement to change, stop and say so. Do not edit those files, and do not implement against them, until the user agrees.
+
+Name the section and quote the requirement, then state what the request would change.
+
+```text
+Conflict with docs/design/software-requirements.md, section 3, item 5:
+"Support AirPlay 2 with NQPTP as the only AirPlay receiver mode."
+Adding AirPlay 1 would change that requirement. Confirm before any code or doc edit.
+```
+
+A new env var that does not change a requirement belongs in the README and the example config, not in the design record.

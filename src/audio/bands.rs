@@ -34,6 +34,7 @@ pub fn map_bands(mags: &[f32], sample_avg: f32, fft_calc: &mut [f32; NUM_GEQ_CHA
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn post_process(
     fft_calc: &mut [f32; NUM_GEQ_CHANNELS],
     fft_avg: &mut [f32; NUM_GEQ_CHANNELS],

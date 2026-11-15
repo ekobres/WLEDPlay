@@ -1,0 +1,39 @@
+name: Bug
+description: Something failed while running WLEDPlay
+title: ""
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `wledplay --version`, or the image tag you built.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: patches
+    attributes:
+      label: Shairport and NQPTP patches
+      options:
+        - Patched (build defaults)
+        - Stock (both patch args 0)
+        - Mixed
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: OS, architecture, and whether this is Docker, a Linux install, or something else. Do not include home IP addresses.
+      placeholder: "Debian 12, x86_64, Docker host networking"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, what you saw, and the relevant log lines.
+    validations:
+      required: true

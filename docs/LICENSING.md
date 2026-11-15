@@ -12,6 +12,8 @@ WLEDPlay is designed to keep **WLEDPlay-specific code** under a permissive licen
 | **WLED** | **EUPL-1.2** | [LICENSE](https://github.com/wled/WLED/blob/v16.0.1/LICENSE) | Reference only; no code copied |
 | **Shairport Sync** | **GPL-2.0+** (per-file; see upstream) | [shairport-sync](https://github.com/mikebrady/shairport-sync) | Separate process in Docker |
 | **NQPTP** | **GPL-2.0** | [nqptp LICENSE](https://github.com/mikebrady/nqptp/blob/master/LICENSE) | Separate process in Docker |
+| **pyatv** 0.16.1 | **MIT** | [LICENSE.md](https://github.com/postlund/pyatv/blob/master/LICENSE.md) | Auto Join sidecar; not linked into the Rust binary |
+| **srptools** 1.0.1 | **BSD-3-Clause** | [srptools](https://github.com/idlesign/srptools) | Dependency of pyatv, installed in the image |
 | **Feed_My_WLED** | **GPL-3.0** | [feed_my_wled](https://github.com/chrisgott/feed_my_wled) | Reference only; do not copy |
 | **ESP Air Sync** | Check upstream (Codeberg) | [esp-airsync](https://codeberg.org/Edu_Coder/esp-airsync) | Reference only; do not copy |
 | **rustfft** | **MIT OR Apache-2.0** | [rustfft](https://github.com/HEnquist/rustfft) | Rust dependency |
@@ -36,12 +38,14 @@ If WLEDPlay code were substantially derived from WLED, EUPL copyleft could apply
 GPL applies to **distribution of combined works**. Mitigation:
 
 1. **Process isolation:** WLEDPlay binary does not link GPL code.
-2. **Docker image:** Aggregates independent programs (like a Linux distro). Provide:
-   - Source offer for GPL components
-   - `NOTICE` file listing bundled licenses
+2. **Docker image:** Aggregates independent programs (like a Linux distro). The image runs Shairport Sync and NQPTP as separate processes.
 3. **No static linking** of Shairport Sync into WLEDPlay.
 
-Docker image licensing ≠ WLEDPlay binary licensing.
+A default image build is Shairport Sync tag **5.6.3** plus [`docker/shairport-mixed-stack.patch`](../docker/shairport-mixed-stack.patch), and NQPTP tag **1.2.9** plus [`docker/nqptp-timing-peers.patch`](../docker/nqptp-timing-peers.patch). Those tags are cloned by name, not by commit SHA. `WLEDPLAY_SHAIRPORT_PATCH=0` or `WLEDPLAY_NQPTP_PATCH=0` omits the matching patch and ships the unmodified tag.
+
+Corresponding source for a patched binary is the upstream tag plus the patch file in this repository. [`docker/NOTICE`](../docker/NOTICE) states that offer. WLEDPlay's own code stays MIT.
+
+Docker image licensing is not WLEDPlay binary licensing. This repository does not publish a container image. Someone who builds the Dockerfile and gives the image to others still has to pass along this source offer.
 
 ---
 
@@ -67,12 +71,14 @@ Docker image licensing ≠ WLEDPlay binary licensing.
 
 ## Distribution checklist
 
-When publishing Docker images:
+Source release (this repository):
 
-- [ ] Include [`LICENSE`](../LICENSE) (MIT) for WLEDPlay
-- [ ] Include `docker/NOTICE` with Shairport Sync + NQPTP GPL notices
-- [ ] Document source URLs for GPL binaries
-- [ ] Do not commit Apple proprietary assets or DRM circumvention tools
+- [x] [`LICENSE`](../LICENSE) is MIT for WLEDPlay
+- [x] [`docker/NOTICE`](../docker/NOTICE) names Shairport Sync 5.6.3, NQPTP 1.2.9, both patch files, and the pip packages
+- [x] GPL corresponding source is the named upstream tag plus the patch in this repo
+- [x] No Apple proprietary assets or DRM circumvention tools
+
+The Dockerfile copies `LICENSE` and `NOTICE` into the image. Publishing that image to a registry is a separate step and is not part of the source release. A published image tag must point at the git commit that contains the patches it was built with.
 
 ---
 

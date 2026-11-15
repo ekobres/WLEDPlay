@@ -751,6 +751,7 @@ mod tests {
         device
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn tick(
         svc: &mut AutoJoinService,
         now: u64,
@@ -1336,7 +1337,7 @@ mod tests {
             "aa",
             "Bar Siri",
             "self",
-            &[playing.clone()],
+            std::slice::from_ref(&playing),
             true,
             &[],
         );
@@ -1882,7 +1883,7 @@ mod tests {
             "ab",
             "Den",
             "",
-            &[up.clone()],
+            std::slice::from_ref(&up),
             true,
             &[],
         );
@@ -1899,7 +1900,7 @@ mod tests {
             "ab",
             "Den",
             "self",
-            &[playing.clone()],
+            std::slice::from_ref(&playing),
             true,
             &[],
         );
@@ -1912,7 +1913,7 @@ mod tests {
             "ab",
             "Den",
             "self",
-            &[playing.clone()],
+            std::slice::from_ref(&playing),
             true,
             &[JoinResult {
                 revision: join.revision,
@@ -1932,7 +1933,7 @@ mod tests {
             "ab",
             "Den",
             "self",
-            &[playing.clone()],
+            std::slice::from_ref(&playing),
             true,
             &[JoinResult {
                 revision: 0,
@@ -1967,7 +1968,7 @@ mod tests {
             "ab",
             "Den",
             "self",
-            &[playing.clone()],
+            std::slice::from_ref(&playing),
             false,
             &[],
         );

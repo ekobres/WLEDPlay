@@ -20,7 +20,7 @@ Run WLEDPlay on a Linux host instead:
   ./scripts/run-airplay.sh
 
 Or:
-  WLEDPLAY_DESTINATION=10.11.1.124 docker compose up -d --build
+  WLEDPLAY_DESTINATION=192.0.2.10 docker compose up -d --build
 EOF
   exit 1
 fi

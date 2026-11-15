@@ -17,7 +17,8 @@ wled:
   multicast_address: "239.0.0.1"
   port: 11988
   destinations:
-    - "10.11.1.124"
+    # Documentation address. Replace with your WLED controller.
+    - "192.0.2.10"
   multicast_enabled: true
 
 # Bind each traffic type to a host NIC (`ip -br addr`). Empty = no pin.

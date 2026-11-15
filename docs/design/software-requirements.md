@@ -1,5 +1,7 @@
 # WLEDPlay
 
+> Design record, not the operator manual. Setup and operation are in the [README](../../README.md).
+
 ## 1. Project Overview
 
 **WLEDPlay** is an open-source, headless AirPlay-to-WLED audio-reactive bridge.

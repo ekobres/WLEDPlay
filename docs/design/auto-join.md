@@ -1,5 +1,7 @@
 # WLEDPlay Feature Specification: Auto Join
 
+> Design record, not the operator manual. Setup and operation are in the [README](../../README.md).
+
 ## 1. Overview
 
 Add an **Auto Join** feature to WLEDPlay that allows WLEDPlay to automatically join the active AirPlay 2 playback group of a selected AirPlay 2 speaker when that speaker begins playback.

@@ -310,6 +310,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn event_loop_tick(
     restart: &AtomicBool,
     runtime: &Mutex<PcmRuntime>,
@@ -465,6 +466,7 @@ pub fn spawn_pcm_reader(
         .expect("pcm reader thread");
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn read_pcm(
     reader: &mut dyn Read,
     discard_backlog_ok: bool,
