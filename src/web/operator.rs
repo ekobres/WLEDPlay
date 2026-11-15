@@ -214,8 +214,17 @@ mod tests {
         assert!(html.contains("Received (early)"));
         assert!(html.contains("function sourceMeters"));
         assert!(html.contains("id=\"clock\""));
-        assert!(html.contains("Playback lead"));
+        assert!(html.contains("Now playing"));
+        assert!(html.contains(">Statistics</div>"));
+        assert!(html.contains(">PTP sample</div>"));
+        assert!(html.contains("sample_age_ms"));
+        assert!(!html.contains("Playback lead"));
         assert!(html.contains("function paintClock"));
+        assert!(html.contains(">Control</div>"));
+        assert!(html.contains(">Configuration</div>"));
+        assert!(html.contains("Applies immediately"));
+        assert!(html.contains("Takes effect after restart"));
+        assert!(html.contains("popovertarget"));
         assert!(html.contains("shownRms >= 0.95"));
         assert!(!html.contains("s.peak ?"));
         assert!(html.contains("id=\"viz-decay\""));
@@ -241,7 +250,7 @@ mod tests {
         let bands_at = html.find("id=\"bands\"").expect("bands");
         let level_at = html.find("id=\"levelbar\"").expect("levelbar");
         let stats_at = html.find("id=\"counters\"").expect("counters");
-        assert!(bands_at < level_at && level_at < stats_at);
+        assert!(stats_at < bands_at && bands_at < level_at);
     }
 
     #[test]

@@ -377,7 +377,7 @@ mod tests {
     fn bare_state() -> AppState {
         AppState {
             status: Arc::new(Mutex::new(RuntimeStatus {
-                version: "0.1.0".into(),
+                version: "0.2.0".into(),
                 ..Default::default()
             })),
             artwork: Arc::new(Mutex::new(None)),
@@ -517,7 +517,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8_lossy(&body).contains("0.1.0"));
+        assert!(String::from_utf8_lossy(&body).contains("0.2.0"));
         assert!(String::from_utf8_lossy(&body).contains("auto_join"));
         assert!(String::from_utf8_lossy(&body).contains("\"clock\""));
 

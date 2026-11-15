@@ -34,7 +34,7 @@
       color: var(--idle);
     }
     .pill.live { color: var(--ok); background: #143528; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    main { display: flex; flex-direction: column; gap: 12px; }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
@@ -42,25 +42,27 @@
       padding: 14px 16px;
     }
     .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .track-card { display: flex; gap: 10px; align-items: center; }
+    .track-card { display: flex; gap: 16px; align-items: center; }
     #art {
-      width: 28px; height: 28px; object-fit: cover; border-radius: 4px;
+      width: 96px; height: 96px; object-fit: cover; border-radius: 8px;
       background: #0e1424; flex-shrink: 0;
     }
     .track-meta { min-width: 0; flex: 1; }
     #track {
-      font-size: 0.72rem; line-height: 1.35; margin-top: 0;
+      font-size: 1.15rem; line-height: 1.35; margin-top: 4px;
       color: var(--text); word-break: break-word;
     }
     .track-progress {
       display: grid;
       grid-template-columns: 5ch 1fr 5ch;
       text-align: right;
-      gap: 6px; align-items: center; margin-top: 4px;
+      gap: 8px; align-items: center; margin-top: 8px;
       font-variant-numeric: tabular-nums;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.62rem; color: var(--muted);
+      font-size: 0.78rem; color: var(--muted);
     }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 18px; margin-top: 12px; }
+    .stats .value { font-size: 1rem; }
     .track-bar { height: 4px; margin-top: 0; }
     .value { font-size: 1.15rem; margin-top: 4px; word-break: break-word; }
     .value.peak { color: var(--peak); }
@@ -114,6 +116,18 @@
     }
     pre { margin: 8px 0 0; color: var(--muted); font-size: 0.78rem; overflow: auto; }
     .controls label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .field-head { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; }
+    .controls .field-head label { display: inline; margin: 0; }
+    button.info {
+      width: 18px; height: 18px; padding: 0; border-radius: 50%;
+      background: #1d243c; color: var(--muted); border: 1px solid var(--line);
+      font-size: 0.72rem; line-height: 16px; flex-shrink: 0;
+    }
+    .tip {
+      max-width: 280px; margin: 0; background: #1d243c; color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+      font-size: 0.85rem; line-height: 1.4;
+    }
     .controls input, .controls select, .controls textarea {
       width: 100%; background: #0e1424; color: var(--text); border: 1px solid var(--line);
       border-radius: 8px; padding: 8px 10px; font: inherit;
@@ -127,7 +141,6 @@
     button.danger { background: #5a2433; }
     button:disabled { opacity: 0.4; cursor: default; }
     .hint { color: var(--muted); font-size: 0.85rem; }
-    #clock-detail { white-space: pre-line; }
     .notice { color: var(--text); font-size: 0.95rem; }
     .alert { color: var(--peak); font-size: 0.95rem; }
     .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
@@ -171,46 +184,45 @@
     <span id="ver" class="pill"></span>
   </header>
   <main>
-    <div class="grid">
-      <div class="card">
-        <div class="label">Receiver</div>
-        <div class="value" id="receiver">—</div>
-      </div>
-      <div class="card track-card">
-        <img id="art" alt="" hidden>
-        <div class="track-meta">
-          <div class="label">Track</div>
-          <div class="value" id="track">No metadata yet</div>
-          <div class="track-progress">
-            <span id="track-pos">00:00</span>
-            <div class="meter track-bar"><span id="trackbar"></span></div>
-            <span id="track-dur">00:00</span>
-          </div>
+    <div class="card track-card">
+      <img id="art" alt="" hidden>
+      <div class="track-meta">
+        <div class="label">Now playing</div>
+        <div class="value" id="track">No metadata yet</div>
+        <div class="track-progress">
+          <span id="track-pos">00:00</span>
+          <div class="meter track-bar"><span id="trackbar"></span></div>
+          <span id="track-dur">00:00</span>
         </div>
       </div>
-      <div class="card">
-        <div class="label">Packet rate</div>
-        <div class="value" id="pps">0 /s</div>
-      </div>
-      <div class="card">
-        <div class="label">Destinations</div>
-        <div class="value" id="dest">—</div>
-      </div>
-      <div class="card">
-        <div class="label">Sync offset</div>
-        <div class="value" id="sync">0 ms</div>
-      </div>
-      <div class="card">
-        <div class="label">Stream</div>
-        <div class="value" id="stream">0s · 0 connects</div>
-      </div>
-      <div class="card">
-        <div class="label">Playback lead</div>
-        <div class="value" id="clock">—</div>
-        <div class="hint" id="clock-detail"></div>
-      </div>
     </div>
-    <div class="card" style="margin-top:12px">
+    <div class="card">
+      <div class="label">Statistics</div>
+      <div class="stats">
+        <div>
+          <div class="label">Packet rate</div>
+          <div class="value" id="pps">0 /s</div>
+        </div>
+        <div>
+          <div class="label">Stream</div>
+          <div class="value" id="stream">0s · 0 connects</div>
+        </div>
+        <div>
+          <div class="label">Sync offset</div>
+          <div class="value" id="sync">0 ms</div>
+        </div>
+        <div>
+          <div class="label">Destinations</div>
+          <div class="value" id="dest">—</div>
+        </div>
+        <div>
+          <div class="label">PTP sample</div>
+          <div class="value" id="clock">—</div>
+        </div>
+      </div>
+      <pre id="counters"></pre>
+    </div>
+    <div class="card">
       <div class="viz-head">
         <div class="label">16 FFT bands</div>
         <div class="viz-controls">
@@ -218,18 +230,24 @@
             <option value="tx" selected>On LEDs (sent)</option>
             <option value="rx">Received (early)</option>
           </select>
+          <button type="button" class="info" popovertarget="tip-viz-source" aria-label="About spectrum source">?</button>
           <label class="switch">
             <span>Decay</span>
             <input type="checkbox" id="viz-decay" role="switch" checked aria-checked="true" aria-label="Visualizer decay">
             <span class="switch-track"></span>
           </label>
+          <button type="button" class="info" popovertarget="tip-viz-decay" aria-label="About decay">?</button>
           <label class="switch">
             <span>Visualizer</span>
             <input type="checkbox" id="viz-toggle" role="switch" checked aria-checked="true" aria-label="Live visualizer">
             <span class="switch-track"></span>
           </label>
+          <button type="button" class="info" popovertarget="tip-viz-toggle" aria-label="About the visualizer">?</button>
         </div>
       </div>
+      <div id="tip-viz-source" popover class="tip">On LEDs shows the bands in the packet that was sent. Received shows the analyzer before the send delay.</div>
+      <div id="tip-viz-decay" popover class="tip">Bars fall smoothly between updates. Off holds each reading until the next one.</div>
+      <div id="tip-viz-toggle" popover class="tip">Turns the spectrum animation on or off. The lights keep receiving packets either way.</div>
       <div class="bands" id="bands"></div>
       <div class="viz-meters">
         <div class="viz-meter-head">
@@ -254,58 +272,104 @@
         </div>
         <div class="meter viz-volume" id="levelmeter"><span id="levelbar"></span></div>
       </div>
-      <pre id="counters"></pre>
     </div>
-    </div>
-    <div class="card controls" style="margin-top:12px">
-      <div class="label">Auto Join</div>
+    <div class="card controls">
+      <div class="label">Control</div>
       <div class="check">
         <input id="ctl-autojoin" type="checkbox" role="switch" aria-checked="false">
         <label for="ctl-autojoin">Join selected speaker when idle</label>
+        <button type="button" class="info" popovertarget="tip-autojoin" aria-label="About auto join">?</button>
       </div>
-      <label for="ctl-autojoin-target">Target speaker</label>
+      <div id="tip-autojoin" popover class="tip">When this player is idle, join the selected speaker's group and stay connected while playback is paused.</div>
+      <div class="field-head">
+        <label for="ctl-autojoin-target">Target speaker</label>
+        <button type="button" class="info" popovertarget="tip-target" aria-label="About the target speaker">?</button>
+      </div>
+      <div id="tip-target" popover class="tip">The speaker whose group this player joins. An unavailable speaker is kept so it can be used again when it returns.</div>
       <select id="ctl-autojoin-target" disabled>
         <option value="">No target</option>
       </select>
       <div class="hint" id="autojoin-discovery">Discovery inactive</div>
       <div class="hint" id="autojoin-target-status"></div>
       <div class="hint" id="autojoin-runtime"></div>
-    </div>
-    <div class="card controls" style="margin-top:12px">
-      <div class="label">Operator controls</div>
-      <label for="ctl-shairport">Shairport lead (s) — restart; negative = PCM early (e.g. −1.2)</label>
-      <input id="ctl-shairport" type="number" step="0.1" min="-5" max="2">
-      <label for="ctl-delay">Send delay (ms) — live; hold after decode before UDP</label>
+      <div class="field-head">
+        <label for="ctl-delay">Send delay (ms)</label>
+        <button type="button" class="info" popovertarget="tip-delay" aria-label="About send delay">?</button>
+      </div>
+      <div id="tip-delay" popover class="tip"><span id="ctl-delay-hint"></span></div>
       <input id="ctl-delay" type="number" step="10" min="0" max="5000">
-      <div class="hint" id="ctl-delay-hint"></div>
-      <label for="ctl-gain">AGC — live; WLED soundAgc profile (Off / Normal / Vivid / Lazy)</label>
+      <div class="field-head">
+        <label for="ctl-gain">AGC</label>
+        <button type="button" class="info" popovertarget="tip-gain" aria-label="About AGC">?</button>
+      </div>
+      <div id="tip-gain" popover class="tip">WLED soundAgc profile. Off leaves the raw level. Normal, Vivid, and Lazy ride the level into the range the bins expect.</div>
       <select id="ctl-gain">
         <option value="off">Off</option>
         <option value="normal" selected>Normal</option>
         <option value="vivid">Vivid</option>
         <option value="lazy">Lazy</option>
       </select>
-      <label for="ctl-name">AirPlay name — restart to re-advertise</label>
-      <input id="ctl-name" type="text" maxlength="64">
-      <label for="ctl-http">HTTP (management) — restart</label>
-      <select id="ctl-http"></select>
-      <label for="ctl-airplay">AirPlay / mDNS (user network) — restart</label>
-      <select id="ctl-airplay"></select>
-      <label for="ctl-unicast">WLED unicast — restart</label>
-      <select id="ctl-unicast"></select>
-      <label for="ctl-multicast">WLED multicast — restart</label>
-      <select id="ctl-multicast"></select>
       <div class="check">
         <input id="ctl-mcast" type="checkbox">
         <label for="ctl-mcast">Send multicast</label>
+        <button type="button" class="info" popovertarget="tip-mcast" aria-label="About multicast">?</button>
       </div>
-      <label for="ctl-dest">Unicast destinations (one IP per line)</label>
+      <div id="tip-mcast" popover class="tip">Also send the audio-sync packet to the multicast address. Unicast destinations are sent either way.</div>
+      <div class="field-head">
+        <label for="ctl-dest">Unicast destinations</label>
+        <button type="button" class="info" popovertarget="tip-dest" aria-label="About unicast destinations">?</button>
+      </div>
+      <div id="tip-dest" popover class="tip">One IPv4 address per line. These lights receive the audio-sync packet directly.</div>
       <textarea id="ctl-dest"></textarea>
       <div class="row">
         <button id="ctl-save" type="button" disabled>Save</button>
         <button id="ctl-cancel" type="button" disabled>Cancel</button>
+        <span class="hint" id="ctl-msg">Applies immediately</span>
+      </div>
+    </div>
+    <div class="card controls">
+      <div class="label">Configuration</div>
+      <div class="field-head">
+        <label for="ctl-shairport">Shairport lead (s)</label>
+        <button type="button" class="info" popovertarget="tip-shairport" aria-label="About Shairport lead">?</button>
+      </div>
+      <div id="tip-shairport" popover class="tip">Seconds added to Shairport's output time. Negative plays the PCM early. Example: −1.2. Applied when the stack restarts.</div>
+      <input id="ctl-shairport" type="number" step="0.1" min="-5" max="2">
+      <div class="field-head">
+        <label for="ctl-name">AirPlay name</label>
+        <button type="button" class="info" popovertarget="tip-name" aria-label="About the AirPlay name">?</button>
+      </div>
+      <div id="tip-name" popover class="tip">Name advertised on the network. Applied when the stack restarts.</div>
+      <input id="ctl-name" type="text" maxlength="64">
+      <div class="field-head">
+        <label for="ctl-http">HTTP (management)</label>
+        <button type="button" class="info" popovertarget="tip-http" aria-label="About the HTTP interface">?</button>
+      </div>
+      <div id="tip-http" popover class="tip">Interface the management page binds to. Applied when the stack restarts.</div>
+      <select id="ctl-http"></select>
+      <div class="field-head">
+        <label for="ctl-airplay">AirPlay / mDNS</label>
+        <button type="button" class="info" popovertarget="tip-airplay" aria-label="About the AirPlay interface">?</button>
+      </div>
+      <div id="tip-airplay" popover class="tip">Interface used for AirPlay and mDNS. Applied when the stack restarts.</div>
+      <select id="ctl-airplay"></select>
+      <div class="field-head">
+        <label for="ctl-unicast">WLED unicast</label>
+        <button type="button" class="info" popovertarget="tip-unicast" aria-label="About the unicast interface">?</button>
+      </div>
+      <div id="tip-unicast" popover class="tip">Interface used to reach unicast WLED lights. Applied when the stack restarts.</div>
+      <select id="ctl-unicast"></select>
+      <div class="field-head">
+        <label for="ctl-multicast">WLED multicast</label>
+        <button type="button" class="info" popovertarget="tip-multicast" aria-label="About the multicast interface">?</button>
+      </div>
+      <div id="tip-multicast" popover class="tip">Interface used for the multicast audio-sync packet. Applied when the stack restarts.</div>
+      <select id="ctl-multicast"></select>
+      <div class="row">
+        <button id="ctl-save-config" type="button" disabled>Save</button>
+        <button id="ctl-cancel-config" type="button" disabled>Cancel</button>
         <button id="ctl-restart" class="danger" type="button">Restart stack</button>
-        <span class="hint" id="ctl-msg"></span>
+        <span class="hint" id="ctl-msg-config">Takes effect after restart</span>
       </div>
     </div>
   </main>
@@ -434,7 +498,6 @@
 
     function paintMeta(s) {
       $("ver").textContent = s.version || "";
-      $("receiver").textContent = s.airplay.receiver_name || "WLEDPlay";
       const md = s.metadata || {};
       const parts = [md.title, md.artist, md.album].filter(Boolean);
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
@@ -473,18 +536,20 @@
 
     function paintClock(c) {
       const el = $("clock");
-      const detail = $("clock-detail");
-      if (!c) {
+      const age = c && c.sample_age_ms;
+      if (age == null || Number.isNaN(Number(age))) {
         el.textContent = "—";
         el.className = "value";
-        detail.textContent = "";
-        detail.className = "hint";
         return;
       }
-      el.textContent = c.summary || "—";
-      el.className = "value" + (c.level === "bad" || c.level === "warn" ? " peak" : "");
-      detail.textContent = (c.detail || "").split(" · ").join("\n");
-      detail.className = (c.detail_level || c.level) === "bad" ? "alert" : "hint";
+      const ms = Number(age);
+      const abs = Math.abs(ms);
+      const text = abs >= 1000
+        ? (abs / 1000).toFixed(1) + " s"
+        : (abs >= 100 ? Math.round(abs) + " ms" : abs.toFixed(1) + " ms");
+      el.textContent = text + (ms < 0 ? " fast" : " old");
+      const alert = ms >= 10000 || ms <= -1000 || ms >= 2000 || ms <= -20;
+      el.className = "value" + (alert ? " peak" : "");
     }
 
     function levelsActive() {
@@ -642,8 +707,8 @@
         const d = await fetch("/airplay/devices").then((r) => r.json());
         lastDevices = d.devices || [];
         const v = lastConfig.values || {};
-        const keep = isDirty() ? $("ctl-autojoin-target").value : (v.auto_join_target_id || "");
-        const name = isDirty() ? selectedTargetName() : (v.auto_join_target_name || "");
+        const keep = isLiveDirty() ? $("ctl-autojoin-target").value : (v.auto_join_target_id || "");
+        const name = isLiveDirty() ? selectedTargetName() : (v.auto_join_target_name || "");
         renderTargets(keep, name, lastDevices);
       } catch { /* ignore */ }
     }
@@ -664,16 +729,10 @@
       runtimeEl.className = aj.state === "error" ? "alert" : (aj.state === "phone_owned" ? "notice" : "hint");
     }
 
-    function formSnapshot() {
+    function liveSnapshot() {
       return {
         sync_offset_ms: Number($("ctl-delay").value),
         gain: $("ctl-gain").value,
-        shairport_latency_offset_s: Number($("ctl-shairport").value),
-        airplay_name: $("ctl-name").value.trim(),
-        http_interface: $("ctl-http").value,
-        airplay_interface: $("ctl-airplay").value,
-        unicast_interface: $("ctl-unicast").value,
-        multicast_interface: $("ctl-multicast").value,
         multicast_enabled: $("ctl-mcast").checked,
         destinations: destLines(),
         auto_join_enabled: $("ctl-autojoin").checked,
@@ -682,17 +741,22 @@
       };
     }
 
-    function savedSnapshot() {
+    function configSnapshot() {
+      return {
+        shairport_latency_offset_s: Number($("ctl-shairport").value),
+        airplay_name: $("ctl-name").value.trim(),
+        http_interface: $("ctl-http").value,
+        airplay_interface: $("ctl-airplay").value,
+        unicast_interface: $("ctl-unicast").value,
+        multicast_interface: $("ctl-multicast").value
+      };
+    }
+
+    function savedLive() {
       const v = lastConfig.values || {};
       return {
         sync_offset_ms: Number(v.sync_offset_ms ?? 0),
         gain: v.gain || "normal",
-        shairport_latency_offset_s: Number(v.shairport_latency_offset_s ?? 0),
-        airplay_name: (v.airplay_name || "").trim(),
-        http_interface: v.http_interface || "",
-        airplay_interface: v.airplay_interface || "",
-        unicast_interface: v.unicast_interface || "",
-        multicast_interface: v.multicast_interface || "",
         multicast_enabled: !!v.multicast_enabled,
         destinations: v.destinations || [],
         auto_join_enabled: !!v.auto_join_enabled,
@@ -701,59 +765,96 @@
       };
     }
 
+    function savedConfig() {
+      const v = lastConfig.values || {};
+      return {
+        shairport_latency_offset_s: Number(v.shairport_latency_offset_s ?? 0),
+        airplay_name: (v.airplay_name || "").trim(),
+        http_interface: v.http_interface || "",
+        airplay_interface: v.airplay_interface || "",
+        unicast_interface: v.unicast_interface || "",
+        multicast_interface: v.multicast_interface || ""
+      };
+    }
+
+    function isLiveDirty() {
+      return JSON.stringify(liveSnapshot()) !== JSON.stringify(savedLive());
+    }
+
+    function isConfigDirty() {
+      return JSON.stringify(configSnapshot()) !== JSON.stringify(savedConfig());
+    }
+
     function isDirty() {
-      return JSON.stringify(formSnapshot()) !== JSON.stringify(savedSnapshot());
+      return isLiveDirty() || isConfigDirty();
     }
 
     function syncActionButtons() {
-      const dirty = isDirty();
-      $("ctl-save").disabled = !dirty;
-      $("ctl-cancel").disabled = !dirty;
+      const live = isLiveDirty();
+      const startup = isConfigDirty();
+      $("ctl-save").disabled = !live;
+      $("ctl-cancel").disabled = !live;
+      $("ctl-save-config").disabled = !startup;
+      $("ctl-cancel-config").disabled = !startup;
     }
 
     function paintHint(c) {
-      const bits = [];
-      if (isDirty()) bits.push("unsaved changes");
-      if (c.needs_restart) bits.push("restart needed");
-      if (!isDirty() && c.persisted) bits.push("saved");
-      else if (c.config_writable === false) bits.push("config not writable");
-      if (c.persist_error) bits.push(c.persist_error);
-      $("ctl-msg").textContent = bits.join(" · ");
+      const liveBits = [];
+      if (isLiveDirty()) liveBits.push("Unsaved changes");
+      else if (c.persisted) liveBits.push("Saved");
+      else liveBits.push("Applies immediately");
+      if (c.config_writable === false) liveBits.push("Config not writable");
+      if (c.persist_error) liveBits.push(c.persist_error);
+      $("ctl-msg").textContent = liveBits.join(" · ");
+
+      const configBits = [];
+      if (isConfigDirty()) configBits.push("Unsaved changes");
+      else configBits.push("Takes effect after restart");
+      if (c.persist_error) configBits.push(c.persist_error);
+      $("ctl-msg-config").textContent = configBits.join(" · ");
+    }
+
+    function applyLive(v) {
+      $("ctl-delay").value = v.sync_offset_ms ?? 0;
+      $("ctl-gain").value = v.gain || "normal";
+      $("ctl-dest").value = (v.destinations || []).join("\n");
+      $("ctl-mcast").checked = !!v.multicast_enabled;
+      $("ctl-autojoin").checked = !!v.auto_join_enabled;
+      syncSwitch("ctl-autojoin");
+      renderTargets(v.auto_join_target_id || "", v.auto_join_target_name || "", lastDevices);
+      $("ctl-autojoin-target").disabled = !v.auto_join_enabled;
+    }
+
+    function applyConfig(v, cfg) {
+      $("ctl-shairport").value = v.shairport_latency_offset_s ?? 0;
+      $("ctl-name").value = v.airplay_name || "";
+      fillIfaceSelect("ctl-http", v.http_interface || "", cfg.interfaces);
+      fillIfaceSelect("ctl-airplay", v.airplay_interface || "", cfg.interfaces);
+      fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
+      fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
     }
 
     function fillConfig(c, force) {
-      const dirty = !force && isDirty();
+      const liveDirty = !force && isLiveDirty();
+      const configDirty = !force && isConfigDirty();
       if (c) lastConfig = c;
       const cfg = lastConfig;
       const v = cfg.values || {};
-      if (force || !dirty) {
-        $("ctl-shairport").value = v.shairport_latency_offset_s ?? 0;
-        $("ctl-delay").value = v.sync_offset_ms ?? 0;
-        $("ctl-gain").value = v.gain || "normal";
-        $("ctl-name").value = v.airplay_name || "";
-        $("ctl-dest").value = (v.destinations || []).join("\n");
-        $("ctl-mcast").checked = !!v.multicast_enabled;
-        fillIfaceSelect("ctl-http", v.http_interface || "", cfg.interfaces);
-        fillIfaceSelect("ctl-airplay", v.airplay_interface || "", cfg.interfaces);
-        fillIfaceSelect("ctl-unicast", v.unicast_interface || "", cfg.interfaces);
-        fillIfaceSelect("ctl-multicast", v.multicast_interface || "", cfg.interfaces);
-        $("ctl-autojoin").checked = !!v.auto_join_enabled;
-        syncSwitch("ctl-autojoin");
-        renderTargets(v.auto_join_target_id || "", v.auto_join_target_name || "", lastDevices);
-        $("ctl-autojoin-target").disabled = !v.auto_join_enabled;
-        updateSendDelayHint(v);
-      } else {
+      if (!liveDirty) applyLive(v);
+      else {
+        renderTargets($("ctl-autojoin-target").value, selectedTargetName(), lastDevices);
+        $("ctl-autojoin-target").disabled = !$("ctl-autojoin").checked;
+      }
+      if (!configDirty) applyConfig(v, cfg);
+      else {
         fillIfaceSelect("ctl-http", $("ctl-http").value, cfg.interfaces);
         fillIfaceSelect("ctl-airplay", $("ctl-airplay").value, cfg.interfaces);
         fillIfaceSelect("ctl-unicast", $("ctl-unicast").value, cfg.interfaces);
         fillIfaceSelect("ctl-multicast", $("ctl-multicast").value, cfg.interfaces);
-        renderTargets($("ctl-autojoin-target").value, selectedTargetName(), lastDevices);
-        $("ctl-autojoin-target").disabled = !$("ctl-autojoin").checked;
-        updateSendDelayHint({
-          shairport_latency_offset_s: Number($("ctl-shairport").value),
-          on_time_send_delay_ms: onTimeMs($("ctl-shairport").value)
-        });
       }
+      updateSendDelayHint(configDirty
+        ? { shairport_latency_offset_s: Number($("ctl-shairport").value) }
+        : v);
       paintHint(cfg);
       syncActionButtons();
     }
@@ -788,7 +889,7 @@
     }
 
     function nicsChanged(prev) {
-      const now = formSnapshot();
+      const now = configSnapshot();
       return now.http_interface !== (prev.http_interface || "")
         || now.airplay_interface !== (prev.airplay_interface || "")
         || now.unicast_interface !== (prev.unicast_interface || "")
@@ -801,7 +902,13 @@
     }
 
     FIELD_IDS.forEach((id) => {
-      $(id).addEventListener("input", () => { paintHint(lastConfig); syncActionButtons(); });
+      $(id).addEventListener("input", () => {
+        if (id === "ctl-shairport") {
+          updateSendDelayHint({ shairport_latency_offset_s: Number($("ctl-shairport").value) });
+        }
+        paintHint(lastConfig);
+        syncActionButtons();
+      });
       $(id).addEventListener("change", () => {
         syncSwitch(id);
         if (id === "ctl-autojoin") {
@@ -812,11 +919,48 @@
       });
     });
 
-    $("ctl-cancel").onclick = () => fillConfig(lastConfig, true);
+    async function savePatch(body, msgId) {
+      const r = await fetch("/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        $(msgId).textContent = await r.text();
+        return;
+      }
+      const view = await r.json();
+      lastConfig = view;
+      if (msgId === "ctl-msg") applyLive(view.values || {});
+      else applyConfig(view.values || {}, view);
+      updateSendDelayHint(isConfigDirty()
+        ? { shairport_latency_offset_s: Number($("ctl-shairport").value) }
+        : (view.values || {}));
+      paintHint(view);
+      syncActionButtons();
+    }
+
+    $("ctl-cancel").onclick = () => {
+      applyLive(lastConfig.values || {});
+      paintHint(lastConfig);
+      syncActionButtons();
+    };
+
+    $("ctl-cancel-config").onclick = () => {
+      applyConfig(lastConfig.values || {}, lastConfig);
+      updateSendDelayHint(lastConfig.values || {});
+      paintHint(lastConfig);
+      syncActionButtons();
+    };
 
     $("ctl-save").onclick = async () => {
-      if (!isDirty()) return;
-      const body = formSnapshot();
+      if (!isLiveDirty()) return;
+      await savePatch(liveSnapshot(), "ctl-msg");
+    };
+
+    $("ctl-save-config").onclick = async () => {
+      if (!isConfigDirty()) return;
+      const body = configSnapshot();
       const prev = lastConfig.values || {};
       if (Object.prototype.hasOwnProperty.call(prev, "airplay_name")
           && ((body.airplay_name && body.airplay_name !== prev.airplay_name) || nicsChanged(prev))) {
@@ -829,22 +973,13 @@
           return;
         }
       }
-      const r = await fetch("/config", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      if (!r.ok) {
-        $("ctl-msg").textContent = await r.text();
-        return;
-      }
-      fillConfig(await r.json(), true);
+      await savePatch(body, "ctl-msg-config");
     };
 
     $("ctl-restart").onclick = async () => {
       if (!confirm("Restart WLEDPlay? An AirPlay session may drop.")) return;
       const r = await fetch("/restart", { method: "POST" });
-      $("ctl-msg").textContent = r.ok ? "Restarting…" : "Restart failed";
+      $("ctl-msg-config").textContent = r.ok ? "Restarting…" : "Restart failed";
     };
 
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
