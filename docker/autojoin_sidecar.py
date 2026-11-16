@@ -18,7 +18,6 @@ import asyncio
 import json
 import os
 import re
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -619,7 +618,6 @@ async def add_receiver(
         if output_lists_receiver(current, receiver_ids, receiver_name):
             return True, "already in group"
         last = "group leader did not add WLEDPlay"
-        before = list(current)
         for rid in receiver_ids:
             try:
                 await add(rid)
@@ -631,28 +629,7 @@ async def add_receiver(
                 continue
             current = await output_snapshot(audio)
             if output_lists_receiver(current, receiver_ids, receiver_name):
-                # #region agent log
-                _debug(
-                    "C",
-                    "autojoin_sidecar.py:add_receiver",
-                    "leader added receiver",
-                    {"tried": rid, "outputs": [(i, n) for i, n in current]},
-                )
-                # #endregion
                 return True, ""
-        # #region agent log
-        _debug(
-            "C",
-            "autojoin_sidecar.py:add_receiver",
-            "leader did not list receiver",
-            {
-                "tried": list(receiver_ids),
-                "before": [(i, n) for i, n in before],
-                "after": [(i, n) for i, n in current],
-                "last": last,
-            },
-        )
-        # #endregion
         return False, last
     finally:
         await _close(atv)
@@ -1088,33 +1065,6 @@ def stable_id(props: dict, service_name: str) -> str:
     return service_name
 
 
-def _debug(hypothesis: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    payload = {
-        "sessionId": "2528fc",
-        "runId": "post-fix-2",
-        "hypothesisId": hypothesis,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    line = json.dumps(payload)
-    try:
-        with open(
-            "/Users/erickkobres/WLEDPlay/.cursor/debug-2528fc.log", "a", encoding="utf-8"
-        ) as handle:
-            handle.write(line + "\n")
-    except Exception:
-        pass
-    try:
-        sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
-    # #endregion
-
-
 class AvahiBrowser:
     """One browser for the life of the sidecar. Rescan starts a new pass."""
 
@@ -1409,24 +1359,9 @@ class AvahiBrowser:
             self._publish_snapshot()
 
     def _publish_snapshot(self) -> None:
-        copied = _copy_records(self.records)
         _store_live(self.records)
-        _replace_snapshot(copied)
+        _replace_snapshot(_copy_records(self.records))
         self._set_status(True, self.pass_error)
-        # #region agent log
-        _debug(
-            "A",
-            "autojoin_sidecar.py:_publish_snapshot",
-            "snapshot published",
-            {
-                "records": len(copied),
-                "raop_name_ids": sum(1 for ident in copied if "@" in ident),
-                "matches": len(self.matches),
-                "resolvers": len(self.resolvers),
-                "error": self.pass_error,
-            },
-        )
-        # #endregion
 
 
 class Handler(BaseHTTPRequestHandler):
