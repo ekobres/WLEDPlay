@@ -178,6 +178,10 @@
     .controls .field-head label { display: inline; margin: 0; }
     .target-row { display: flex; align-items: center; gap: 8px; }
     .target-row select { flex: 1; min-width: 0; }
+    .wled-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    .wled-table th, .wled-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .wled-table input[type="text"] { width: 100%; }
+    .wled-table input[type="number"] { width: 72px; }
     button.info {
       width: 18px; height: 18px; padding: 0; border-radius: 50%;
       background: #1d243c; color: var(--muted); border: 1px solid var(--line);
@@ -433,11 +437,25 @@
       </div>
       <div id="tip-mcast" popover class="tip">Also send the audio-sync packet to the multicast address. Unicast destinations are sent either way.</div>
       <div class="field-head">
-        <label for="ctl-dest">Unicast destinations</label>
+        <label>Unicast controllers</label>
         <button type="button" class="info" popovertarget="tip-dest" aria-label="About unicast destinations">?</button>
       </div>
-      <div id="tip-dest" popover class="tip">One IPv4 address per line. These lights receive the audio-sync packet directly.</div>
-      <textarea id="ctl-dest"></textarea>
+      <div id="tip-dest" popover class="tip">Discovered controllers are listed here and are not sent audio until Unicast is enabled. Delay is milliseconds added to the send delay. A negative value cannot exceed the Shairport lead. Save writes this table.</div>
+      <div class="target-row">
+        <span class="hint" id="wled-discovery">Looking for WLED controllers</span>
+        <button type="button" id="rescan-wled">Rescan for WLED</button>
+      </div>
+      <table id="ctl-wled" class="wled-table">
+        <thead>
+          <tr><th>Name</th><th>Address</th><th>Online</th><th>Unicast</th><th>Delay (ms)</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="target-row">
+        <input id="ctl-wled-name" type="text" maxlength="128" placeholder="Name" aria-label="Controller name">
+        <input id="ctl-wled-addr" type="text" placeholder="Address" aria-label="Controller address">
+        <button type="button" id="ctl-wled-add">Add</button>
+      </div>
       <div class="row">
         <button id="ctl-save" type="button" disabled>Save</button>
         <button id="ctl-cancel" type="button" disabled>Cancel</button>
@@ -944,6 +962,7 @@
         paintAutoJoin(s.auto_join);
         if (!vizOn) paintConn(!!s.airplay.connected);
         refreshDevices();
+        refreshWled(false);
       } catch { /* ignore */ }
       if (!document.hidden) statusTimer = setTimeout(statusTick, 1000);
     }
@@ -965,7 +984,7 @@
 
     const FIELD_IDS = [
       "ctl-shairport", "ctl-delay", "ctl-gain", "ctl-name", "ctl-http", "ctl-airplay",
-      "ctl-unicast", "ctl-multicast", "ctl-mcast", "ctl-dest",
+      "ctl-unicast", "ctl-multicast", "ctl-mcast",
       "ctl-autojoin", "ctl-autojoin-target"
     ];
 
@@ -980,8 +999,119 @@
         + onTime + " ms = on time; higher = later LEDs";
     }
 
-    function destLines() {
-      return $("ctl-dest").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
+    let wledRows = [];
+    let wledDismissed = [];
+    let wledBaseline = "";
+    let wledBounds = { min_delay_ms: -5000, max_delay_ms: 5000 };
+
+    function wledKey(rows, dismissed) {
+      const body = (rows || []).map((r) => ({
+        address: String(r.address || "").trim(),
+        name: r.name || "",
+        unicast: !!r.unicast,
+        delay_ms: Number(r.delay_ms) || 0,
+        manual: !!r.manual,
+        name_locked: !!r.name_locked
+      }));
+      const gone = (dismissed || []).map((s) => String(s).trim()).filter(Boolean).sort();
+      return JSON.stringify({ body, gone });
+    }
+
+    function wledDirty() {
+      return wledKey(wledRows, wledDismissed) !== wledBaseline;
+    }
+
+    function renderWled() {
+      const body = $("ctl-wled").querySelector("tbody");
+      body.replaceChildren();
+      wledRows.forEach((row, index) => {
+        const tr = document.createElement("tr");
+        const name = document.createElement("input");
+        name.type = "text";
+        name.maxLength = 128;
+        name.value = row.name || "";
+        name.setAttribute("aria-label", "Name for " + (row.address || "controller"));
+        name.addEventListener("input", () => {
+          wledRows[index].name = name.value;
+          wledRows[index].name_locked = true;
+          syncActionButtons();
+          paintHint(lastConfig);
+        });
+        const addr = document.createElement("td");
+        addr.textContent = row.address || "";
+        const online = document.createElement("td");
+        online.textContent = row.online ? "yes" : "no";
+        const flag = document.createElement("input");
+        flag.type = "checkbox";
+        flag.checked = !!row.unicast;
+        flag.addEventListener("change", () => {
+          wledRows[index].unicast = flag.checked;
+          syncActionButtons();
+          paintHint(lastConfig);
+        });
+        const delay = document.createElement("input");
+        delay.type = "number";
+        delay.step = "1";
+        delay.min = String(wledBounds.min_delay_ms);
+        delay.max = String(wledBounds.max_delay_ms);
+        delay.value = String(Number(row.delay_ms) || 0);
+        delay.setAttribute("aria-label", "Delay in milliseconds for " + (row.address || "controller"));
+        delay.addEventListener("change", () => {
+          let n = Math.trunc(Number(delay.value));
+          if (!Number.isFinite(n)) n = 0;
+          n = Math.min(wledBounds.max_delay_ms, Math.max(wledBounds.min_delay_ms, n));
+          wledRows[index].delay_ms = n;
+          delay.value = String(n);
+          syncActionButtons();
+          paintHint(lastConfig);
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          const key = String(row.address || "").trim();
+          if (key && !wledDismissed.includes(key)) wledDismissed.push(key);
+          wledRows.splice(index, 1);
+          renderWled();
+          syncActionButtons();
+          paintHint(lastConfig);
+        });
+        const nameCell = document.createElement("td");
+        nameCell.appendChild(name);
+        tr.appendChild(nameCell);
+        tr.appendChild(addr);
+        tr.appendChild(online);
+        const flagCell = document.createElement("td");
+        flagCell.appendChild(flag);
+        tr.appendChild(flagCell);
+        const delayCell = document.createElement("td");
+        delayCell.appendChild(delay);
+        tr.appendChild(delayCell);
+        const removeCell = document.createElement("td");
+        removeCell.appendChild(remove);
+        tr.appendChild(removeCell);
+        body.appendChild(tr);
+      });
+      const n = wledRows.length;
+      $("wled-discovery").textContent = n + (n === 1 ? " controller" : " controllers");
+    }
+
+    let wledReady = false;
+
+    async function refreshWled(force) {
+      if (!force && isLiveDirty()) return;
+      try {
+        const d = await fetch("/wled/controllers").then((r) => r.json());
+        wledBounds = {
+          min_delay_ms: Number(d.min_delay_ms) || 0,
+          max_delay_ms: Number(d.max_delay_ms) || 0
+        };
+        wledRows = (d.controllers || []).map((r) => Object.assign({}, r));
+        wledDismissed = (d.dismissed || []).slice();
+        wledBaseline = wledKey(wledRows, wledDismissed);
+        wledReady = true;
+        renderWled();
+      } catch { /* ignore */ }
     }
 
     function selectedTargetName() {
@@ -1086,12 +1216,29 @@
       runtimeEl.className = aj.state === "error" ? "alert" : (aj.state === "phone_owned" ? "notice" : "hint");
     }
 
+    function enabledDestinations() {
+      if (!wledReady) return ((lastConfig.values || {}).destinations || []).slice();
+      return wledRows
+        .filter((r) => r.unicast)
+        .map((r) => String(r.address || "").trim())
+        .filter(Boolean);
+    }
+
     function liveSnapshot() {
       return {
         sync_offset_ms: Number($("ctl-delay").value),
         gain: $("ctl-gain").value,
         multicast_enabled: $("ctl-mcast").checked,
-        destinations: destLines(),
+        destinations: enabledDestinations(),
+        controllers: wledRows.map((r) => ({
+          address: String(r.address || "").trim(),
+          name: r.name || "",
+          unicast: !!r.unicast,
+          delay_ms: Number(r.delay_ms) || 0,
+          manual: !!r.manual,
+          name_locked: !!r.name_locked
+        })),
+        dismissed: wledDismissed.slice(),
         auto_join_enabled: $("ctl-autojoin").checked,
         auto_join_target_id: $("ctl-autojoin-target").value,
         auto_join_target_name: selectedTargetName()
@@ -1135,7 +1282,10 @@
     }
 
     function isLiveDirty() {
-      return JSON.stringify(liveSnapshot()) !== JSON.stringify(savedLive());
+      const now = liveSnapshot();
+      delete now.controllers;
+      delete now.dismissed;
+      return JSON.stringify(now) !== JSON.stringify(savedLive()) || (wledReady && wledDirty());
     }
 
     function isConfigDirty() {
@@ -1174,7 +1324,6 @@
     function applyLive(v) {
       $("ctl-delay").value = v.sync_offset_ms ?? 0;
       $("ctl-gain").value = v.gain || "normal";
-      $("ctl-dest").value = (v.destinations || []).join("\n");
       $("ctl-mcast").checked = !!v.multicast_enabled;
       $("ctl-autojoin").checked = !!v.auto_join_enabled;
       syncSwitch("ctl-autojoin");
@@ -1297,8 +1446,10 @@
       }
       const view = await r.json();
       lastConfig = view;
-      if (msgId === "ctl-msg") applyLive(view.values || {});
-      else applyConfig(view.values || {}, view);
+      if (msgId === "ctl-msg") {
+        applyLive(view.values || {});
+        await refreshWled(true);
+      } else applyConfig(view.values || {}, view);
       updateSendDelayHint(isConfigDirty()
         ? { shairport_latency_offset_s: Number($("ctl-shairport").value) }
         : (view.values || {}));
@@ -1308,6 +1459,7 @@
 
     $("ctl-cancel").onclick = () => {
       applyLive(lastConfig.values || {});
+      refreshWled(true);
       paintHint(lastConfig);
       syncActionButtons();
     };
@@ -1319,9 +1471,50 @@
       syncActionButtons();
     };
 
+    $("rescan-wled").onclick = async () => {
+      await fetch("/wled/rescan", { method: "POST" });
+      await refreshWled(false);
+    };
+
+    $("ctl-wled-add").onclick = () => {
+      const address = $("ctl-wled-addr").value.trim();
+      if (!address) return;
+      const name = $("ctl-wled-name").value.trim();
+      wledDismissed = wledDismissed.filter((k) => k !== address);
+      const existing = wledRows.find((r) => String(r.address || "").trim() === address);
+      if (existing) {
+        existing.unicast = true;
+        existing.manual = true;
+        if (name) {
+          existing.name = name;
+          existing.name_locked = true;
+        }
+      } else {
+        wledRows.push({
+          address,
+          name,
+          unicast: true,
+          delay_ms: 0,
+          manual: true,
+          name_locked: !!name,
+          online: false
+        });
+      }
+      $("ctl-wled-addr").value = "";
+      $("ctl-wled-name").value = "";
+      renderWled();
+      syncActionButtons();
+      paintHint(lastConfig);
+    };
+
     $("ctl-save").onclick = async () => {
       if (!isLiveDirty()) return;
-      await savePatch(liveSnapshot(), "ctl-msg");
+      const body = liveSnapshot();
+      if (!wledReady) {
+        delete body.controllers;
+        delete body.dismissed;
+      }
+      await savePatch(body, "ctl-msg");
     };
 
     $("ctl-save-config").onclick = async () => {

@@ -4,7 +4,7 @@ use super::{
     detected_count, device_choices, AirPlayDevice, AutoJoinService, JoinRequest, JoinResult,
     TickInput,
 };
-use crate::config::AutoJoinConfig;
+use crate::config::{AutoJoinConfig, WledSight};
 use crate::web::{AirPlaySession, AutoJoinStatus, SharedStatus};
 use serde::Deserialize;
 use std::io::{Read, Write};
@@ -40,6 +40,7 @@ enum WorkerMsg {
     Stop,
     Join(JoinRequest),
     Rescan,
+    WledRescan,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -74,6 +75,8 @@ pub struct AutoJoinHub {
     cmd_tx: Option<Sender<WorkerMsg>>,
     worker: Option<JoinHandle<()>>,
     rescan: Arc<AtomicBool>,
+    wled_rescan: Arc<AtomicBool>,
+    wled: Arc<Mutex<Vec<WledSight>>>,
 }
 
 impl AutoJoinHub {
@@ -87,11 +90,21 @@ impl AutoJoinHub {
             cmd_tx: None,
             worker: None,
             rescan: Arc::new(AtomicBool::new(false)),
+            wled_rescan: Arc::new(AtomicBool::new(false)),
+            wled: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn rescan_flag(&self) -> Arc<AtomicBool> {
         self.rescan.clone()
+    }
+
+    pub fn wled_rescan_flag(&self) -> Arc<AtomicBool> {
+        self.wled_rescan.clone()
+    }
+
+    pub fn wled_seen(&self) -> Arc<Mutex<Vec<WledSight>>> {
+        self.wled.clone()
     }
 
     pub fn drive(
@@ -105,6 +118,11 @@ impl AutoJoinHub {
         if self.rescan.swap(false, Ordering::Relaxed) {
             if let Some(tx) = &self.cmd_tx {
                 let _ = tx.send(WorkerMsg::Rescan);
+            }
+        }
+        if self.wled_rescan.swap(false, Ordering::Relaxed) {
+            if let Some(tx) = &self.cmd_tx {
+                let _ = tx.send(WorkerMsg::WledRescan);
             }
         }
         {
@@ -191,14 +209,17 @@ fn spawn(base: &str, scan_every: Duration) -> AutoJoinHub {
     let discovery = Arc::new(Mutex::new(Discovery::default()));
     let watch = Arc::new(Mutex::new(Watch::default()));
     let results = Arc::new(Mutex::new(Vec::new()));
+    let wled = Arc::new(Mutex::new(Vec::new()));
+    let wled_rescan = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel();
     let base = base.to_string();
     let discovery_w = discovery.clone();
     let watch_w = watch.clone();
     let results_w = results.clone();
+    let wled_w = wled.clone();
     let worker = thread::Builder::new()
         .name("auto-join".into())
-        .spawn(move || serve_loop(base, scan_every, rx, discovery_w, watch_w, results_w))
+        .spawn(move || serve_loop(base, scan_every, rx, discovery_w, watch_w, results_w, wled_w))
         .expect("auto join thread");
     AutoJoinHub {
         epoch: Instant::now(),
@@ -209,6 +230,8 @@ fn spawn(base: &str, scan_every: Duration) -> AutoJoinHub {
         cmd_tx: Some(tx),
         worker: Some(worker),
         rescan: Arc::new(AtomicBool::new(false)),
+        wled_rescan,
+        wled,
     }
 }
 
@@ -219,6 +242,7 @@ fn serve_loop(
     discovery: Arc<Mutex<Discovery>>,
     watch: Arc<Mutex<Watch>>,
     results: Arc<Mutex<Vec<JoinResult>>>,
+    wled: Arc<Mutex<Vec<WledSight>>>,
 ) {
     let mut next_scan = Instant::now();
     loop {
@@ -234,6 +258,11 @@ fn serve_loop(
                     tracing::warn!("Auto Join rescan: {err}");
                 }
             }
+            Ok(WorkerMsg::WledRescan) => {
+                if let Err(err) = post_wled_rescan(&base) {
+                    tracing::warn!("WLED rescan: {err}");
+                }
+            }
             Err(RecvTimeoutError::Timeout) => {
                 if Instant::now() >= next_scan {
                     let (name, probe) = {
@@ -242,6 +271,9 @@ fn serve_loop(
                     };
                     let found = fetch_scan(&base, &name, &probe);
                     apply_scan(&mut discovery.lock().unwrap(), found);
+                    if let Ok(rows) = fetch_wled(&base) {
+                        *wled.lock().unwrap() = rows;
+                    }
                     next_scan = Instant::now() + scan_every;
                 }
             }
@@ -359,6 +391,36 @@ fn post_join(base: &str, req: &JoinRequest) -> Result<(), String> {
             parsed.error
         })
     }
+}
+
+fn post_wled_rescan(base: &str) -> Result<(), String> {
+    let (code, body) = http_exchange(base, "POST", "/v1/wled/rescan", Some(b"{}"), HTTP_TIMEOUT)?;
+    if (200..300).contains(&code) {
+        Ok(())
+    } else if body.is_empty() {
+        Err(format!("wled rescan http {code}"))
+    } else {
+        Err(body)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct WledBody {
+    #[serde(default)]
+    controllers: Vec<WledSight>,
+}
+
+fn fetch_wled(base: &str) -> Result<Vec<WledSight>, String> {
+    let (code, body) = http_exchange(base, "GET", "/v1/wled", None, HTTP_TIMEOUT)?;
+    if !(200..300).contains(&code) {
+        return Err(if body.is_empty() {
+            format!("wled http {code}")
+        } else {
+            body
+        });
+    }
+    let parsed: WledBody = serde_json::from_str(&body).map_err(|err| err.to_string())?;
+    Ok(parsed.controllers)
 }
 
 fn post_rescan(base: &str) -> Result<(), String> {
@@ -848,6 +910,7 @@ mod tests {
             Arc::new(Mutex::new(Discovery::default())),
             Arc::new(Mutex::new(Watch::default())),
             Arc::new(Mutex::new(Vec::new())),
+            Arc::new(Mutex::new(Vec::new())),
         );
     }
 
@@ -893,6 +956,7 @@ mod tests {
                 Arc::new(Mutex::new(Discovery::default())),
                 Arc::new(Mutex::new(Watch::default())),
                 Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(Vec::new())),
             );
         });
         let _ = handle.join();
@@ -912,6 +976,7 @@ mod tests {
                 Arc::new(Mutex::new(Discovery::default())),
                 Arc::new(Mutex::new(Watch::default())),
                 Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(Vec::new())),
             );
         });
         tx.send(WorkerMsg::Stop).unwrap();
@@ -922,6 +987,8 @@ mod tests {
     fn drive_posts_rescan_to_the_sidecar() {
         let rescans = Arc::new(AtomicUsize::new(0));
         let rescans_s = rescans.clone();
+        let wled_rescans = Arc::new(AtomicUsize::new(0));
+        let wled_rescans_s = wled_rescans.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_s = stop.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -937,6 +1004,9 @@ mod tests {
                         let text = String::from_utf8_lossy(&buf[..n]);
                         if text.contains("POST /v1/rescan") {
                             rescans_s.fetch_add(1, Ordering::SeqCst);
+                        }
+                        if text.contains("POST /v1/wled/rescan") {
+                            wled_rescans_s.fetch_add(1, Ordering::SeqCst);
                         }
                         let body = r#"{"ok":true,"snapshot_at":"2026-11-16 16:00 UTC"}"#;
                         let raw = format!(
@@ -965,9 +1035,215 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(rescans.load(Ordering::SeqCst) >= 1);
+        let wled_flag = hub.wled_rescan_flag();
+        let _seen = hub.wled_seen();
+        wled_flag.store(true, Ordering::Relaxed);
+        hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
+        assert!(!wled_flag.load(Ordering::Relaxed));
+        let start = Instant::now();
+        while wled_rescans.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2)
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(wled_rescans.load(Ordering::SeqCst) >= 1);
         drop(hub);
         stop.store(true, Ordering::SeqCst);
         let _ = server.join();
+    }
+
+    #[test]
+    fn wled_lookup_parses_and_reports_errors() {
+        let (port, handle) = serve(
+            "HTTP/1.1 200 OK",
+            r#"{"ok":true,"controllers":[{"address":"192.0.2.10","name":"Room","online":true}]}"#,
+        );
+        let rows = fetch_wled(&format!("http://127.0.0.1:{port}")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].address, "192.0.2.10");
+        assert!(rows[0].online);
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.1 500 ERR", "");
+        let err = fetch_wled(&format!("http://127.0.0.1:{port}")).unwrap_err();
+        assert!(err.contains("500"), "{err}");
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.1 502 ERR", "down");
+        assert_eq!(
+            fetch_wled(&format!("http://127.0.0.1:{port}")).unwrap_err(),
+            "down"
+        );
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.1 200 OK", "not-json");
+        assert!(fetch_wled(&format!("http://127.0.0.1:{port}")).is_err());
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.0 202 Accepted", r#"{"ok":true}"#);
+        post_wled_rescan(&format!("http://127.0.0.1:{port}")).unwrap();
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.0 500 No", "");
+        let err = post_wled_rescan(&format!("http://127.0.0.1:{port}")).unwrap_err();
+        assert!(err.contains("500"), "{err}");
+        let _ = handle.join();
+
+        let (port, handle) = serve("HTTP/1.0 503 Busy", "down");
+        assert_eq!(
+            post_wled_rescan(&format!("http://127.0.0.1:{port}")).unwrap_err(),
+            "down"
+        );
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn serve_loop_posts_wled_rescan() {
+        let (port, handle) = serve("HTTP/1.0 202 Accepted", r#"{"ok":true}"#);
+        let (tx, rx) = mpsc::channel();
+        tx.send(WorkerMsg::WledRescan).unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let worker = thread::spawn(move || {
+            serve_loop(
+                base,
+                Duration::from_secs(60),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+        });
+        let _ = handle.join();
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn serve_loop_skips_a_scan_that_is_not_due() {
+        let (port, handle) = serve(
+            "HTTP/1.1 200 OK",
+            r#"{"self_id":"","discovery_active":false,"error":"","devices":[],"controllers":[]}"#,
+        );
+        let (tx, rx) = mpsc::channel();
+        let base = format!("http://127.0.0.1:{port}");
+        let worker = thread::spawn(move || {
+            serve_loop(
+                base,
+                Duration::from_secs(60),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+        });
+        let _ = handle.join();
+        thread::sleep(Duration::from_millis(80));
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn serve_loop_warns_when_wled_rescan_fails() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(WorkerMsg::WledRescan).unwrap();
+        let worker = thread::spawn(move || {
+            serve_loop(
+                "http://127.0.0.1:1".into(),
+                Duration::from_secs(60),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+        });
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn serve_loop_stores_wled_rows_and_keeps_them_on_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let wled_hits = Arc::new(AtomicUsize::new(0));
+        let wled_hits_s = wled_hits.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_s = stop.clone();
+        let server = thread::spawn(move || {
+            while !stop_s.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut sock, _)) => {
+                        let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+                        let mut buf = vec![0u8; 2048];
+                        let n = sock.read(&mut buf).unwrap_or(0);
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        let body = if text.contains("GET /v1/wled") {
+                            let seen = wled_hits_s.fetch_add(1, Ordering::SeqCst);
+                            if seen == 0 {
+                                r#"{"controllers":[{"address":"192.0.2.10","name":"Room","online":true}]}"#
+                            } else {
+                                "nope"
+                            }
+                        } else {
+                            r#"{"self_id":"","discovery_active":false,"error":"","devices":[]}"#
+                        };
+                        let status = if body == "nope" { "500 ERR" } else { "200 OK" };
+                        let raw = format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = sock.write_all(raw.as_bytes());
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                }
+            }
+        });
+        let wled = Arc::new(Mutex::new(Vec::new()));
+        let wled_w = wled.clone();
+        let (tx, rx) = mpsc::channel();
+        let base = format!("http://127.0.0.1:{port}");
+        let worker = thread::spawn(move || {
+            serve_loop(
+                base,
+                Duration::from_millis(30),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+                wled_w,
+            );
+        });
+        let start = Instant::now();
+        while wled.lock().unwrap().is_empty() && start.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(wled.lock().unwrap().len(), 1);
+        let start = Instant::now();
+        while wled_hits.load(Ordering::SeqCst) < 2 && start.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(wled.lock().unwrap()[0].address, "192.0.2.10");
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn inactive_hub_clears_wled_rescan_without_a_worker() {
+        let hub = AutoJoinHub::inactive();
+        hub.wled_rescan_flag().store(true, Ordering::Relaxed);
+        let status = Arc::new(Mutex::new(RuntimeStatus::default()));
+        let auto = AutoJoinConfig {
+            enabled: false,
+            target_id: String::new(),
+            target_name: String::new(),
+        };
+        hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
+        assert!(!hub.wled_rescan.load(Ordering::Relaxed));
+        assert!(hub.wled_seen().lock().unwrap().is_empty());
     }
 
     static ENV: Mutex<()> = Mutex::new(());

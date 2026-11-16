@@ -1,4 +1,4 @@
-use crate::config::AgcMode;
+use crate::config::{AgcMode, WledController};
 use crate::control::ConfigValues;
 
 /// Embedded operator UI (switch + pending Save/Cancel).
@@ -19,6 +19,8 @@ pub struct OperatorSnapshot {
     pub multicast_interface: String,
     pub multicast_enabled: bool,
     pub destinations: Vec<String>,
+    pub controllers: Vec<WledController>,
+    pub dismissed: Vec<String>,
     pub auto_join_enabled: bool,
     pub auto_join_target_id: String,
     pub auto_join_target_name: String,
@@ -56,6 +58,8 @@ impl PartialEq for OperatorSnapshot {
             && self.multicast_interface == other.multicast_interface
             && self.multicast_enabled == other.multicast_enabled
             && self.destinations == other.destinations
+            && self.controllers == other.controllers
+            && self.dismissed == other.dismissed
             && self.auto_join_enabled == other.auto_join_enabled
             && self.auto_join_target_id == other.auto_join_target_id
             && self.auto_join_target_name == other.auto_join_target_name
@@ -75,6 +79,8 @@ impl OperatorSnapshot {
             multicast_interface: v.multicast_interface.clone(),
             multicast_enabled: v.multicast_enabled,
             destinations: v.destinations.clone(),
+            controllers: v.controllers.clone(),
+            dismissed: v.dismissed.clone(),
             auto_join_enabled: v.auto_join_enabled,
             auto_join_target_id: v.auto_join_target_id.trim().to_string(),
             auto_join_target_name: v.auto_join_target_name.trim().to_string(),
@@ -153,6 +159,10 @@ mod tests {
             multicast_address: "239.0.0.1".into(),
             port: 11988,
             destinations: dest.iter().map(|s| (*s).to_string()).collect(),
+            controllers: Vec::new(),
+            dismissed: Vec::new(),
+            min_delay_ms: -1200,
+            max_delay_ms: 3800,
             http_interface: String::new(),
             airplay_interface: String::new(),
             unicast_interface: String::new(),
@@ -195,6 +205,14 @@ mod tests {
         assert!(html.contains("id=\"rescan-targets\""));
         assert!(html.contains("Rescan for Targets"));
         assert!(html.contains("/airplay/rescan"));
+        assert!(html.contains("id=\"ctl-wled\""));
+        assert!(html.contains("Rescan for WLED"));
+        assert!(html.contains("/wled/rescan"));
+        assert!(html.contains("delay_ms"));
+        assert!(html.contains("Delay (ms)"));
+        assert!(html.contains("name_locked"));
+        assert!(html.contains("function refreshWled"));
+        assert!(html.contains("wledBaseline"));
         assert!(html.contains("Targets scanned"));
         assert!(html.contains("aj.snapshot_at"));
         assert!(html.contains("id=\"autojoin-discovery\""));
@@ -334,6 +352,8 @@ mod tests {
             multicast_interface: String::new(),
             multicast_enabled: true,
             destinations: dest_lines("10.11.1.124\n"),
+            controllers: Vec::new(),
+            dismissed: Vec::new(),
             auto_join_enabled: false,
             auto_join_target_id: String::new(),
             auto_join_target_name: String::new(),

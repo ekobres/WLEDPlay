@@ -6,6 +6,7 @@ pub use operator::{
 };
 
 use crate::clock::{self, ClockSession, ClockStatus};
+use crate::config::{merge_controllers, WledSight};
 use crate::control::{ConfigPatch, Control};
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceInfo;
@@ -27,6 +28,8 @@ pub struct AppState {
     pub artwork: SharedArtwork,
     pub control: Option<Control>,
     pub rescan: Arc<AtomicBool>,
+    pub wled_rescan: Arc<AtomicBool>,
+    pub wled_seen: Arc<Mutex<Vec<WledSight>>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,6 +249,8 @@ pub fn router(state: AppState) -> Router {
         .route("/interfaces", get(interfaces_handler))
         .route("/airplay/devices", get(devices_handler))
         .route("/airplay/rescan", post(rescan_handler))
+        .route("/wled/controllers", get(wled_controllers))
+        .route("/wled/rescan", post(wled_rescan_handler))
         .route("/restart", post(restart_handler))
         .with_state(state)
 }
@@ -416,6 +421,30 @@ async fn rescan_handler(State(state): State<AppState>) -> StatusCode {
     StatusCode::ACCEPTED
 }
 
+async fn wled_rescan_handler(State(state): State<AppState>) -> StatusCode {
+    state.wled_rescan.store(true, Ordering::Relaxed);
+    StatusCode::ACCEPTED
+}
+
+async fn wled_controllers(
+    State(state): State<AppState>,
+) -> Json<crate::config::WledTable> {
+    let seen = state.wled_seen.lock().unwrap().clone();
+    let table = match &state.control {
+        Some(control) => {
+            let cfg = control.config.lock().unwrap().clone();
+            merge_controllers(&cfg, &seen)
+        }
+        None => crate::config::WledTable {
+            controllers: Vec::new(),
+            dismissed: Vec::new(),
+            min_delay_ms: 0,
+            max_delay_ms: 0,
+        },
+    };
+    Json(table)
+}
+
 async fn restart_handler(State(state): State<AppState>) -> StatusCode {
     if let Some(ctrl) = &state.control {
         ctrl.request_restart();
@@ -448,6 +477,8 @@ mod tests {
             artwork: Arc::new(Mutex::new(None)),
             control: None,
             rescan: Arc::new(AtomicBool::new(false)),
+            wled_rescan: Arc::new(AtomicBool::new(false)),
+            wled_seen: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -482,6 +513,8 @@ mod tests {
                 artwork: Arc::new(Mutex::new(None)),
                 control: Some(control),
                 rescan: Arc::new(AtomicBool::new(false)),
+                wled_rescan: Arc::new(AtomicBool::new(false)),
+                wled_seen: Arc::new(Mutex::new(Vec::new())),
             },
             restart,
         )
@@ -1014,5 +1047,65 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn wled_table_route_merges_rows_and_rescan_sets_the_flag() {
+        let (state, _) = control_state();
+        {
+            let mut cfg = state.control.as_ref().unwrap().config.lock().unwrap();
+            cfg.audio.sync_offset_ms = 1200;
+            cfg.audio.shairport_latency_offset_s = -1.2;
+            cfg.wled.controllers.push(crate::config::WledController {
+                address: "192.0.2.10".into(),
+                name: "Saved".into(),
+                unicast: true,
+                delay_ms: 1,
+                manual: true,
+                name_locked: true,
+            });
+        }
+        state.wled_seen.lock().unwrap().push(WledSight {
+            address: "192.0.2.11".into(),
+            name: "Found".into(),
+            online: true,
+        });
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/wled/controllers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("192.0.2.10"));
+        assert!(text.contains("192.0.2.11"));
+        assert!(text.contains("\"unicast\":false") || text.contains("\"unicast\": false"));
+        let flag = state.wled_rescan.clone();
+        let (status, _) = send(
+            router(state),
+            Request::builder()
+                .method("POST")
+                .uri("/wled/rescan")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+
+        let (status, body) = send(
+            router(bare_state()),
+            Request::builder()
+                .uri("/wled/controllers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("\"controllers\":[]") || text.contains("\"controllers\": []"));
     }
 }

@@ -18,7 +18,16 @@ wled:
   port: 11988
   destinations:
     # Documentation address. Replace with your WLED controller.
+    # Control Save rewrites this list from controllers whose unicast flag is true.
     - "192.0.2.10"
+  controllers:
+    - address: "192.0.2.10"
+      name: "Controller A"
+      unicast: true
+      delay_ms: 0
+      manual: true
+      name_locked: false
+  dismissed: []
   multicast_enabled: true
 
 # Bind each traffic type to a host NIC (`ip -br addr`). Empty = no pin.

@@ -11,6 +11,8 @@ This measurement **requires a Linux (or FreeBSD) host**. Official AP2 + NQPTP ca
 | **Shairport lead** | `audio.shairport_latency_offset_s` (e.g. `-1.2`) | Shairport lead (s) | Restart |
 | **Send delay** | `audio.sync_offset_ms` (unsigned ms) | Send delay (ms) | Live |
 
+An enabled unicast controller can add `delay_ms` to that hold. Zero matches the send delay. Positive is later, negative is earlier, and a negative value cannot exceed the Shairport lead. The resulting hold stays within 0–5000 ms. Multicast stays on the send delay. The Control card Save writes the table. Discovery does not.
+
 Send delay semantics (for lead `-1.2` → on-time = `1200` ms):
 
 - `0` — AFAP after decode (up to 1.2 s early vs presentation)

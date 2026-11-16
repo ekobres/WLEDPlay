@@ -9,6 +9,8 @@ as <dir>/pyatv.json.
 
 GET  /v1/scan?name=WLEDPlay&probe=<target-id>
 POST /v1/rescan
+GET  /v1/wled
+POST /v1/wled/rescan
 POST /v1/join   {"target_id","receiver_id"}
 """
 
@@ -29,6 +31,7 @@ LISTEN = os.environ.get("AUTOJOIN_LISTEN", "127.0.0.1:8091")
 STORAGE = os.environ.get("PYATV_STORAGE", "/host-config/pyatv")
 RECEIVER_NAME = os.environ.get("WLEDPLAY_AIRPLAY_NAME", "WLEDPlay")
 AIRPLAY_IFACE = os.environ.get("WLEDPLAY_AIRPLAY_INTERFACE", "").strip()
+UNICAST_IFACE = os.environ.get("WLEDPLAY_UNICAST_INTERFACE", "").strip()
 GROUP_UNSUPPORTED = "group modification not supported"
 
 _lock = threading.Lock()
@@ -41,6 +44,7 @@ _discovery_error = ""
 _probe = {"id": "", "name": RECEIVER_NAME}
 _index = {"devices": {}, "self_deviceid": "", "self_name": ""}
 _browser = None
+_wled_rows: dict = {}
 
 
 def airplay_network():
@@ -1084,6 +1088,11 @@ class AvahiBrowser:
         self.snapshot_open = False
         self.pass_error = ""
         self.ready = threading.Event()
+        self.wled_browsers = []
+        self.wled_matches = []
+        self.wled_resolvers = {}
+        self.wled_generation = 0
+        self.wled_network = None
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="avahi-browse", daemon=True).start()
@@ -1094,6 +1103,13 @@ class AvahiBrowser:
         if glib is None or self.loop is None or not self.loop.is_running():
             return False
         glib.idle_add(self._restart)
+        return True
+
+    def request_wled_rescan(self) -> bool:
+        glib = self._glib
+        if glib is None or self.loop is None or not self.loop.is_running():
+            return False
+        glib.idle_add(self._restart_wled)
         return True
 
     def _run(self) -> None:
@@ -1111,6 +1127,7 @@ class AvahiBrowser:
                 "org.freedesktop.Avahi.Server",
             )
             self._open_browsers()
+            self._open_wled()
             self.loop = GLib.MainLoop()
             self.ready.set()
             self.loop.run()
@@ -1358,10 +1375,152 @@ class AvahiBrowser:
         if self.browsers:
             self._publish_snapshot()
 
+    def _restart_wled(self) -> bool:
+        self.wled_generation += 1
+        self._drop_wled()
+        with _lock:
+            _wled_rows.clear()
+        self._open_wled()
+        return False
+
+    def _open_wled(self) -> None:
+        self.wled_network = iface_network(UNICAST_IFACE)
+        stype = "_wled._tcp"
+        try:
+            path = self.server.ServiceBrowserNew(
+                self._dbus.Int32(-1),
+                self._dbus.Int32(0),
+                stype,
+                "local",
+                self._dbus.UInt32(0),
+            )
+            browser = self._dbus.Interface(
+                self.bus.get_object("org.freedesktop.Avahi", path),
+                "org.freedesktop.Avahi.ServiceBrowser",
+            )
+            gen = self.wled_generation
+            self._listen_wled(
+                browser,
+                "ItemNew",
+                lambda *args, generation=gen: self._on_wled_new(generation, *args),
+            )
+            self._listen_wled(
+                browser,
+                "ItemRemove",
+                lambda *args, generation=gen: self._on_wled_remove(generation, *args),
+            )
+            self.wled_browsers.append(str(path))
+        except Exception:
+            return
+
+    def _listen_wled(self, obj, signal: str, handler) -> None:
+        self.wled_matches.append(obj.connect_to_signal(signal, handler))
+
+    def _drop_wled(self) -> None:
+        for match in self.wled_matches:
+            try:
+                match.remove()
+            except Exception:
+                pass
+        self.wled_matches.clear()
+        for path in self.wled_browsers:
+            self._free(path, "ServiceBrowser")
+        for path in list(self.wled_resolvers.values()):
+            self._free(path, "ServiceResolver")
+        self.wled_browsers.clear()
+        self.wled_resolvers.clear()
+
+    def _on_wled_new(self, gen, interface, protocol, name, stype, domain, _flags) -> None:
+        if gen != self.wled_generation:
+            return
+        key = (str(name), str(stype))
+        if key in self.wled_resolvers:
+            return
+        try:
+            path = self.server.ServiceResolverNew(
+                self._dbus.Int32(int(interface)),
+                self._dbus.Int32(int(protocol)),
+                str(name),
+                str(stype),
+                str(domain),
+                self._dbus.Int32(0),
+                self._dbus.UInt32(0),
+            )
+        except Exception:
+            return
+        path = str(path)
+        try:
+            resolver = self._dbus.Interface(
+                self.bus.get_object("org.freedesktop.Avahi", path),
+                "org.freedesktop.Avahi.ServiceResolver",
+            )
+            self._listen_wled(
+                resolver,
+                "Found",
+                lambda *args, generation=gen, ident=key: self._on_wled_found(generation, ident, *args),
+            )
+            self.wled_resolvers[key] = path
+        except Exception:
+            self._free(path, "ServiceResolver")
+
+    def _on_wled_remove(self, gen, _interface, _protocol, name, stype, _domain, _flags) -> None:
+        if gen != self.wled_generation:
+            return
+        key = (str(name), str(stype))
+        self.wled_resolvers.pop(key, None)
+        with _lock:
+            for row in _wled_rows.values():
+                if row.get("service") == key:
+                    row["online"] = False
+
+    def _on_wled_found(self, gen, key, _interface, _protocol, name, _stype, _domain, _host, _aprotocol, address, _port, _txt, _flags) -> None:
+        if gen != self.wled_generation:
+            return
+        text = _ipv4_text(address)
+        if not text or not address_on_network(text, self.wled_network):
+            return
+        with _lock:
+            row = _wled_rows.get(text)
+            if row is None:
+                _wled_rows[text] = {
+                    "address": text,
+                    "name": str(name),
+                    "online": True,
+                    "service": key,
+                }
+            else:
+                row["name"] = str(name) or row.get("name") or ""
+                row["online"] = True
+                row["service"] = key
+
     def _publish_snapshot(self) -> None:
         _store_live(self.records)
         _replace_snapshot(_copy_records(self.records))
         self._set_status(True, self.pass_error)
+
+
+def _ipv4_text(addr) -> str:
+    text = str(addr or "").strip()
+    try:
+        ip = ip_address(text)
+    except ValueError:
+        return ""
+    if ip.version != 4:
+        return ""
+    return text
+
+
+def wled_payload() -> dict:
+    with _lock:
+        rows = [
+            {
+                "address": row.get("address") or "",
+                "name": row.get("name") or "",
+                "online": bool(row.get("online")),
+            }
+            for row in _wled_rows.values()
+        ]
+    return {"ok": True, "controllers": rows}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1380,6 +1539,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/v1/wled":
+            self._send(200, wled_payload())
+            return
         if parsed.path != "/v1/scan":
             self._send(404, {"ok": False, "error": "not found"})
             return
@@ -1393,6 +1555,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/v1/wled/rescan":
+            ok = bool(_browser and _browser.request_wled_rescan())
+            self._send(202 if ok else 503, {"ok": ok})
+            return
         if parsed.path == "/v1/rescan":
             ok = bool(_browser and _browser.request_rescan())
             self._send(202 if ok else 503, {"ok": ok})

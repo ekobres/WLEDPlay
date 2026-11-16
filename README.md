@@ -80,6 +80,8 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 - `GET /interfaces` — usable IPv4 NICs
 - `GET /airplay/devices` — AirPlay receivers from the last target snapshot
 - `POST /airplay/rescan` — look up AirPlay speakers again and replace that list
+- `GET /wled/controllers` — saved unicast rows merged with WLED controllers found on the network
+- `POST /wled/rescan` — look up WLED controllers again
 - `POST /restart` — orderly process restart
 
 ## Configuration
@@ -101,8 +103,8 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
 | `WLEDPLAY_HTTP_INTERFACE` | NIC for the HTTP UI (empty = `web.listen` / all interfaces) |
-| `WLEDPLAY_AIRPLAY_INTERFACE` | NIC for Shairport + Avahi (mDNS / AirPlay) |
-| `WLEDPLAY_UNICAST_INTERFACE` | NIC for WLED unicast UDP |
+| `WLEDPLAY_AIRPLAY_INTERFACE` | NIC for Shairport. Avahi listens on this NIC |
+| `WLEDPLAY_UNICAST_INTERFACE` | NIC for WLED unicast UDP. When this differs from the AirPlay NIC, Avahi listens on it too |
 | `WLEDPLAY_MULTICAST_INTERFACE` | NIC for WLED multicast (`239.0.0.1`) |
 | `WLEDPLAY_WEB_LISTEN` | HTTP bind address when HTTP NIC is unset (default `0.0.0.0`) |
 | `WLEDPLAY_WEB_PORT` | HTTP port (default `8080`) |

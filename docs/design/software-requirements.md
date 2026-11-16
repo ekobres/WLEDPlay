@@ -348,7 +348,7 @@ AirPlay 2 introduces buffering and presentation timing shared with grouped speak
 WLEDPlay compensates using two independent operator settings:
 
 - `audio.shairport_latency_offset_s` — Shairport `audio_backend_latency_offset_in_seconds` (negative = earlier PCM from Shairport). **Restart** to apply. The absolute value is the early-PCM margin (e.g. `-1.2` → 1200 ms lead).
-- `audio.sync_offset_ms` — unsigned hold after decode before each WLED UDP packet (**live**). `0` = send as soon as PCM arrives (up to the Shairport lead early). Matching the lead in ms (e.g. `1200` when lead is `-1.2`) = on time at presentation. Higher = later LEDs.
+- `audio.sync_offset_ms` — unsigned hold after decode before each WLED UDP packet (**live**). `0` = send as soon as PCM arrives (up to the Shairport lead early). Matching the lead in ms (e.g. `1200` when lead is `-1.2`) = on time at presentation. Higher = later LEDs. A saved unicast controller may add a millisecond offset to that hold (`delay_ms`, default 0). Positive is later, negative is earlier. A negative value cannot exceed the early-PCM margin above, and the resulting hold stays within 0–5000 ms. Multicast uses the base hold only.
 
 The operator console exposes both fields separately in yaml and the web UI.
 
@@ -684,11 +684,11 @@ The UI is the primary operator console for a running instance. To the extent a s
 | Send delay | Hold each WLED packet after decode (`audio.sync_offset_ms`, 0–5000 ms). Apply immediately. Earlier or later relative to the speakers is this hold combined with the Shairport lead in §13. The hold itself is never negative. |
 | AirPlay name | Rename the advertised receiver from the default `WLEDPlay`. Re-advertise via mDNS. Warn that the current AirPlay session may drop. |
 | HTTP interface | Bind the control UI to a management NIC, or leave unset for all interfaces. Apply via stack restart. |
-| AirPlay / mDNS interface | Bind Shairport Sync and Avahi to the user-network NIC. Apply via stack restart. |
+| AirPlay / mDNS interface | Bind Shairport Sync to the user-network NIC. Avahi listens on that NIC and, when a unicast NIC is set, on the unicast NIC as well so it can see WLED controllers. Shairport still advertises only on the AirPlay NIC. Apply via stack restart. |
 | Unicast interface | Bind WLED Audio Sync unicast UDP to the IoT / device NIC. Apply via stack restart. |
 | Multicast interface | Bind WLED Audio Sync multicast (`239.0.0.1`) to an IoT NIC, which may differ from unicast. Apply via stack restart. |
 | Multicast | Enable or disable WLED Audio Sync multicast send/join without stopping unicast destinations. Apply immediately. |
-| Unicast destinations | Add or remove WLED controller IPs (and optional port). Apply immediately. An empty list with multicast off means “send nowhere.” |
+| Unicast destinations | Add or remove WLED controller IPs (and optional port), with a name, a send flag, and a delay in milliseconds. Newly discovered controllers are not sent until enabled. Apply immediately on Control Save. An empty send list with multicast off means “send nowhere.” |
 | Restart | Restart the WLEDPlay process (and, in the Docker stack, Shairport / NQPTP as needed) so pending bind/name/interface changes take effect. Docker `restart: unless-stopped` (or equivalent) must bring the stack back. |
 
 ### Additional controls (should)

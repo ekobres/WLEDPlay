@@ -9,6 +9,14 @@ pub enum SendError {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketTarget {
+    /// Every current multicast and unicast destination.
+    Fanout,
+    Multicast,
+    Unicast(SocketAddr),
+}
+
 pub struct WledSender {
     multicast_socket: UdpSocket,
     unicast_socket: UdpSocket,
@@ -72,25 +80,51 @@ impl WledSender {
     }
 
     pub fn send(&mut self, packet: &AudioSyncPacket) -> Result<(), SendError> {
+        self.send_target(packet, PacketTarget::Fanout)
+    }
+
+    pub fn send_target(
+        &mut self,
+        packet: &AudioSyncPacket,
+        target: PacketTarget,
+    ) -> Result<(), SendError> {
         let bytes = packet.encode();
-        if self.multicast_enabled {
-            record_send(
-                &mut self.packets_sent,
-                &mut self.udp_errors,
-                self.multicast_socket.send_to(&bytes, self.multicast_addr),
-                "multicast send failed",
-            );
-        }
-        for i in 0..self.unicast_destinations.len() {
-            let dest = self.unicast_destinations[i];
-            record_send(
-                &mut self.packets_sent,
-                &mut self.udp_errors,
-                self.unicast_socket.send_to(&bytes, dest),
-                &format!("unicast send to {dest} failed"),
-            );
+        match target {
+            PacketTarget::Fanout => {
+                if self.multicast_enabled {
+                    self.send_multicast(&bytes);
+                }
+                for i in 0..self.unicast_destinations.len() {
+                    let dest = self.unicast_destinations[i];
+                    self.send_unicast(&bytes, dest);
+                }
+            }
+            PacketTarget::Multicast => {
+                if self.multicast_enabled {
+                    self.send_multicast(&bytes);
+                }
+            }
+            PacketTarget::Unicast(dest) => self.send_unicast(&bytes, dest),
         }
         Ok(())
+    }
+
+    fn send_multicast(&mut self, bytes: &[u8]) {
+        record_send(
+            &mut self.packets_sent,
+            &mut self.udp_errors,
+            self.multicast_socket.send_to(bytes, self.multicast_addr),
+            "multicast send failed",
+        );
+    }
+
+    fn send_unicast(&mut self, bytes: &[u8], dest: SocketAddr) {
+        record_send(
+            &mut self.packets_sent,
+            &mut self.udp_errors,
+            self.unicast_socket.send_to(bytes, dest),
+            &format!("unicast send to {dest} failed"),
+        );
     }
 
     pub fn packets_sent(&self) -> u64 {
@@ -284,5 +318,31 @@ mod tests {
         log_multicast_if(Ok(()), Ipv4Addr::LOCALHOST);
         log_multicast_if(Err(std::io::Error::other("if")), Ipv4Addr::LOCALHOST);
         warn_no_multicast_nic();
+    }
+
+    #[test]
+    fn send_target_reaches_one_destination() {
+        let mut sender = WledSender::new(
+            IpAddr::V4(Ipv4Addr::new(239, 0, 0, 1)),
+            11988,
+            vec!["127.0.0.1:9".parse().unwrap()],
+            None,
+            None,
+        )
+        .unwrap();
+        sender
+            .send_target(
+                &AudioSyncPacket::silence(),
+                PacketTarget::Unicast("127.0.0.1:9".parse().unwrap()),
+            )
+            .unwrap();
+        sender
+            .send_target(&AudioSyncPacket::silence(), PacketTarget::Multicast)
+            .unwrap();
+        sender.set_multicast_enabled(false);
+        sender
+            .send_target(&AudioSyncPacket::silence(), PacketTarget::Multicast)
+            .unwrap();
+        assert!(sender.packets_sent() + sender.udp_errors() >= 1);
     }
 }

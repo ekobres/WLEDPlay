@@ -3,10 +3,11 @@
 use crate::audio::Analyzer;
 use crate::config::{AgcMode, Config};
 use crate::web::{AudioStatus, SharedStatus};
-use crate::wled::AudioSyncPacket;
+use crate::wled::{AudioSyncPacket, PacketTarget};
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -82,8 +83,10 @@ pub fn note_pcm_gap(open: &mut bool, starved: bool) -> bool {
     false
 }
 
+pub type DelayItem = (Instant, AudioSyncPacket, PacketTarget);
+
 pub fn enqueue_packet(
-    queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
+    queue: &mut VecDeque<DelayItem>,
     packet: AudioSyncPacket,
     delay_ms: u64,
     now: Instant,
@@ -92,11 +95,53 @@ pub fn enqueue_packet(
 }
 
 pub fn enqueue_packet_at(
-    queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
+    queue: &mut VecDeque<DelayItem>,
     packet: AudioSyncPacket,
     due: Instant,
 ) {
-    queue.push_back((due, packet));
+    insert_due(queue, (due, packet, PacketTarget::Fanout));
+}
+
+pub fn enqueue_departure(
+    queue: &mut VecDeque<DelayItem>,
+    packet: AudioSyncPacket,
+    base: Instant,
+    multicast: bool,
+    unicast: &[(SocketAddr, i32)],
+) {
+    if multicast {
+        insert_due(queue, (base, packet.clone(), PacketTarget::Multicast));
+    }
+    for (addr, offset_ms) in unicast {
+        insert_due(
+            queue,
+            (
+                shift_due_ms(base, *offset_ms),
+                packet.clone(),
+                PacketTarget::Unicast(*addr),
+            ),
+        );
+    }
+}
+
+fn shift_due_ms(base: Instant, offset_ms: i32) -> Instant {
+    if offset_ms == 0 {
+        return base;
+    }
+    let step = Duration::from_millis(u64::from(offset_ms.unsigned_abs()));
+    if offset_ms > 0 {
+        base.checked_add(step).unwrap_or(base)
+    } else {
+        base.checked_sub(step).unwrap_or(base)
+    }
+}
+
+fn insert_due(queue: &mut VecDeque<DelayItem>, item: DelayItem) {
+    let pos = queue
+        .iter()
+        .position(|(due, _, _)| *due > item.0)
+        .unwrap_or(queue.len());
+    queue.insert(pos, item);
     while queue.len() > DELAY_QUEUE_MAX {
         queue.pop_front();
     }
@@ -247,18 +292,19 @@ pub fn step_send_deadline(last_send: Instant, interval: Duration, now: Instant) 
 }
 
 pub fn pop_due_packet(
-    queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
+    queue: &mut VecDeque<DelayItem>,
     now: Instant,
-) -> Option<AudioSyncPacket> {
-    if queue.front().map(|(t, _)| now >= *t).unwrap_or(false) {
-        Some(queue.pop_front().unwrap().1)
+) -> Option<(AudioSyncPacket, PacketTarget)> {
+    if queue.front().map(|(t, _, _)| now >= *t).unwrap_or(false) {
+        let (_, packet, target) = queue.pop_front().unwrap();
+        Some((packet, target))
     } else {
         None
     }
 }
 
-pub fn next_due_at(queue: &VecDeque<(Instant, AudioSyncPacket)>) -> Option<Instant> {
-    queue.front().map(|(t, _)| *t)
+pub fn next_due_at(queue: &VecDeque<DelayItem>) -> Option<Instant> {
+    queue.front().map(|(t, _, _)| *t)
 }
 
 /// Sleep until the next send tick, delayed packet, or status refresh (capped for restart).
@@ -300,7 +346,7 @@ pub struct SendLoop {
     pub idle_packets_sent: u64,
     pub announced_end: bool,
     pub underrun_open: bool,
-    pub delay_q: VecDeque<(Instant, AudioSyncPacket)>,
+    pub delay_q: VecDeque<DelayItem>,
     /// Next free send time on the monotonic `Instant` clock. Only the event
     /// loop reserves slots, and it advances this while it holds the PCM lock.
     pub next_due: Option<Instant>,
@@ -360,7 +406,13 @@ impl SendLoop {
                     break;
                 };
                 publish_audio(status, rt, cfg, pkt.sample_peak != 0);
-                enqueue_packet_at(&mut self.delay_q, pkt, due);
+                enqueue_departure(
+                    &mut self.delay_q,
+                    pkt,
+                    due,
+                    cfg.wled.multicast_enabled,
+                    &crate::config::unicast_delay_targets(cfg),
+                );
                 due += interval;
                 slot += 1;
             }
@@ -371,7 +423,13 @@ impl SendLoop {
         } else if self.udp_active {
             let pkt = rt.analyzer.silence_packet();
             publish_audio(status, rt, cfg, false);
-            enqueue_packet(&mut self.delay_q, pkt, delay_ms, now);
+            enqueue_departure(
+                &mut self.delay_q,
+                pkt,
+                now + Duration::from_millis(delay_ms),
+                cfg.wled.multicast_enabled,
+                &crate::config::unicast_delay_targets(cfg),
+            );
             self.idle_packets_sent += 1;
             if self.idle_packets_sent >= IDLE_GRACE_PACKETS {
                 self.udp_active = false;
@@ -846,6 +904,53 @@ mod tests {
         assert_eq!(sl.delay_q.len(), 2);
         let gap = sl.delay_q[1].0.saturating_duration_since(sl.delay_q[0].0);
         assert_eq!(gap, Duration::from_millis(20));
+    }
+
+    #[test]
+    fn departure_queues_each_destination_on_its_own_deadline() {
+        let mut q = VecDeque::new();
+        let base = Instant::now() + Duration::from_secs(2);
+        let later: std::net::SocketAddr = "192.0.2.10:11988".parse().unwrap();
+        let earlier: std::net::SocketAddr = "192.0.2.11:11988".parse().unwrap();
+        enqueue_departure(
+            &mut q,
+            AudioSyncPacket::silence(),
+            base,
+            true,
+            &[(later, 15), (earlier, -7)],
+        );
+        assert_eq!(q.len(), 3);
+        assert_eq!(q[0].0, base - Duration::from_millis(7));
+        assert!(matches!(q[0].2, PacketTarget::Unicast(addr) if addr == earlier));
+        assert_eq!(q[1].0, base);
+        assert!(matches!(q[1].2, PacketTarget::Multicast));
+        assert_eq!(q[2].0, base + Duration::from_millis(15));
+        assert!(matches!(q[2].2, PacketTarget::Unicast(addr) if addr == later));
+        enqueue_departure(
+            &mut q,
+            AudioSyncPacket::silence(),
+            base,
+            false,
+            &[(later, 0)],
+        );
+        assert!(q.iter().any(|item| item.0 == base && matches!(item.2, PacketTarget::Unicast(_))));
+    }
+
+    #[test]
+    fn send_loop_second_window_stays_one_slot_later() {
+        let status = status();
+        let cfg = Config::default();
+        let mut rt = PcmRuntime::new(AgcMode::Off);
+        let mut sl = SendLoop::default();
+        let now = Instant::now();
+        rt.stream_active = true;
+        rt.last_pcm = Some(now);
+        for i in 0..(512 + 441) {
+            let t = i as f32 / 22050.0;
+            let s = (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 8_000.0;
+            rt.analyzer.ingest_mono_sample(s, i as u64);
+        }
+        sl.on_update(&mut rt, &status, &cfg, false, now);
         sl.on_update(
             &mut rt,
             &status,

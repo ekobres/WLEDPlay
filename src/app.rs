@@ -247,6 +247,8 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
             artwork: artwork.clone(),
             control: Some(control),
             rescan: auto_join.rescan_flag(),
+            wled_rescan: auto_join.wled_rescan_flag(),
+            wled_seen: auto_join.wled_seen(),
         };
         tokio::spawn(async move {
             web::serve(&listen, port, state)
@@ -348,8 +350,8 @@ pub fn event_loop_tick(
 
     {
         let mut snd = sender.lock().unwrap();
-        while let Some(pkt) = pop_due_packet(&mut loop_state.delay_q, now) {
-            let _ = snd.send(&pkt);
+        while let Some((pkt, target)) = pop_due_packet(&mut loop_state.delay_q, now) {
+            let _ = snd.send_target(&pkt, target);
             record_transmitted(status, &pkt);
             *packets_last_sec += 1;
         }

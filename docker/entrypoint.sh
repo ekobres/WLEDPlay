@@ -92,13 +92,24 @@ start_mdns() {
 
   avahi_conf=/tmp/avahi-daemon.conf
   cp /etc/avahi/avahi-daemon.conf "$avahi_conf"
+  avahi_ifaces=""
   if [ -n "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
-    if grep -q '^#*allow-interfaces=' "$avahi_conf"; then
-      sed -i "s|^#*allow-interfaces=.*|allow-interfaces=${WLEDPLAY_AIRPLAY_INTERFACE}|" "$avahi_conf"
+    avahi_ifaces="$WLEDPLAY_AIRPLAY_INTERFACE"
+  fi
+  if [ -n "$WLEDPLAY_UNICAST_INTERFACE" ] && [ "$WLEDPLAY_UNICAST_INTERFACE" != "$WLEDPLAY_AIRPLAY_INTERFACE" ]; then
+    if [ -n "$avahi_ifaces" ]; then
+      avahi_ifaces="${avahi_ifaces},${WLEDPLAY_UNICAST_INTERFACE}"
     else
-      sed -i "/^\\[server\\]/a allow-interfaces=${WLEDPLAY_AIRPLAY_INTERFACE}" "$avahi_conf"
+      avahi_ifaces="$WLEDPLAY_UNICAST_INTERFACE"
     fi
-    echo "Avahi allow-interfaces: ${WLEDPLAY_AIRPLAY_INTERFACE}"
+  fi
+  if [ -n "$avahi_ifaces" ]; then
+    if grep -q '^#*allow-interfaces=' "$avahi_conf"; then
+      sed -i "s|^#*allow-interfaces=.*|allow-interfaces=${avahi_ifaces}|" "$avahi_conf"
+    else
+      sed -i "/^\\[server\\]/a allow-interfaces=${avahi_ifaces}" "$avahi_conf"
+    fi
+    echo "Avahi allow-interfaces: ${avahi_ifaces}"
   fi
   if [ "$WLEDPLAY_IPV4_ONLY" = "1" ]; then
     sed -i 's/^use-ipv6=yes/use-ipv6=no/' "$avahi_conf"

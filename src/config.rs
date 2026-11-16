@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -167,6 +168,49 @@ impl<'de> Deserialize<'de> for AgcMode {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WledController {
+    pub address: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub unicast: bool,
+    #[serde(default)]
+    pub delay_ms: i32,
+    #[serde(default)]
+    pub manual: bool,
+    #[serde(default)]
+    pub name_locked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WledSight {
+    pub address: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub online: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WledControllerView {
+    pub address: String,
+    pub name: String,
+    pub unicast: bool,
+    pub delay_ms: i32,
+    pub manual: bool,
+    pub name_locked: bool,
+    pub online: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WledTable {
+    pub controllers: Vec<WledControllerView>,
+    pub dismissed: Vec<String>,
+    pub min_delay_ms: i32,
+    pub max_delay_ms: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WledConfig {
     #[serde(default = "default_multicast")]
@@ -175,6 +219,10 @@ pub struct WledConfig {
     pub port: u16,
     #[serde(default)]
     pub destinations: Vec<String>,
+    #[serde(default)]
+    pub controllers: Vec<WledController>,
+    #[serde(default)]
+    pub dismissed: Vec<String>,
     #[serde(default = "default_multicast_enabled")]
     pub multicast_enabled: bool,
 }
@@ -230,6 +278,8 @@ impl Default for WledConfig {
             multicast_address: default_multicast(),
             port: default_port(),
             destinations: vec![],
+            controllers: vec![],
+            dismissed: vec![],
             multicast_enabled: true,
         }
     }
@@ -307,6 +357,177 @@ fn default_multicast_enabled() -> bool {
     true
 }
 
+impl WledConfig {
+    /// Add any send-list address that is not already a controller, then
+    /// rewrite `destinations` from the rows that are enabled.
+    pub fn adopt_destinations(&mut self) {
+        let mut have: HashSet<String> = self
+            .controllers
+            .iter()
+            .map(|c| controller_key(&c.address))
+            .filter(|k| !k.is_empty())
+            .collect();
+        for dest in self.destinations.clone() {
+            let key = controller_key(&dest);
+            if key.is_empty() || have.contains(&key) {
+                continue;
+            }
+            self.controllers.push(WledController {
+                address: dest.trim().to_string(),
+                name: String::new(),
+                unicast: true,
+                delay_ms: 0,
+                manual: true,
+                name_locked: false,
+            });
+            have.insert(key);
+        }
+        self.sync_destinations();
+    }
+
+    pub fn sync_destinations(&mut self) {
+        self.destinations = self
+            .controllers
+            .iter()
+            .filter(|c| c.unicast)
+            .map(|c| c.address.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
+    pub fn replace_send_list(&mut self, dests: Vec<String>) {
+        let wanted: HashSet<String> = dests
+            .iter()
+            .map(|s| controller_key(s))
+            .filter(|k| !k.is_empty())
+            .collect();
+        for row in &mut self.controllers {
+            row.unicast = wanted.contains(&controller_key(&row.address));
+        }
+        self.destinations = dests;
+        self.adopt_destinations();
+    }
+}
+
+/// Host part of an `IP` or `IP:port` destination. Empty when it does not parse.
+pub fn controller_key(address: &str) -> String {
+    parse_destination(address.trim(), 1)
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_default()
+}
+
+pub fn early_lead_ms(offset_s: f64) -> i32 {
+    if offset_s < 0.0 {
+        (-offset_s * 1000.0).floor() as i32
+    } else {
+        0
+    }
+}
+
+/// Clamp a per-controller millisecond offset so the hold stays inside 0–5000 ms
+/// and a negative offset cannot exceed the Shairport early-PCM margin.
+pub fn clamp_delay_ms(delay_ms: i32, sync_offset_ms: i32, lead_s: f64) -> i32 {
+    let sync = sync_offset_ms.max(0);
+    let earliest = sync.min(early_lead_ms(lead_s).max(0));
+    let min_ms = -earliest;
+    let max_ms = (5000 - sync).max(0);
+    delay_ms.clamp(min_ms, max_ms)
+}
+
+pub fn delay_ms_bounds(sync_offset_ms: i32, lead_s: f64) -> (i32, i32) {
+    (
+        clamp_delay_ms(i32::MIN, sync_offset_ms, lead_s),
+        clamp_delay_ms(i32::MAX, sync_offset_ms, lead_s),
+    )
+}
+
+pub fn merge_controllers(cfg: &Config, seen: &[WledSight]) -> WledTable {
+    let (min_delay_ms, max_delay_ms) = delay_ms_bounds(
+        cfg.audio.sync_offset_ms,
+        cfg.audio.shairport_latency_offset_s,
+    );
+    let dismissed: HashSet<String> = cfg
+        .wled
+        .dismissed
+        .iter()
+        .map(|s| controller_key(s))
+        .filter(|k| !k.is_empty())
+        .collect();
+    let mut used = HashSet::new();
+    let mut controllers = Vec::new();
+    for saved in &cfg.wled.controllers {
+        let key = controller_key(&saved.address);
+        if key.is_empty() || dismissed.contains(&key) {
+            continue;
+        }
+        let sight = seen.iter().find(|s| controller_key(&s.address) == key);
+        let mut name = saved.name.clone();
+        if !saved.name_locked {
+            if let Some(sight) = sight {
+                if !sight.name.trim().is_empty() {
+                    name = sight.name.trim().to_string();
+                }
+            }
+        }
+        used.insert(key);
+        controllers.push(WledControllerView {
+            address: saved.address.clone(),
+            name,
+            unicast: saved.unicast,
+            delay_ms: clamp_delay_ms(
+                saved.delay_ms,
+                cfg.audio.sync_offset_ms,
+                cfg.audio.shairport_latency_offset_s,
+            ),
+            manual: saved.manual,
+            name_locked: saved.name_locked,
+            online: sight.is_some_and(|s| s.online),
+        });
+    }
+    for sight in seen {
+        if !sight.online {
+            continue;
+        }
+        let key = controller_key(&sight.address);
+        if key.is_empty() || dismissed.contains(&key) || used.contains(&key) {
+            continue;
+        }
+        used.insert(key);
+        controllers.push(WledControllerView {
+            address: sight.address.trim().to_string(),
+            name: sight.name.trim().to_string(),
+            unicast: false,
+            delay_ms: 0,
+            manual: false,
+            name_locked: false,
+            online: true,
+        });
+    }
+    WledTable {
+        controllers,
+        dismissed: cfg.wled.dismissed.clone(),
+        min_delay_ms,
+        max_delay_ms,
+    }
+}
+
+pub fn unicast_delay_targets(cfg: &Config) -> Vec<(SocketAddr, i32)> {
+    cfg.wled
+        .controllers
+        .iter()
+        .filter(|c| c.unicast)
+        .filter_map(|c| {
+            let addr = parse_destination(&c.address, cfg.wled.port)?;
+            let offset = clamp_delay_ms(
+                c.delay_ms,
+                cfg.audio.sync_offset_ms,
+                cfg.audio.shairport_latency_offset_s,
+            );
+            Some((addr, offset))
+        })
+        .collect()
+}
+
 impl Config {
     pub fn load(path: Option<&Path>) -> Self {
         let mut cfg = if let Some(p) = path {
@@ -363,6 +584,7 @@ impl Config {
                 self.wled.destinations = v.split(',').map(|s| s.trim().to_string()).collect();
             }
         }
+        self.wled.adopt_destinations();
         if let Ok(v) = std::env::var("WLEDPLAY_HTTP_INTERFACE") {
             if !v.is_empty() {
                 self.network.http = v;
@@ -813,5 +1035,162 @@ mod tests {
             panic!("poison env lock");
         });
         let _g = env_lock();
+    }
+
+    #[test]
+    fn delay_ms_clamp_to_the_shairport_lead_and_the_hold_ceiling() {
+        assert_eq!(early_lead_ms(-1.2), 1200);
+        assert_eq!(early_lead_ms(0.4), 0);
+        assert_eq!(clamp_delay_ms(-9_999, 1200, -1.2), -1200);
+        assert_eq!(clamp_delay_ms(9_999, 1200, -1.2), 3800);
+        assert_eq!(clamp_delay_ms(-1, 1200, 0.0), 0);
+        assert_eq!(clamp_delay_ms(-1, 0, -1.2), 0);
+        assert_eq!(clamp_delay_ms(4, 1200, -1.2), 4);
+        assert_eq!(delay_ms_bounds(1200, -1.2), (-1200, 3800));
+    }
+
+    #[test]
+    fn legacy_destinations_become_enabled_controllers() {
+        let mut cfg = Config::default();
+        cfg.wled.destinations = vec!["192.0.2.10".into(), "  ".into()];
+        cfg.wled.adopt_destinations();
+        assert_eq!(cfg.wled.controllers.len(), 1);
+        assert!(cfg.wled.controllers[0].unicast);
+        assert!(cfg.wled.controllers[0].manual);
+        assert_eq!(cfg.wled.controllers[0].delay_ms, 0);
+        assert_eq!(cfg.wled.destinations, vec!["192.0.2.10".to_string()]);
+        cfg.wled.adopt_destinations();
+        assert_eq!(cfg.wled.controllers.len(), 1);
+    }
+
+    #[test]
+    fn replace_send_list_updates_existing_rows() {
+        let mut cfg = Config::default();
+        cfg.wled.controllers = vec![
+            WledController {
+                address: "192.0.2.10".into(),
+                name: "A".into(),
+                unicast: true,
+                delay_ms: 0,
+                manual: true,
+                name_locked: false,
+            },
+            WledController {
+                address: "192.0.2.11".into(),
+                name: "B".into(),
+                unicast: false,
+                delay_ms: 3,
+                manual: false,
+                name_locked: true,
+            },
+        ];
+        cfg.wled
+            .replace_send_list(vec!["192.0.2.11".into(), "nope".into(), "192.0.2.12".into()]);
+        assert!(!cfg.wled.controllers[0].unicast);
+        assert!(cfg.wled.controllers[1].unicast);
+        assert_eq!(cfg.wled.controllers[1].delay_ms, 3);
+        assert!(cfg
+            .wled
+            .controllers
+            .iter()
+            .any(|c| c.address == "192.0.2.12" && c.unicast));
+        assert_eq!(
+            cfg.wled.destinations,
+            vec!["192.0.2.11".to_string(), "192.0.2.12".to_string()]
+        );
+    }
+
+    #[test]
+    fn merge_keeps_saved_rows_and_skips_dismissed_ones() {
+        let mut cfg = Config::default();
+        cfg.audio.sync_offset_ms = 1200;
+        cfg.audio.shairport_latency_offset_s = -1.2;
+        cfg.wled.controllers = vec![
+            WledController {
+                address: "192.0.2.10".into(),
+                name: "Locked".into(),
+                unicast: true,
+                delay_ms: -80,
+                manual: true,
+                name_locked: true,
+            },
+            WledController {
+                address: "192.0.2.11".into(),
+                name: "Old".into(),
+                unicast: false,
+                delay_ms: 1,
+                manual: false,
+                name_locked: false,
+            },
+            WledController {
+                address: "not-an-ip".into(),
+                name: String::new(),
+                unicast: true,
+                delay_ms: 0,
+                manual: true,
+                name_locked: false,
+            },
+        ];
+        cfg.wled.dismissed = vec!["192.0.2.12".into()];
+        let seen = vec![
+            WledSight {
+                address: "192.0.2.11".into(),
+                name: "Fresh".into(),
+                online: true,
+            },
+            WledSight {
+                address: "192.0.2.12".into(),
+                name: "Gone".into(),
+                online: true,
+            },
+            WledSight {
+                address: "192.0.2.13".into(),
+                name: "New".into(),
+                online: true,
+            },
+            WledSight {
+                address: "192.0.2.14".into(),
+                name: "Offline".into(),
+                online: false,
+            },
+            WledSight {
+                address: "nope".into(),
+                name: "Bad".into(),
+                online: true,
+            },
+        ];
+        let table = merge_controllers(&cfg, &seen);
+        assert_eq!(table.min_delay_ms, -1200);
+        assert_eq!(table.controllers.len(), 3);
+        assert_eq!(table.controllers[0].name, "Locked");
+        assert!(table.controllers[0].unicast);
+        assert_eq!(table.controllers[0].delay_ms, -80);
+        assert!(!table.controllers[0].online);
+        assert_eq!(table.controllers[1].name, "Fresh");
+        assert!(!table.controllers[1].name_locked);
+        assert!(table.controllers[1].online);
+        assert_eq!(table.controllers[2].address, "192.0.2.13");
+        assert!(!table.controllers[2].unicast);
+        assert!(!table.controllers.iter().any(|c| c.address == "192.0.2.12"));
+        assert!(!table.controllers.iter().any(|c| c.address == "192.0.2.14"));
+
+        cfg.wled.controllers[0].unicast = false;
+        let offline = vec![WledSight {
+            address: "192.0.2.10".into(),
+            name: "Locked".into(),
+            online: false,
+        }];
+        let table = merge_controllers(&cfg, &offline);
+        assert!(!table.controllers[0].online);
+        assert_eq!(table.controllers.len(), 2);
+
+        let targets = unicast_delay_targets(&cfg);
+        assert!(targets.is_empty());
+        cfg.wled.controllers[0].unicast = true;
+        cfg.wled.port = 11988;
+        let targets = unicast_delay_targets(&cfg);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].1, -80);
+        assert_eq!(targets[0].0, "192.0.2.10:11988".parse().unwrap());
     }
 }

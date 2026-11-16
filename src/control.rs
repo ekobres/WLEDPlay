@@ -1,4 +1,4 @@
-use crate::config::{AgcMode, Config};
+use crate::config::{clamp_delay_ms, controller_key, AgcMode, Config, WledController};
 use crate::netif::{self, InterfaceInfo};
 use crate::wled::WledSender;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ pub struct ConfigPatch {
     pub multicast_address: Option<String>,
     pub port: Option<u16>,
     pub destinations: Option<Vec<String>>,
+    pub controllers: Option<Vec<WledController>>,
+    pub dismissed: Option<Vec<String>>,
     pub http_interface: Option<String>,
     pub airplay_interface: Option<String>,
     pub unicast_interface: Option<String>,
@@ -65,6 +67,10 @@ pub struct ConfigValues {
     pub multicast_address: String,
     pub port: u16,
     pub destinations: Vec<String>,
+    pub controllers: Vec<WledController>,
+    pub dismissed: Vec<String>,
+    pub min_delay_ms: i32,
+    pub max_delay_ms: i32,
     pub http_interface: String,
     pub airplay_interface: String,
     pub unicast_interface: String,
@@ -228,6 +234,16 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             return Err("port must be 1–65535".into());
         }
     }
+    if let Some(rows) = &patch.controllers {
+        for row in rows {
+            if controller_key(&row.address).is_empty() && !row.address.trim().is_empty() {
+                return Err(format!("invalid destination: {}", row.address));
+            }
+            if row.name.trim().chars().count() > 128 {
+                return Err("controller name must be at most 128 characters".into());
+            }
+        }
+    }
     let dest_port = patch.port.unwrap_or(cfg.wled.port);
     if let Some(dests) = &patch.destinations {
         for d in dests {
@@ -272,12 +288,47 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
     if let Some(port) = patch.port {
         cfg.wled.port = port;
     }
-    if let Some(dests) = patch.destinations {
-        cfg.wled.destinations = dests
-            .into_iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+    if let Some(rows) = patch.controllers {
+        let mut next = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for mut row in rows {
+            let key = controller_key(&row.address);
+            if key.is_empty() || !seen.insert(key) {
+                continue;
+            }
+            row.address = row.address.trim().to_string();
+            row.name = row.name.trim().chars().take(128).collect();
+            row.delay_ms = clamp_delay_ms(
+                row.delay_ms,
+                cfg.audio.sync_offset_ms,
+                cfg.audio.shairport_latency_offset_s,
+            );
+            next.push(row);
+        }
+        cfg.wled.controllers = next;
+        if let Some(dismissed) = patch.dismissed {
+            cfg.wled.dismissed = dismissed
+                .into_iter()
+                .map(|s| controller_key(&s))
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        let kept: std::collections::HashSet<String> = cfg
+            .wled
+            .controllers
+            .iter()
+            .map(|c| controller_key(&c.address))
             .collect();
+        cfg.wled.dismissed.retain(|key| !kept.contains(key));
+        cfg.wled.sync_destinations();
+    } else if let Some(dests) = patch.destinations {
+        cfg.wled.replace_send_list(
+            dests
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        );
     }
     if let Some(iface) = patch.http_interface {
         cfg.network.http = iface.trim().to_string();
@@ -334,6 +385,18 @@ fn values_from(cfg: &Config) -> ConfigValues {
         multicast_address: cfg.wled.multicast_address.clone(),
         port: cfg.wled.port,
         destinations: cfg.wled.destinations.clone(),
+        controllers: cfg.wled.controllers.clone(),
+        dismissed: cfg.wled.dismissed.clone(),
+        min_delay_ms: crate::config::delay_ms_bounds(
+            cfg.audio.sync_offset_ms,
+            cfg.audio.shairport_latency_offset_s,
+        )
+        .0,
+        max_delay_ms: crate::config::delay_ms_bounds(
+            cfg.audio.sync_offset_ms,
+            cfg.audio.shairport_latency_offset_s,
+        )
+        .1,
         http_interface: cfg.network.http.clone(),
         airplay_interface: cfg.network.airplay.clone(),
         unicast_interface: cfg.network.unicast.clone(),
@@ -698,6 +761,8 @@ mod tests {
                 multicast_address: Some("239.1.1.1".into()),
                 port: Some(12001),
                 destinations: Some(vec!["10.0.0.8".into(), "  ".into()]),
+                controllers: None,
+                dismissed: None,
                 http_interface: Some("".into()),
                 airplay_interface: Some("".into()),
                 unicast_interface: Some("".into()),
@@ -815,5 +880,122 @@ mod tests {
         assert!(!view.persisted);
         assert!(view.persist_error.is_some());
         assert!(!view.config_writable);
+    }
+
+    #[test]
+    fn control_save_writes_controllers_and_the_enabled_send_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cfg.yaml");
+        std::fs::write(&path, "").unwrap();
+        let control = test_control(Some(path.clone()));
+        let view = control
+            .apply_patch(super::ConfigPatch {
+                sync_offset_ms: Some(1200),
+                shairport_latency_offset_s: Some(-1.2),
+                controllers: Some(vec![
+                    crate::config::WledController {
+                        address: "  192.0.2.10  ".into(),
+                        name: " Room ".into(),
+                        unicast: true,
+                        delay_ms: -9_999,
+                        manual: true,
+                        name_locked: true,
+                    },
+                    crate::config::WledController {
+                        address: "192.0.2.10".into(),
+                        name: "dup".into(),
+                        unicast: true,
+                        delay_ms: 0,
+                        manual: false,
+                        name_locked: false,
+                    },
+                    crate::config::WledController {
+                        address: String::new(),
+                        name: String::new(),
+                        unicast: true,
+                        delay_ms: 0,
+                        manual: true,
+                        name_locked: false,
+                    },
+                    crate::config::WledController {
+                        address: "192.0.2.11".into(),
+                        name: "Hall".into(),
+                        unicast: false,
+                        delay_ms: 2,
+                        manual: false,
+                        name_locked: false,
+                    },
+                ]),
+                dismissed: Some(vec![
+                    "192.0.2.10".into(),
+                    "nope".into(),
+                    "192.0.2.12".into(),
+                ]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(view.persisted);
+        assert_eq!(view.values.destinations, vec!["192.0.2.10".to_string()]);
+        assert_eq!(view.values.controllers.len(), 2);
+        assert_eq!(view.values.controllers[0].name, "Room");
+        assert_eq!(view.values.controllers[0].delay_ms, -1200);
+        assert_eq!(view.values.dismissed, vec!["192.0.2.12".to_string()]);
+        assert_eq!(view.values.min_delay_ms, -1200);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("delay_ms"));
+        assert!(saved.contains("192.0.2.10"));
+        let loaded = Config::load(Some(&path));
+        assert_eq!(loaded.wled.destinations, vec!["192.0.2.10".to_string()]);
+        assert_eq!(loaded.wled.controllers[0].delay_ms, -1200);
+        assert!(loaded.wled.dismissed.iter().any(|d| d == "192.0.2.12"));
+
+        let err = control
+            .apply_patch(super::ConfigPatch {
+                controllers: Some(vec![crate::config::WledController {
+                    address: "not-an-ip".into(),
+                    name: String::new(),
+                    unicast: true,
+                    delay_ms: 0,
+                    manual: true,
+                    name_locked: false,
+                }]),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.contains("invalid destination"));
+        let err = control
+            .apply_patch(super::ConfigPatch {
+                controllers: Some(vec![crate::config::WledController {
+                    address: "192.0.2.10".into(),
+                    name: "n".repeat(129),
+                    unicast: true,
+                    delay_ms: 0,
+                    manual: true,
+                    name_locked: true,
+                }]),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.contains("128"));
+
+        let mut cfg = Config::default();
+        cfg.wled.dismissed = vec!["192.0.2.12".into()];
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                controllers: Some(vec![crate::config::WledController {
+                    address: "192.0.2.10".into(),
+                    name: "Room".into(),
+                    unicast: true,
+                    delay_ms: 1,
+                    manual: true,
+                    name_locked: false,
+                }]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.wled.destinations, vec!["192.0.2.10".to_string()]);
+        assert_eq!(cfg.wled.dismissed, vec!["192.0.2.12".to_string()]);
     }
 }
