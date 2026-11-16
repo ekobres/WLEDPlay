@@ -348,6 +348,28 @@ mod tests {
     }
 
     #[test]
+    fn stalled_departure_drops_an_expired_peak_and_keeps_a_fresh_one() {
+        // 512 + 10 hops lands on sample 4922, which is 223 ms on the audio clock.
+        let mut expired = Analyzer::new(AgcMode::Off);
+        push_level(&mut expired, 512 + 441 * 10, 1_000.0);
+        expired.samples.bin_num = 0;
+        expired.samples.time_of_peak_ms = 0;
+        expired.samples.sample_peak = true;
+        expired.samples.udp_sample_peak = true;
+        let pkt = expired.take_departure(441).expect("newest window");
+        assert_eq!(pkt.sample_peak, 0);
+
+        let mut fresh = Analyzer::new(AgcMode::Off);
+        push_level(&mut fresh, 512 + 441 * 10, 1_000.0);
+        fresh.samples.bin_num = 0;
+        fresh.samples.time_of_peak_ms = 180;
+        fresh.samples.sample_peak = true;
+        fresh.samples.udp_sample_peak = true;
+        let pkt = fresh.take_departure(441).expect("newest window");
+        assert_eq!(pkt.sample_peak, 1);
+    }
+
+    #[test]
     fn sample_buffer_cap_still_renders_the_newest_window() {
         let mut a = Analyzer::new(AgcMode::Off);
         push_level(&mut a, crate::audio::fft::SAMPLE_RATE as usize + 8, 2_000.0);

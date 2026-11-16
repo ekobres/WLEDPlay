@@ -301,6 +301,8 @@ pub struct SendLoop {
     pub announced_end: bool,
     pub underrun_open: bool,
     pub delay_q: VecDeque<(Instant, AudioSyncPacket)>,
+    /// Next free send time on the monotonic `Instant` clock. Only the event
+    /// loop reserves slots, and it advances this while it holds the PCM lock.
     pub next_due: Option<Instant>,
 }
 

@@ -183,7 +183,7 @@ if (sampleAvg > 1 && maxVol > 0 && binNum > 4 &&
     valFFT[binNum] > maxVol && millis() - timeOfPeak > 100)
 ```
 
-Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit.
+Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit. WLEDPlay also clears it when the 50 ms hold has already elapsed, so a slot skipped after a stall does not copy that beat onto the window that is sent.
 
 ---
 
@@ -196,6 +196,8 @@ Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit.
 | `micLev` DC tracker | Retained (handles DC offset in stream) |
 | `useMicFilter` default on | **Off** by default for digital (configurable) |
 | FFT task every ≥21 ms; a 20 ms packet may repeat the last `fftResult` | One 512-sample window per scheduled packet. The window ends on that packet's audio-time slot (hop = 22050 / `update_hz`, 441 samples at 50 Hz) and is rendered once. Later wakes continue that same grid, so an extra window is not sent in the same instant as the next wake's packet. A PCM read is not one shared timestamp. Frequency-bin averages and per-sample level smoothing stay. |
+
+A missing analysis window sends no new spectrum. That is separate from a missed transmission deadline, which the scheduler recovers by restarting the send grid and keeping the newest completed window.
 
 Document any measurable deviation during integration tests.
 

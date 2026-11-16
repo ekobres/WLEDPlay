@@ -255,6 +255,9 @@ impl SampleProcessor {
         let delay = frame_ms.max(50);
         if self.sim_time_ms.saturating_sub(self.time_of_peak_ms) > delay as u64 {
             self.sample_peak = false;
+            // The transmit bit is one-shot, but a discarded slot never takes it.
+            // Drop it with the hold so the next packet does not replay the beat.
+            self.udp_sample_peak = false;
         }
     }
 }
@@ -363,9 +366,11 @@ mod tests {
         }
         assert!(p.sample_peak || p.udp_sample_peak || p.sample_avg > 1.0);
         p.auto_reset_peak(50);
+        p.udp_sample_peak = true;
         p.sim_time_ms = p.time_of_peak_ms + 200;
         p.auto_reset_peak(50);
         assert!(!p.sample_peak);
+        assert!(!p.udp_sample_peak);
     }
 
     #[test]

@@ -19,7 +19,7 @@ flowchart LR
 ## Modules
 
 - [`src/app.rs`](../src/app.rs) wires the CLI, PCM input, metadata, and process lifetime.
-- [`src/runtime.rs`](../src/runtime.rs) owns the send loop and status snapshots. Send delay is `audio.sync_offset_ms`. Departures share one grid: a wake that renders two windows leaves the second for the following slot, and the next wake continues after it.
+- [`src/runtime.rs`](../src/runtime.rs) owns the send loop and status snapshots. Send delay is `audio.sync_offset_ms`. Departures share one grid: a wake that renders two windows leaves the second for the following slot, and the next wake continues after it. A missed transmission deadline and a missing analysis window are different events. A deadline more than one slot late, or more than four ahead, restarts at the current delay, and more than four waiting audio slots keeps the newest window. A wake with no new analysis window sends no spectrum, and the previous one is not reused.
 - [`src/audio/`](../src/audio) is the analyzer: 22050 Hz, 512-point FFT, 16 bands. Each scheduled WLED packet renders one window ending on that packet's slot. Behavior follows WLED's audio-reactive map. The implementation is independent; see [`docs/LICENSING.md`](LICENSING.md).
 - [`src/pcm/`](../src/pcm) downmixes and decimates incoming PCM to the analysis rate.
 - [`src/wled/`](../src/wled) builds and sends Audio Sync V2 packets.
