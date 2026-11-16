@@ -88,10 +88,44 @@ pub fn enqueue_packet(
     delay_ms: u64,
     now: Instant,
 ) {
-    queue.push_back((now + Duration::from_millis(delay_ms), packet));
+    enqueue_packet_at(queue, packet, now + Duration::from_millis(delay_ms));
+}
+
+pub fn enqueue_packet_at(
+    queue: &mut VecDeque<(Instant, AudioSyncPacket)>,
+    packet: AudioSyncPacket,
+    due: Instant,
+) {
+    queue.push_back((due, packet));
     while queue.len() > DELAY_QUEUE_MAX {
         queue.pop_front();
     }
+}
+
+/// Send time for the next window. Windows from one wake are spaced by
+/// `interval`, and the following wake continues after the last of them.
+/// A schedule more than one interval late, or more than four ahead, starts
+/// again at `now + delay` instead of flushing every overdue slot at once.
+pub fn next_departure(
+    scheduled: Option<Instant>,
+    now: Instant,
+    delay: Duration,
+    interval: Duration,
+) -> Instant {
+    let anchor = now + delay;
+    let Some(next) = scheduled else {
+        return anchor;
+    };
+    if interval.is_zero() {
+        return anchor;
+    }
+    if anchor.saturating_duration_since(next) > interval {
+        return anchor;
+    }
+    if next.saturating_duration_since(anchor) > interval.saturating_mul(4) {
+        return anchor;
+    }
+    next
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +301,7 @@ pub struct SendLoop {
     pub announced_end: bool,
     pub underrun_open: bool,
     pub delay_q: VecDeque<(Instant, AudioSyncPacket)>,
+    pub next_due: Option<Instant>,
 }
 
 impl SendLoop {
@@ -290,6 +325,7 @@ impl SendLoop {
                     self.idle_packets_sent = 0;
                     self.announced_end = true;
                     self.underrun_open = false;
+                    self.next_due = None;
                 }
             }
         }
@@ -308,20 +344,26 @@ impl SendLoop {
             }
             let hz = cfg.audio.update_hz.max(1);
             let interval_ms = 1000 / u64::from(hz);
+            let interval = Duration::from_millis(interval_ms);
             let hop = Analyzer::departure_hop(hz);
+            let mut due = next_departure(
+                self.next_due,
+                now,
+                Duration::from_millis(delay_ms),
+                interval,
+            );
             let mut slot = 0u64;
             while slot < 4 {
                 let Some(pkt) = rt.analyzer.take_departure(hop) else {
                     break;
                 };
                 publish_audio(status, rt, cfg, pkt.sample_peak != 0);
-                enqueue_packet(
-                    &mut self.delay_q,
-                    pkt,
-                    delay_ms.saturating_add(slot * interval_ms),
-                    now,
-                );
+                enqueue_packet_at(&mut self.delay_q, pkt, due);
+                due += interval;
                 slot += 1;
+            }
+            if slot > 0 {
+                self.next_due = Some(due);
             }
             LoopAction::Continue
         } else if self.udp_active {
@@ -802,8 +844,88 @@ mod tests {
         assert_eq!(sl.delay_q.len(), 2);
         let gap = sl.delay_q[1].0.saturating_duration_since(sl.delay_q[0].0);
         assert_eq!(gap, Duration::from_millis(20));
-        sl.on_update(&mut rt, &status, &cfg, false, now + Duration::from_millis(20));
+        sl.on_update(
+            &mut rt,
+            &status,
+            &cfg,
+            false,
+            now + Duration::from_millis(20),
+        );
         assert_eq!(sl.delay_q.len(), 2);
+    }
+
+    #[test]
+    fn send_loop_keeps_a_later_window_off_the_next_wake() {
+        let status = status();
+        let cfg = Config::default();
+        let mut rt = PcmRuntime::new(AgcMode::Off);
+        let mut sl = SendLoop::default();
+        let now = Instant::now();
+        rt.stream_active = true;
+        rt.last_pcm = Some(now);
+        for i in 0..(512 + 441) {
+            rt.analyzer.ingest_mono_sample(0.2, i as u64);
+        }
+        sl.on_update(&mut rt, &status, &cfg, false, now);
+        assert_eq!(sl.delay_q.len(), 2);
+        for i in (512 + 441)..(512 + 441 + 441) {
+            rt.analyzer.ingest_mono_sample(0.2, i as u64);
+        }
+        sl.on_update(
+            &mut rt,
+            &status,
+            &cfg,
+            false,
+            now + Duration::from_millis(20),
+        );
+        assert_eq!(sl.delay_q.len(), 3);
+        let first = sl.delay_q[0].0;
+        assert_eq!(sl.delay_q[1].0, first + Duration::from_millis(20));
+        assert_eq!(sl.delay_q[2].0, first + Duration::from_millis(40));
+    }
+
+    #[test]
+    fn next_departure_holds_phase_and_drops_a_stale_grid() {
+        let now = Instant::now();
+        let delay = Duration::from_millis(1180);
+        let interval = Duration::from_millis(20);
+        let anchor = now + delay;
+        assert_eq!(next_departure(None, now, delay, interval), anchor);
+        assert_eq!(next_departure(Some(anchor), now, delay, interval), anchor);
+        assert_eq!(
+            next_departure(Some(anchor + interval), now, delay, interval),
+            anchor + interval
+        );
+        assert_eq!(
+            next_departure(
+                Some(anchor - Duration::from_millis(5)),
+                now,
+                delay,
+                interval
+            ),
+            anchor - Duration::from_millis(5)
+        );
+        assert_eq!(
+            next_departure(Some(anchor + interval * 4), now, delay, interval),
+            anchor + interval * 4
+        );
+        assert_eq!(
+            next_departure(
+                Some(anchor - interval - Duration::from_millis(1)),
+                now,
+                delay,
+                interval
+            ),
+            anchor
+        );
+        assert_eq!(
+            next_departure(Some(anchor + interval * 5), now, delay, interval),
+            anchor
+        );
+        assert_eq!(
+            next_departure(Some(anchor + interval), now, delay, Duration::ZERO),
+            anchor
+        );
     }
 
     #[test]

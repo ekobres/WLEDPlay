@@ -949,10 +949,7 @@ mod tests {
                 }
             }
         });
-        let hub = spawn(
-            &format!("http://127.0.0.1:{port}"),
-            Duration::from_secs(60),
-        );
+        let hub = spawn(&format!("http://127.0.0.1:{port}"), Duration::from_secs(60));
         let flag = hub.rescan_flag();
         flag.store(true, Ordering::Relaxed);
         let status = Arc::new(Mutex::new(RuntimeStatus::default()));

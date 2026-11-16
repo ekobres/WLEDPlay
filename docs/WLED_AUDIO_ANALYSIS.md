@@ -195,7 +195,7 @@ Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit.
 | `micDataReal` from ADC/I2S | Normalized float from S16 PCM |
 | `micLev` DC tracker | Retained (handles DC offset in stream) |
 | `useMicFilter` default on | **Off** by default for digital (configurable) |
-| FFT task every ≥21 ms; a 20 ms packet may repeat the last `fftResult` | One 512-sample window per scheduled packet. The window ends on that packet's audio-time slot (hop = 22050 / `update_hz`, 441 samples at 50 Hz) and is rendered once. A PCM read is not one shared timestamp. Frequency-bin averages and per-sample level smoothing stay. |
+| FFT task every ≥21 ms; a 20 ms packet may repeat the last `fftResult` | One 512-sample window per scheduled packet. The window ends on that packet's audio-time slot (hop = 22050 / `update_hz`, 441 samples at 50 Hz) and is rendered once. Later wakes continue that same grid, so an extra window is not sent in the same instant as the next wake's packet. A PCM read is not one shared timestamp. Frequency-bin averages and per-sample level smoothing stay. |
 
 Document any measurable deviation during integration tests.
 
