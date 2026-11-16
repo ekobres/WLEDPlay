@@ -23,7 +23,7 @@ flowchart LR
 - [`src/audio/`](../src/audio) is the analyzer: 22050 Hz, 512-point FFT, 16 bands. Each scheduled WLED packet renders one window ending on that packet's slot. Behavior follows WLED's audio-reactive map. The implementation is independent; see [`docs/LICENSING.md`](LICENSING.md).
 - [`src/pcm/`](../src/pcm) downmixes and decimates incoming PCM to the analysis rate.
 - [`src/wled/`](../src/wled) builds and sends Audio Sync V2 packets.
-- [`src/auto_join/mod.rs`](../src/auto_join/mod.rs) is join policy. [`src/auto_join/sidecar.rs`](../src/auto_join/sidecar.rs) talks to [`docker/autojoin_sidecar.py`](../docker/autojoin_sidecar.py), which uses pyatv.
+- [`src/auto_join/mod.rs`](../src/auto_join/mod.rs) is join policy. [`src/auto_join/sidecar.rs`](../src/auto_join/sidecar.rs) talks to [`docker/autojoin_sidecar.py`](../docker/autojoin_sidecar.py). Discovery is a standing Avahi browser of `_airplay._tcp` and `_raop._tcp`. pyatv runs only to send a join.
 - [`src/web/mod.rs`](../src/web/mod.rs) is the HTTP API. [`src/web/index.html`](../src/web/index.html) is the operator UI, compiled in with `include_str!`. A UI change is not visible until the binary is rebuilt.
 - [`src/config.rs`](../src/config.rs) and [`src/control.rs`](../src/control.rs) load YAML and apply live patches.
 - [`src/metadata/`](../src/metadata) parses the Shairport metadata pipe.

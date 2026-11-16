@@ -17,6 +17,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
@@ -25,6 +26,7 @@ pub struct AppState {
     pub status: SharedStatus,
     pub artwork: SharedArtwork,
     pub control: Option<Control>,
+    pub rescan: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +219,7 @@ pub struct AutoJoinStatus {
     pub last_error: String,
     pub self_id: String,
     pub discovery_error: String,
+    pub snapshot_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq, Eq)]
@@ -242,6 +245,7 @@ pub fn router(state: AppState) -> Router {
         .route("/config", get(config_get).patch(config_patch))
         .route("/interfaces", get(interfaces_handler))
         .route("/airplay/devices", get(devices_handler))
+        .route("/airplay/rescan", post(rescan_handler))
         .route("/restart", post(restart_handler))
         .with_state(state)
 }
@@ -407,6 +411,11 @@ async fn devices_handler(State(state): State<AppState>) -> Json<serde_json::Valu
     }))
 }
 
+async fn rescan_handler(State(state): State<AppState>) -> StatusCode {
+    state.rescan.store(true, Ordering::Relaxed);
+    StatusCode::ACCEPTED
+}
+
 async fn restart_handler(State(state): State<AppState>) -> StatusCode {
     if let Some(ctrl) = &state.control {
         ctrl.request_restart();
@@ -438,6 +447,7 @@ mod tests {
             })),
             artwork: Arc::new(Mutex::new(None)),
             control: None,
+            rescan: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -471,6 +481,7 @@ mod tests {
                 status: Arc::new(Mutex::new(RuntimeStatus::default())),
                 artwork: Arc::new(Mutex::new(None)),
                 control: Some(control),
+                rescan: Arc::new(AtomicBool::new(false)),
             },
             restart,
         )
@@ -986,5 +997,22 @@ mod tests {
     fn map_serve_io_ok_and_err() {
         map_serve_io(Ok(())).unwrap();
         assert!(map_serve_io(Err(std::io::Error::other("fail"))).is_err());
+    }
+
+    #[tokio::test]
+    async fn rescan_sets_the_flag() {
+        let state = bare_state();
+        let flag = state.rescan.clone();
+        let (status, _) = send(
+            router(state),
+            Request::builder()
+                .method("POST")
+                .uri("/airplay/rescan")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

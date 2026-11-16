@@ -9,6 +9,7 @@ use crate::web::{AirPlaySession, AutoJoinStatus, SharedStatus};
 use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -25,6 +26,7 @@ struct Discovery {
     self_id: String,
     discovery_active: bool,
     error: String,
+    snapshot_at: String,
     session: AirPlaySession,
 }
 
@@ -37,6 +39,7 @@ struct Watch {
 enum WorkerMsg {
     Stop,
     Join(JoinRequest),
+    Rescan,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -51,6 +54,8 @@ struct ScanBody {
     devices: Vec<AirPlayDevice>,
     #[serde(default)]
     session: AirPlaySession,
+    #[serde(default)]
+    snapshot_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +73,7 @@ pub struct AutoJoinHub {
     results: Arc<Mutex<Vec<JoinResult>>>,
     cmd_tx: Option<Sender<WorkerMsg>>,
     worker: Option<JoinHandle<()>>,
+    rescan: Arc<AtomicBool>,
 }
 
 impl AutoJoinHub {
@@ -80,7 +86,12 @@ impl AutoJoinHub {
             results: Arc::new(Mutex::new(Vec::new())),
             cmd_tx: None,
             worker: None,
+            rescan: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn rescan_flag(&self) -> Arc<AtomicBool> {
+        self.rescan.clone()
     }
 
     pub fn drive(
@@ -91,6 +102,11 @@ impl AutoJoinHub {
         now: Instant,
         status: &SharedStatus,
     ) {
+        if self.rescan.swap(false, Ordering::Relaxed) {
+            if let Some(tx) = &self.cmd_tx {
+                let _ = tx.send(WorkerMsg::Rescan);
+            }
+        }
         {
             let mut watch = self.watch.lock().unwrap();
             watch.receiver_name = receiver_name.to_string();
@@ -137,6 +153,7 @@ impl AutoJoinHub {
             &auto.target_name,
         );
         let mut view: AutoJoinStatus = output.view;
+        view.snapshot_at = discovery.snapshot_at.clone();
         view.device_count = detected_count(&discovery.devices, &discovery.self_id, receiver_name);
         let mut status = status.lock().unwrap();
         status.auto_join = view;
@@ -191,6 +208,7 @@ fn spawn(base: &str, scan_every: Duration) -> AutoJoinHub {
         results,
         cmd_tx: Some(tx),
         worker: Some(worker),
+        rescan: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -210,6 +228,11 @@ fn serve_loop(
             Ok(WorkerMsg::Join(req)) => {
                 let result = perform_join(&base, req);
                 results.lock().unwrap().push(result);
+            }
+            Ok(WorkerMsg::Rescan) => {
+                if let Err(err) = post_rescan(&base) {
+                    tracing::warn!("Auto Join rescan: {err}");
+                }
             }
             Err(RecvTimeoutError::Timeout) => {
                 if Instant::now() >= next_scan {
@@ -248,6 +271,7 @@ fn apply_scan(dest: &mut Discovery, found: Result<ScanBody, String>) {
             dest.devices = scan.devices;
             dest.self_id = scan.self_id;
             dest.discovery_active = scan.discovery_active;
+            dest.snapshot_at = scan.snapshot_at;
             dest.session = scan.session;
         }
         Err(err) => {
@@ -334,6 +358,17 @@ fn post_join(base: &str, req: &JoinRequest) -> Result<(), String> {
         } else {
             parsed.error
         })
+    }
+}
+
+fn post_rescan(base: &str) -> Result<(), String> {
+    let (code, body) = http_exchange(base, "POST", "/v1/rescan", Some(b"{}"), HTTP_TIMEOUT)?;
+    if (200..300).contains(&code) {
+        Ok(())
+    } else if body.is_empty() {
+        Err(format!("rescan http {code}"))
+    } else {
+        Err(body)
     }
 }
 
@@ -571,6 +606,7 @@ mod tests {
                 discovery_active: false,
                 error: String::new(),
                 devices: vec![],
+                snapshot_at: String::new(),
                 session: AirPlaySession::default(),
             }
         );
@@ -593,6 +629,7 @@ mod tests {
                 discovery_active: true,
                 error: String::new(),
                 devices: vec![],
+                snapshot_at: String::new(),
                 session: AirPlaySession {
                     target_name: "Kitchen".into(),
                     flags: "0x198404".into(),
@@ -615,6 +652,7 @@ mod tests {
                 discovery_active: true,
                 error: "pairing required".into(),
                 devices: vec![],
+                snapshot_at: String::new(),
                 session: AirPlaySession::default(),
             }),
         );
@@ -627,6 +665,7 @@ mod tests {
                 discovery_active: true,
                 error: String::new(),
                 devices: vec![],
+                snapshot_at: String::new(),
                 session: AirPlaySession::default(),
             }),
         );
@@ -638,6 +677,7 @@ mod tests {
                 discovery_active: true,
                 error: "pairing required".into(),
                 devices: vec![],
+                snapshot_at: "2026-11-16 16:00 UTC".into(),
                 session: AirPlaySession {
                     leader: "Kept".into(),
                     ..AirPlaySession::default()
@@ -646,6 +686,7 @@ mod tests {
         );
         apply_scan(&mut dest, Err("down".into()));
         assert_eq!(dest.session.leader, "Kept");
+        assert_eq!(dest.snapshot_at, "2026-11-16 16:00 UTC");
         assert!(!dest.discovery_active);
         assert_eq!(dest.error, "down");
         apply_scan(&mut dest, Err("down".into()));
@@ -667,8 +708,12 @@ mod tests {
             members: vec!["Bar".into()],
             ..AirPlaySession::default()
         };
+        hub.discovery.lock().unwrap().snapshot_at = "2026-11-16 16:00 UTC".into();
+        hub.rescan.store(true, Ordering::Relaxed);
         hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
+        assert!(!hub.rescan.load(Ordering::Relaxed));
         let view = status.lock().unwrap().auto_join.clone();
+        assert_eq!(view.snapshot_at, "2026-11-16 16:00 UTC");
         assert_eq!(status.lock().unwrap().session.leader, "Kitchen");
         assert_eq!(
             status.lock().unwrap().session.members,
@@ -820,6 +865,112 @@ mod tests {
         assert!(hub.cmd_tx.is_some());
         drop(hub);
         std::env::remove_var("WLEDPLAY_AUTOJOIN_URL");
+    }
+
+    #[test]
+    fn rescan_http_reports_sidecar_errors() {
+        let (port, handle) = serve("HTTP/1.0 500 No", "");
+        let err = post_rescan(&format!("http://127.0.0.1:{port}")).unwrap_err();
+        assert!(err.contains("500"), "{err}");
+        let _ = handle.join();
+        let (port, handle) = serve("HTTP/1.0 503 Busy", "down");
+        let err = post_rescan(&format!("http://127.0.0.1:{port}")).unwrap_err();
+        assert_eq!(err, "down");
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn serve_loop_posts_rescan() {
+        let (port, handle) = serve("HTTP/1.0 202 Accepted", r#"{"ok":true}"#);
+        let (tx, rx) = mpsc::channel();
+        tx.send(WorkerMsg::Rescan).unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        let worker = thread::spawn(move || {
+            serve_loop(
+                base,
+                Duration::from_secs(60),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+        });
+        let _ = handle.join();
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn serve_loop_warns_when_rescan_fails() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(WorkerMsg::Rescan).unwrap();
+        let worker = thread::spawn(move || {
+            serve_loop(
+                "http://127.0.0.1:1".into(),
+                Duration::from_secs(60),
+                rx,
+                Arc::new(Mutex::new(Discovery::default())),
+                Arc::new(Mutex::new(Watch::default())),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+        });
+        tx.send(WorkerMsg::Stop).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn drive_posts_rescan_to_the_sidecar() {
+        let rescans = Arc::new(AtomicUsize::new(0));
+        let rescans_s = rescans.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_s = stop.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            while !stop_s.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut sock, _)) => {
+                        let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+                        let mut buf = vec![0u8; 2048];
+                        let n = sock.read(&mut buf).unwrap_or(0);
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        if text.contains("POST /v1/rescan") {
+                            rescans_s.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let body = r#"{"ok":true,"snapshot_at":"2026-11-16 16:00 UTC"}"#;
+                        let raw = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = sock.write_all(raw.as_bytes());
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(10)),
+                }
+            }
+        });
+        let hub = spawn(
+            &format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(60),
+        );
+        let flag = hub.rescan_flag();
+        flag.store(true, Ordering::Relaxed);
+        let status = Arc::new(Mutex::new(RuntimeStatus::default()));
+        let auto = AutoJoinConfig {
+            enabled: false,
+            target_id: String::new(),
+            target_name: String::new(),
+        };
+        hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
+        assert!(!flag.load(Ordering::Relaxed));
+        let start = Instant::now();
+        while rescans.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(rescans.load(Ordering::SeqCst) >= 1);
+        drop(hub);
+        stop.store(true, Ordering::SeqCst);
+        let _ = server.join();
     }
 
     static ENV: Mutex<()> = Mutex::new(());

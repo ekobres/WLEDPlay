@@ -599,6 +599,7 @@ impl AutoJoinService {
                 last_error: self.last_error.clone(),
                 self_id: input.self_id.to_string(),
                 discovery_error: input.discovery_error.to_string(),
+                snapshot_at: String::new(),
             },
             join,
             logs,

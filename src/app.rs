@@ -237,6 +237,8 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
         restart: restart.clone(),
     };
 
+    let auto_join = crate::auto_join::from_env();
+
     if cfg.web.enabled && !cli.no_web {
         let listen = http_listen(http_bind.as_ref(), &cfg.web.listen);
         let port = cfg.web.port;
@@ -244,6 +246,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
             status: status.clone(),
             artwork: artwork.clone(),
             control: Some(control),
+            rescan: auto_join.rescan_flag(),
         };
         tokio::spawn(async move {
             web::serve(&listen, port, state)
@@ -278,7 +281,6 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
     let mut last_status = instant_or_now(Instant::now().checked_sub(Duration::from_secs(1)));
     let mut packets_last_sec = 0u64;
     let mut loop_state = SendLoop::default();
-    let auto_join = crate::auto_join::from_env();
 
     loop {
         let action = event_loop_tick(

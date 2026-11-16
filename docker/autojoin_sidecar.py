@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Localhost Auto Join control plane (pyatv).
+"""Localhost Auto Join control plane.
 
 Binds 127.0.0.1 only. WLEDPlay's operator API remains the only UI.
-Credentials stay in a pyatv settings file. PYATV_STORAGE may be that file
-or a directory; a directory is stored as <dir>/pyatv.json. FileStorage
-cannot open a directory (Errno 21), and that used to abort discovery.
+A standing Avahi browser fills the target snapshot and the session table.
+pyatv runs only when a join is sent. Credentials stay in a pyatv settings
+file. PYATV_STORAGE may be that file or a directory; a directory is stored
+as <dir>/pyatv.json.
 
 GET  /v1/scan?name=WLEDPlay&probe=<target-id>
+POST /v1/rescan
 POST /v1/join   {"target_id","receiver_id"}
 """
 
@@ -18,6 +20,7 @@ import os
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address, ip_network
@@ -30,14 +33,24 @@ AIRPLAY_IFACE = os.environ.get("WLEDPLAY_AIRPLAY_INTERFACE", "").strip()
 GROUP_UNSUPPORTED = "group modification not supported"
 
 _lock = threading.Lock()
-_cache = {
-    "self_id": "",
-    "discovery_active": False,
-    "error": "",
-    "devices": [],
-}
+_records: dict = {}
+_snapshot: list = []
+_snapshot_at = ""
+_self_id = ""
+_discovery_active = False
+_discovery_error = ""
 _probe = {"id": "", "name": RECEIVER_NAME}
 _index = {"devices": {}, "self_deviceid": "", "self_name": ""}
+_browser = None
+
+
+def airplay_network():
+    """The AirPlay NIC's IPv4 network, looked up once per process."""
+    if getattr(airplay_network, "ready", False):
+        return airplay_network.value
+    airplay_network.value = iface_network(AIRPLAY_IFACE)
+    airplay_network.ready = True
+    return airplay_network.value
 
 
 def iface_network(name: str):
@@ -143,17 +156,6 @@ async def _close(atv) -> None:
     result = close()
     if asyncio.iscoroutine(result):
         await result
-
-
-async def scan_devices(storage):
-    """pyatv 0.16 requires the running loop; newer releases take keywords only."""
-    import pyatv
-
-    loop = asyncio.get_running_loop()
-    try:
-        return await pyatv.scan(loop, timeout=4, storage=storage)
-    except TypeError:
-        return await pyatv.scan(timeout=4, storage=storage)
 
 
 async def connect_device(conf, storage):
@@ -264,6 +266,15 @@ def receiving_audio(props: dict) -> bool:
     except ValueError:
         return False
     return (flags & 0x800) != 0 or (flags & 0x20000) != 0
+
+
+def playback_kind(props: dict) -> str:
+    """playing, paused, or idle from the TXT record. No playback connection."""
+    if receiving_audio(props):
+        return "playing"
+    if session_ids(props):
+        return "paused"
+    return "idle"
 
 
 def is_group_leader_txt(props: dict) -> bool:
@@ -474,10 +485,6 @@ async def probe_playback(conf, storage) -> str:
         await _close(atv)
 
 
-async def probe_playing(conf, storage) -> bool:
-    return await probe_playback(conf, storage) == "playing"
-
-
 async def output_snapshot(rc) -> list[tuple[str, str]]:
     current = getattr(rc, "output_devices", []) or []
     if callable(current):
@@ -577,41 +584,18 @@ async def add_receiver(
         await _close(atv)
 
 
-async def _playing_quietly(conf, storage) -> bool:
-    try:
-        return await probe_playing(conf, storage)
-    except Exception:
-        return False
-
-
-async def member_is_playing(probe_id, self_id, receiver_name, by_id, props_by_id, names, storage) -> bool:
-    """A grouped speaker is playing when its group leader is playing."""
-    if not session_ids(props_by_id.get(probe_id, {})):
-        return False
-    leaders, others = session_peer_ids(
-        probe_id, props_by_id, names, receiver_name, {self_id}, False
-    )
-    for ident in (leaders + others)[:3]:
-        conf = by_id.get(ident)
-        if conf is not None and await _playing_quietly(conf, storage):
-            return True
-    return False
-
-
 async def scan_hosts(storage, hosts: list[str]):
+    """Directed lookup of known addresses. An empty list does not scan the LAN."""
     import pyatv
 
     cleaned = [host for host in hosts if host]
     if not cleaned:
-        return await scan_devices(storage)
+        return []
     loop = asyncio.get_running_loop()
     try:
         return await pyatv.scan(loop, timeout=2, hosts=cleaned, storage=storage)
     except TypeError:
-        try:
-            return await pyatv.scan(timeout=2, hosts=cleaned, storage=storage)
-        except TypeError:
-            return await scan_devices(storage)
+        return await pyatv.scan(timeout=2, hosts=cleaned, storage=storage)
 
 
 @dataclass
@@ -664,87 +648,11 @@ def _record_conf(conf, receiver_name: str, network, by_id: dict):
     return rec, props, _is_receiver_name(rec["name"], receiver_name)
 
 
-def _has_probe(probe_id: str, found: ScanIndex) -> bool:
-    return bool(probe_id) and probe_id in found.by_id
-
-
 async def _playback_result(conf, storage) -> tuple[str, str]:
     try:
         return await probe_playback(conf, storage), ""
     except Exception as exc:
         return "idle", str(exc)
-
-
-async def _member_playing(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> bool:
-    try:
-        return await member_is_playing(
-            probe_id,
-            found.self_id,
-            receiver_name,
-            found.by_id,
-            found.props_by_id,
-            found.names,
-            storage,
-        )
-    except Exception:
-        return False
-
-
-async def _playing_without_target(
-    probe_id: str, found: ScanIndex, receiver_name: str, storage, error: str
-) -> tuple[bool, str]:
-    if await _member_playing(probe_id, found, receiver_name, storage):
-        return True, ""
-    if receiving_audio(found.props_by_id.get(probe_id, {})):
-        return True, ""
-    return False, error
-
-
-def _mark_playback(found: ScanIndex, probe_id: str, kind: str) -> None:
-    for rec in found.devices:
-        rec["phone_owned"] = phone_owns_playback(rec["id"], found.props_by_id)
-        if rec["id"] == probe_id:
-            rec["playing"] = kind == "playing"
-            rec["paused"] = kind == "paused"
-
-
-async def _mark_probe(probe_id: str, found: ScanIndex, receiver_name: str, storage) -> str:
-    kind, error = await _playback_result(found.by_id[probe_id], storage)
-    if kind == "idle":
-        kind, error = await _idle_or_playing(
-            probe_id, found, receiver_name, storage, error
-        )
-    _mark_playback(found, probe_id, kind)
-    return error
-
-
-async def _idle_or_playing(
-    probe_id: str, found: ScanIndex, receiver_name: str, storage, error: str
-) -> tuple[str, str]:
-    playing, error = await _playing_without_target(
-        probe_id, found, receiver_name, storage, error
-    )
-    if playing:
-        return "playing", error
-    return "idle", error
-
-
-async def scan_once(loop_storage, probe_id: str, receiver_name: str, network) -> dict:
-    storage = loop_storage
-    found = collect_confs(await scan_devices(storage), receiver_name, network)
-    remember_index(found.meta, found.self_deviceid, receiver_name)
-    error = ""
-    if _has_probe(probe_id, found):
-        error = await _mark_probe(probe_id, found, receiver_name, storage)
-    return {
-        "self_id": found.self_id,
-        "discovery_active": True,
-        "error": error,
-        "devices": found.devices,
-        "session": session_view(
-            probe_id, found.props_by_id, found.names, receiver_name
-        ),
-    }
 
 
 def storage_file() -> str:
@@ -778,33 +686,6 @@ async def _load_storage(storage) -> str:
         return ""
     except Exception as exc:
         return str(exc)
-
-
-def refresh(probe_id: str, receiver_name: str) -> None:
-    network = iface_network(AIRPLAY_IFACE)
-    try:
-        loop = asyncio.new_event_loop()
-        try:
-            storage = _storage(loop)
-            storage_error = loop.run_until_complete(_load_storage(storage))
-            if storage_error:
-                storage = None
-            payload = loop.run_until_complete(
-                scan_once(storage, probe_id, receiver_name, network)
-            )
-            if storage_error and not payload.get("error"):
-                payload["error"] = storage_error
-        finally:
-            loop.close()
-    except Exception as exc:
-        payload = {
-            "self_id": "",
-            "discovery_active": False,
-            "error": str(exc),
-            "devices": [],
-        }
-    with _lock:
-        _cache.update(payload)
 
 
 @dataclass
@@ -842,16 +723,35 @@ def _remembered_deviceid(self_deviceid: str, index: dict) -> str:
     return self_deviceid or index.get("self_deviceid") or ""
 
 
+def alias_target(found: ScanIndex, target_id: str, address: str) -> None:
+    """Point the mDNS target id at the pyatv config for that speaker."""
+    if not target_id or target_id in found.by_id:
+        return
+    match = ""
+    for ident, props in found.props_by_id.items():
+        if ids_match(ident, target_id) or ids_match(props.get("deviceid") or "", target_id):
+            match = ident
+            break
+    if not match and address:
+        for ident, meta in found.meta.items():
+            if (meta.get("address") or "") == address:
+                match = ident
+                break
+    if not match or match not in found.by_id:
+        return
+    found.by_id[target_id] = found.by_id[match]
+    found.props_by_id[target_id] = found.props_by_id.get(match) or {}
+    found.names[target_id] = found.names.get(match, "")
+
+
 async def _scan_for_target(storage, target_id: str, receiver_name: str, network, index: dict):
     hosts = leader_hosts(target_id, index, receiver_name)
+    if not hosts:
+        empty = collect_confs([], receiver_name, network)
+        return empty, _remembered_deviceid("", index)
     found = collect_confs(await scan_hosts(storage, hosts), receiver_name, network)
-    self_deviceid = found.self_deviceid
-    if target_id in found.by_id:
-        return found, _remembered_deviceid(self_deviceid, index)
-    wider = collect_confs(await scan_devices(storage), receiver_name, network)
-    if wider.self_deviceid:
-        self_deviceid = wider.self_deviceid
-    return wider, _remembered_deviceid(self_deviceid, index)
+    alias_target(found, target_id, hosts[0])
+    return found, _remembered_deviceid(found.self_deviceid, index)
 
 
 def _locate_error(target_id: str, found: ScanIndex, output_ids: list[str]) -> str:
@@ -967,6 +867,411 @@ def join(target_id: str, receiver_id: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _copy_records(records: dict) -> dict:
+    copied = {}
+    for ident, rec in records.items():
+        copied[ident] = {
+            "name": rec.get("name") or "",
+            "address": rec.get("address") or "",
+            "model": rec.get("model") or "",
+            "present": bool(rec.get("present")),
+            "props": dict(rec.get("props") or {}),
+        }
+    return copied
+
+
+def _store_live(records: dict) -> None:
+    """Publish the live cache and the join index. The dropdown snapshot is separate."""
+    global _records, _self_id
+    copied = _copy_records(records)
+    name = _receiver_name()
+    self_id = ""
+    self_deviceid = ""
+    meta = {}
+    for ident, rec in copied.items():
+        if not rec["present"]:
+            continue
+        props = rec["props"]
+        if not self_id and _is_receiver_name(rec["name"], name):
+            self_id = ident
+            self_deviceid = props.get("deviceid") or ""
+        meta[ident] = {"address": rec["address"], "name": rec["name"], "props": props}
+    remember_index(meta, self_deviceid, name)
+    with _lock:
+        _records = copied
+        _self_id = self_id
+
+
+def _replace_snapshot(records: dict) -> None:
+    global _snapshot, _snapshot_at
+    name = _receiver_name()
+    rows = []
+    for ident, rec in records.items():
+        if not rec.get("present"):
+            continue
+        if _is_receiver_name(rec.get("name") or "", name):
+            continue
+        rows.append(
+            {
+                "id": ident,
+                "name": rec.get("name") or ident,
+                "model": rec.get("model") or "",
+                "address": rec.get("address") or "",
+            }
+        )
+    rows.sort(key=lambda row: row["name"].casefold())
+    with _lock:
+        _snapshot = rows
+        _snapshot_at = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+
+
+def scan_payload() -> dict:
+    """GET /v1/scan reads the cache. It does not start a lookup."""
+    with _lock:
+        records = _copy_records(_records)
+        snapshot = [dict(row) for row in _snapshot]
+        self_id = _self_id
+        active = _discovery_active
+        error = _discovery_error
+        snapshot_at = _snapshot_at
+        probe = _probe.get("id") or ""
+        receiver = _probe.get("name") or RECEIVER_NAME
+    present = {ident: rec for ident, rec in records.items() if rec.get("present")}
+    props_by_id = {ident: rec["props"] for ident, rec in present.items()}
+    names = {ident: rec["name"] for ident, rec in present.items()}
+    devices = []
+    for row in snapshot:
+        ident = row["id"]
+        live = present.get(ident)
+        props = live["props"] if live else {}
+        kind = playback_kind(props) if live else "idle"
+        devices.append(
+            {
+                "id": ident,
+                "name": row.get("name") or ident,
+                "model": row.get("model") or "",
+                "address": (live or row).get("address") or "",
+                "available": live is not None,
+                "playing": kind == "playing",
+                "paused": kind == "paused",
+                "airplay2": True,
+                "phone_owned": phone_owns_playback(ident, props_by_id) if live else False,
+            }
+        )
+    return {
+        "self_id": self_id,
+        "discovery_active": active,
+        "error": error,
+        "devices": devices,
+        "session": session_view(probe, props_by_id, names, receiver),
+        "snapshot_at": snapshot_at,
+    }
+
+
+def decode_txt(txt) -> dict:
+    props = {}
+    for entry in list(txt or []):
+        raw = bytes(int(part) & 0xFF for part in entry)
+        text = raw.decode("utf-8", "replace")
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        props[key.strip().lower()] = value.strip()
+    return props
+
+
+def service_label(name: str, stype: str) -> str:
+    if stype.startswith("_raop") and "@" in name:
+        return name.split("@", 1)[1]
+    return name
+
+
+def stable_id(props: dict, service_name: str) -> str:
+    deviceid = props.get("deviceid") or ""
+    mac = mac_device_id(deviceid)
+    if mac and ":" in mac:
+        return mac
+    if deviceid:
+        return deviceid.strip()
+    return service_name
+
+
+class AvahiBrowser:
+    """One browser for the life of the sidecar. Rescan starts a new pass."""
+
+    def __init__(self) -> None:
+        self.loop = None
+        self._glib = None
+        self.bus = None
+        self.server = None
+        self.browsers = []
+        self.resolvers = {}
+        self.records = {}
+        self.services = {}
+        self.pending = set()
+        self.unresolved = set()
+        self.generation = 0
+        self.snapshot_open = False
+        self.pass_error = ""
+        self.ready = threading.Event()
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="avahi-browse", daemon=True).start()
+        self.ready.wait(timeout=5)
+
+    def request_rescan(self) -> bool:
+        glib = self._glib
+        if glib is None or self.loop is None or not self.loop.is_running():
+            return False
+        glib.idle_add(self._restart)
+        return True
+
+    def _run(self) -> None:
+        try:
+            from dbus.mainloop.glib import DBusGMainLoop
+            from gi.repository import GLib
+            import dbus
+
+            DBusGMainLoop(set_as_default=True)
+            self._glib = GLib
+            self._dbus = dbus
+            self.bus = dbus.SystemBus()
+            self.server = dbus.Interface(
+                self.bus.get_object("org.freedesktop.Avahi", "/"),
+                "org.freedesktop.Avahi.Server",
+            )
+            self._open_browsers()
+            self.loop = GLib.MainLoop()
+            self.ready.set()
+            self.loop.run()
+        except Exception as exc:
+            self._set_status(False, str(exc))
+            self.ready.set()
+
+    def _set_status(self, active: bool, error: str) -> None:
+        global _discovery_active, _discovery_error
+        with _lock:
+            _discovery_active = active
+            _discovery_error = error
+
+    def _restart(self) -> bool:
+        self.generation += 1
+        self._drop_clients()
+        self.records.clear()
+        self.services.clear()
+        self.unresolved.clear()
+        _store_live(self.records)
+        self._open_browsers()
+        return False
+
+    def _open_browsers(self) -> None:
+        self.pass_error = ""
+        self.pending = set()
+        self.unresolved = set()
+        self.snapshot_open = True
+        opened = 0
+        for stype in ("_airplay._tcp", "_raop._tcp"):
+            try:
+                path = self.server.ServiceBrowserNew(
+                    self._dbus.Int32(-1),
+                    self._dbus.Int32(0),
+                    stype,
+                    "local",
+                    self._dbus.UInt32(0),
+                )
+                browser = self._dbus.Interface(
+                    self.bus.get_object("org.freedesktop.Avahi", path),
+                    "org.freedesktop.Avahi.ServiceBrowser",
+                )
+                browser.connect_to_signal(
+                    "ItemNew",
+                    lambda *args, kind=stype, gen=self.generation: self._on_new(gen, kind, *args),
+                )
+                browser.connect_to_signal(
+                    "ItemRemove",
+                    lambda *args, kind=stype, gen=self.generation: self._on_remove(
+                        gen, kind, *args
+                    ),
+                )
+                browser.connect_to_signal(
+                    "AllForNow",
+                    lambda kind=stype, gen=self.generation: self._finish_browser(gen, kind),
+                )
+                browser.connect_to_signal(
+                    "Failure",
+                    lambda message, kind=stype, gen=self.generation: self._fail_browser(
+                        gen, kind, message
+                    ),
+                )
+                self.browsers.append((str(path), browser))
+                self.pending.add(stype)
+                opened += 1
+            except Exception as exc:
+                self.pass_error = str(exc)
+        self._set_status(opened > 0, self.pass_error)
+        self._maybe_publish()
+
+    def _drop_clients(self) -> None:
+        for path, _browser_obj in self.browsers:
+            self._free(path, "ServiceBrowser")
+        for path in list(self.resolvers.values()):
+            self._free(path, "ServiceResolver")
+        self.browsers.clear()
+        self.resolvers.clear()
+
+    def _free(self, path: str, kind: str) -> None:
+        try:
+            obj = self.bus.get_object("org.freedesktop.Avahi", path)
+            self._dbus.Interface(obj, "org.freedesktop.Avahi." + kind).Free()
+        except Exception:
+            return
+
+    def _on_new(self, gen, _kind, interface, protocol, name, stype, domain, _flags) -> None:
+        if gen != self.generation:
+            return
+        self._resolve(int(interface), int(protocol), str(name), str(stype), str(domain))
+
+    def _on_remove(self, gen, _kind, _interface, _protocol, name, stype, _domain, _flags) -> None:
+        if gen != self.generation:
+            return
+        key = (str(name), str(stype))
+        ident = self.services.pop(key, "")
+        if not ident:
+            return
+        if any(other == ident for other in self.services.values()):
+            _store_live(self.records)
+            return
+        rec = self.records.get(ident)
+        if rec is not None:
+            rec["present"] = False
+        _store_live(self.records)
+
+    def _resolve(self, interface: int, protocol: int, name: str, stype: str, domain: str) -> None:
+        key = (name, stype)
+        try:
+            path = self.server.ServiceResolverNew(
+                self._dbus.Int32(interface),
+                self._dbus.Int32(protocol),
+                name,
+                stype,
+                domain,
+                self._dbus.Int32(0),
+                self._dbus.UInt32(0),
+            )
+        except Exception as exc:
+            self.unresolved.discard(key)
+            self.pass_error = str(exc)
+            self._set_status(True, self.pass_error)
+            self._maybe_publish()
+            return
+        path = str(path)
+        self.unresolved.add(key)
+        try:
+            old = self.resolvers.pop(key, "")
+            if old:
+                self._free(old, "ServiceResolver")
+            resolver = self._dbus.Interface(
+                self.bus.get_object("org.freedesktop.Avahi", path),
+                "org.freedesktop.Avahi.ServiceResolver",
+            )
+            resolver.connect_to_signal(
+                "Found",
+                lambda *args, key=key, gen=self.generation: self._on_found(gen, key, *args),
+            )
+            resolver.connect_to_signal(
+                "Failure",
+                lambda message, key=key, gen=self.generation: self._on_resolver_failure(
+                    gen, key, message
+                ),
+            )
+            self.resolvers[key] = path
+        except Exception as exc:
+            self.pass_error = str(exc)
+            self._set_status(True, self.pass_error)
+            self._note_resolved(key)
+
+    def _on_found(
+        self, gen, key, _interface, _protocol, name, stype, _domain, _host, _aprotocol,
+        address, _port, txt, _flags,
+    ) -> None:
+        if gen != self.generation:
+            return
+        try:
+            self._apply_found(key, name, stype, address, txt)
+        finally:
+            self._note_resolved(key)
+
+    def _apply_found(self, key, name, stype, address, txt) -> None:
+        props = decode_txt(txt)
+        text = str(address or "").strip()
+        if not text or not address_on_network(text, airplay_network()):
+            return
+        service_name = str(name)
+        service_type = str(stype)
+        ident = stable_id(props, service_name)
+        if not ident:
+            return
+        label = service_label(service_name, service_type)
+        is_raop = service_type.startswith("_raop")
+        rec = self.records.get(ident)
+        if rec is None:
+            rec = {
+                "name": label,
+                "address": text,
+                "model": props.get("model") or "",
+                "present": True,
+                "props": props,
+                "named_by_airplay": not is_raop,
+            }
+            self.records[ident] = rec
+        else:
+            rec["present"] = True
+            rec["address"] = text or rec.get("address") or ""
+            rec["props"] = props
+            rec["model"] = props.get("model") or rec.get("model") or ""
+            if not is_raop or not rec.get("named_by_airplay"):
+                rec["name"] = label
+                rec["named_by_airplay"] = not is_raop
+        self.services[key] = ident
+        _store_live(self.records)
+
+    def _on_resolver_failure(self, gen, key, _message) -> None:
+        if gen != self.generation:
+            return
+        self._note_resolved(key)
+
+    def _note_resolved(self, key) -> None:
+        if key not in self.unresolved:
+            return
+        self.unresolved.discard(key)
+        self._maybe_publish()
+
+    def _fail_browser(self, gen, stype: str, message) -> None:
+        if gen != self.generation:
+            return
+        self.pass_error = str(message)
+        self._set_status(True, self.pass_error)
+        self._finish_browser(gen, stype)
+
+    def _finish_browser(self, gen, stype: str) -> None:
+        if gen != self.generation:
+            return
+        self.pending.discard(stype)
+        self._maybe_publish()
+
+    def _maybe_publish(self) -> None:
+        if not self.snapshot_open or self.pending or self.unresolved:
+            return
+        self.snapshot_open = False
+        if self.browsers:
+            self._publish_snapshot()
+
+    def _publish_snapshot(self) -> None:
+        _store_live(self.records)
+        _replace_snapshot(_copy_records(self.records))
+        self._set_status(True, self.pass_error)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
@@ -992,12 +1297,14 @@ class Handler(BaseHTTPRequestHandler):
         with _lock:
             _probe["id"] = probe
             _probe["name"] = name
-            snapshot = dict(_cache)
-            snapshot["devices"] = list(_cache["devices"])
-        self._send(200, snapshot)
+        self._send(200, scan_payload())
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/v1/rescan":
+            ok = bool(_browser and _browser.request_rescan())
+            self._send(202 if ok else 503, {"ok": ok})
+            return
         if parsed.path != "/v1/join":
             self._send(404, {"ok": False, "error": "not found"})
             return
@@ -1010,21 +1317,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         ok, err = join(str(body.get("target_id", "")), str(body.get("receiver_id", "")))
         self._send(200 if ok else 502, {"ok": ok, "error": err})
-
-
-def _scan_loop() -> None:
-    while True:
-        with _lock:
-            probe = _probe["id"]
-            name = _probe["name"] or RECEIVER_NAME
-        refresh(probe, name)
-        time_sleep()
-
-
-def time_sleep() -> None:
-    import time
-
-    time.sleep(2)
 
 
 def _listen_address() -> tuple[str, int]:
@@ -1047,8 +1339,10 @@ def main() -> None:
     host, port = _listen_address()
     if not _is_loopback(host):
         raise SystemExit("Auto Join sidecar listens on loopback only")
+    global _browser
+    _browser = AvahiBrowser()
+    _browser.start()
     server = ThreadingHTTPServer((host, port), Handler)
-    threading.Thread(target=_scan_loop, name="autojoin-scan", daemon=True).start()
     # Loopback IPC inside the container. S5332 flags this method for every HTTPServer.
     server.serve_forever()  # NOSONAR
 

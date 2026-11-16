@@ -176,6 +176,8 @@
     .controls label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
     .field-head { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; }
     .controls .field-head label { display: inline; margin: 0; }
+    .target-row { display: flex; align-items: center; gap: 8px; }
+    .target-row select { flex: 1; min-width: 0; }
     button.info {
       width: 18px; height: 18px; padding: 0; border-radius: 50%;
       background: #1d243c; color: var(--muted); border: 1px solid var(--line);
@@ -396,9 +398,14 @@
         <button type="button" class="info" popovertarget="tip-target" aria-label="About the target speaker">?</button>
       </div>
       <div id="tip-target" popover class="tip">The speaker whose group this player joins. An unavailable speaker is kept so it can be used again when it returns.</div>
-      <select id="ctl-autojoin-target" disabled>
-        <option value="">No target</option>
-      </select>
+      <div class="target-row">
+        <select id="ctl-autojoin-target" disabled>
+          <option value="">No target</option>
+        </select>
+        <button type="button" id="rescan-targets">Rescan for Targets</button>
+        <button type="button" class="info" popovertarget="tip-rescan" aria-label="About rescanning targets">?</button>
+      </div>
+      <div id="tip-rescan" popover class="tip">Looks up AirPlay speakers again and replaces this list. The session table keeps updating on its own.</div>
       <div class="hint" id="autojoin-discovery">Discovery inactive</div>
       <div class="hint" id="autojoin-target-status"></div>
       <div class="hint" id="autojoin-runtime"></div>
@@ -450,37 +457,37 @@
         <label for="ctl-shairport">Shairport lead (s)</label>
         <button type="button" class="info" popovertarget="tip-shairport" aria-label="About Shairport lead">?</button>
       </div>
-      <div id="tip-shairport" popover class="tip">Seconds added to Shairport's output time. Negative plays the PCM early. Example: −1.2. Applied when the stack restarts.</div>
+      <div id="tip-shairport" popover class="tip">Seconds added to Shairport's output time. Negative plays the PCM early. Example: −1.2. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <input id="ctl-shairport" type="number" step="0.1" min="-5" max="2">
       <div class="field-head">
         <label for="ctl-name">AirPlay name</label>
         <button type="button" class="info" popovertarget="tip-name" aria-label="About the AirPlay name">?</button>
       </div>
-      <div id="tip-name" popover class="tip">Name advertised on the network. Applied when the stack restarts.</div>
+      <div id="tip-name" popover class="tip">Name advertised on the network. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <input id="ctl-name" type="text" maxlength="64">
       <div class="field-head">
         <label for="ctl-http">HTTP (management)</label>
         <button type="button" class="info" popovertarget="tip-http" aria-label="About the HTTP interface">?</button>
       </div>
-      <div id="tip-http" popover class="tip">Interface the management page binds to. Applied when the stack restarts.</div>
+      <div id="tip-http" popover class="tip">Interface the management page binds to. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <select id="ctl-http"></select>
       <div class="field-head">
         <label for="ctl-airplay">AirPlay / mDNS</label>
         <button type="button" class="info" popovertarget="tip-airplay" aria-label="About the AirPlay interface">?</button>
       </div>
-      <div id="tip-airplay" popover class="tip">Interface used for AirPlay and mDNS. Applied when the stack restarts.</div>
+      <div id="tip-airplay" popover class="tip">Interface used for AirPlay and mDNS. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <select id="ctl-airplay"></select>
       <div class="field-head">
         <label for="ctl-unicast">WLED unicast</label>
         <button type="button" class="info" popovertarget="tip-unicast" aria-label="About the unicast interface">?</button>
       </div>
-      <div id="tip-unicast" popover class="tip">Interface used to reach unicast WLED lights. Applied when the stack restarts.</div>
+      <div id="tip-unicast" popover class="tip">Interface used to reach unicast WLED lights. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <select id="ctl-unicast"></select>
       <div class="field-head">
         <label for="ctl-multicast">WLED multicast</label>
         <button type="button" class="info" popovertarget="tip-multicast" aria-label="About the multicast interface">?</button>
       </div>
-      <div id="tip-multicast" popover class="tip">Interface used for the multicast audio-sync packet. Applied when the stack restarts.</div>
+      <div id="tip-multicast" popover class="tip">Interface used for the multicast audio-sync packet. Applied when the stack restarts. Change this only if you know what you are doing.</div>
       <select id="ctl-multicast"></select>
       <div class="row">
         <button id="ctl-save-config" type="button" disabled>Save</button>
@@ -1060,9 +1067,15 @@
     function paintAutoJoin(aj) {
       if (!aj) return;
       const n = aj.device_count || 0;
-      let discovery = aj.discovery_active
-        ? ("Discovery active · " + n + (n === 1 ? " device" : " devices"))
-        : "Discovery inactive";
+      const count = n + (n === 1 ? " device" : " devices");
+      let discovery;
+      if (aj.snapshot_at) {
+        discovery = "Targets scanned " + aj.snapshot_at + " · " + count;
+      } else if (aj.discovery_active) {
+        discovery = "Looking for speakers";
+      } else {
+        discovery = "Discovery inactive";
+      }
       if (aj.discovery_error) discovery += " · " + aj.discovery_error;
       $("autojoin-discovery").textContent = discovery;
       $("autojoin-target-status").textContent = aj.target_status || "";
@@ -1244,6 +1257,15 @@
       return Number($("ctl-shairport").value)
         !== Number(prev.shairport_latency_offset_s ?? 0);
     }
+
+    $("rescan-targets").addEventListener("click", async () => {
+      const btn = $("rescan-targets");
+      btn.disabled = true;
+      try {
+        await fetch("/airplay/rescan", { method: "POST" });
+      } catch { /* ignore */ }
+      btn.disabled = false;
+    });
 
     FIELD_IDS.forEach((id) => {
       $(id).addEventListener("input", () => {

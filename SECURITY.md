@@ -8,6 +8,7 @@ The HTTP server listens on `0.0.0.0:8080` unless you bind it to one interface. T
 
 - `PATCH /config` writes live settings, including WLED destinations and Auto Join.
 - `POST /restart` restarts the stack. An AirPlay session can drop.
+- `POST /airplay/rescan` starts another AirPlay speaker lookup on the AirPlay network.
 
 Anyone who can open that port can do both. `GET /status`, `GET /levels`, and `GET /artwork` also expose now-playing metadata and cover art.
 

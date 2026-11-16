@@ -78,7 +78,8 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 - `GET /artwork` — current cover art (404 if none)
 - `GET /config` / `PATCH /config` — live settings
 - `GET /interfaces` — usable IPv4 NICs
-- `GET /airplay/devices` — AirPlay receivers Auto Join can see
+- `GET /airplay/devices` — AirPlay receivers from the last target snapshot
+- `POST /airplay/rescan` — look up AirPlay speakers again and replace that list
 - `POST /restart` — orderly process restart
 
 ## Configuration

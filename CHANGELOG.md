@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auto Join watches speakers with a standing Avahi browser. The target list is a snapshot from startup, replaced by Rescan for Targets. pyatv runs only when a join is sent. A previously saved target may need to be selected again.
 - Each WLED packet renders the spectrum for its own departure slot. A PCM burst no longer repeats one set of bands across later packets.
 - Added [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - The container exits when Shairport Sync, NQPTP, or the Auto Join sidecar exits, so Compose can restart the stack.

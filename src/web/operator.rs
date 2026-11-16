@@ -192,6 +192,11 @@ mod tests {
         assert!(html.contains("id=\"ctl-cancel\""));
         assert!(html.contains("id=\"ctl-autojoin\""));
         assert!(html.contains("id=\"ctl-autojoin-target\""));
+        assert!(html.contains("id=\"rescan-targets\""));
+        assert!(html.contains("Rescan for Targets"));
+        assert!(html.contains("/airplay/rescan"));
+        assert!(html.contains("Targets scanned"));
+        assert!(html.contains("aj.snapshot_at"));
         assert!(html.contains("id=\"autojoin-discovery\""));
         assert!(html.contains("document.activeElement === sel"));
         assert!(html.contains("function sortedDevices"));
