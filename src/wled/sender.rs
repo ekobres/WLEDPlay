@@ -101,6 +101,14 @@ impl WledSender {
         self.udp_errors
     }
 
+    pub fn multicast_target(&self) -> SocketAddr {
+        self.multicast_addr
+    }
+
+    pub fn unicast_targets(&self) -> &[SocketAddr] {
+        &self.unicast_destinations
+    }
+
     pub fn destination(&self) -> String {
         let mut parts = Vec::new();
         if self.multicast_enabled {

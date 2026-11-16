@@ -267,6 +267,7 @@ mod tests {
         assert!(html.contains("\"−\" + formatClock"));
         assert!(html.contains("Applies immediately"));
         assert!(html.contains("Takes effect after restart"));
+        assert!(html.contains("Change this only if you know what you are doing."));
         assert!(html.contains("popovertarget"));
         assert!(html.contains("function placeTip"));
         assert!(html.contains("ev.newState === \"open\""));

@@ -477,10 +477,13 @@ or any physical audio hardware.
 
 # 18. Container Processes
 
-The container will likely contain:
+The container starts:
 
 ```text
+dbus
+avahi-daemon
 nqptp
+auto-join sidecar
 shairport-sync
 wledplay
 ```
@@ -510,8 +513,9 @@ airplay:
   name: "WLEDPlay"
 
 audio:
-  sync_offset_ms: 0
-  gain: auto
+  sync_offset_ms: 1200
+  shairport_latency_offset_s: -1.2
+  gain: normal
 
 wled:
   multicast_address: "239.0.0.1"
@@ -612,22 +616,24 @@ Minimum read endpoints:
 GET /health
 GET /status
 GET /config
+GET /levels
+GET /artwork
 ```
 
 `/health` should be appropriate for container health checks.
 
-`/status` should return JSON containing runtime information such as:
+`/status` should return JSON containing runtime information such as the following. `audio.sample_rate` and `audio.channels` are the analysis format (22050 Hz mono), not the AirPlay input. `version` is the Cargo package version.
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.3.0",
   "airplay": {
     "connected": true,
     "receiver_name": "WLEDPlay"
   },
   "audio": {
-    "sample_rate": 48000,
-    "channels": 2,
+    "sample_rate": 22050,
+    "channels": 1,
     "rms": 0.42,
     "peak": false,
     "dominant_frequency": 118.3
@@ -675,7 +681,7 @@ The UI is the primary operator console for a running instance. To the extent a s
 
 | Control | Expected behavior |
 |---|---|
-| Visual delay | Advance or retard visualization relative to the speakers. Apply immediately during an active stream. Support both earlier and later visuals (negative and positive compensation). |
+| Send delay | Hold each WLED packet after decode (`audio.sync_offset_ms`, 0–5000 ms). Apply immediately. Earlier or later relative to the speakers is this hold combined with the Shairport lead in §13. The hold itself is never negative. |
 | AirPlay name | Rename the advertised receiver from the default `WLEDPlay`. Re-advertise via mDNS. Warn that the current AirPlay session may drop. |
 | HTTP interface | Bind the control UI to a management NIC, or leave unset for all interfaces. Apply via stack restart. |
 | AirPlay / mDNS interface | Bind Shairport Sync and Avahi to the user-network NIC. Apply via stack restart. |
@@ -1120,17 +1126,20 @@ Prometheus metrics may be added later but are not required for v1.
 
 ---
 
-# 37. v1 Scope (implemented)
+# 37. Shipped scope
 
-The v1 product includes everything specified in the body of this document:
+Version 0.3.0 ships the audio path, Docker, the operator UI, and Auto Join (`auto-join.md`). That is not a completed v1.0. The acceptance list in §38 is still open.
+
+The shipped product includes:
 
 - PCM stdin/FIFO and file input for development (§6);
 - WLED-compatible analysis and Audio Sync V2 transmission (§7–§12);
 - AirPlay 2 receiver via Shairport Sync + NQPTP (§5, §14);
 - Docker host-network deployment (§17);
-- HTTP status, debug UI, and operator console (§21–§22);
+- HTTP status and the operator UI (§21–§22);
 - Shairport metadata and artwork (§23);
 - Per-traffic network interface selection (§22.2);
+- Auto Join while idle (`auto-join.md`);
 - Research and integration docs (§40).
 
 Deferred work is listed in §39. Operational acceptance criteria remain in §38.
@@ -1225,13 +1234,19 @@ Upstream research and integration notes live in:
 
 ```text
 docs/
+├── ARCHITECTURE.md
+├── ROADMAP.md
+├── SYNC_MEASUREMENT.md
 ├── WLED_AUDIO_SYNC.md
 ├── WLED_AUDIO_ANALYSIS.md
 ├── SHAIRPORT_INTEGRATION.md
-└── LICENSING.md
+├── LICENSING.md
+└── design/
+    ├── software-requirements.md
+    └── auto-join.md
 ```
 
-These documents record byte-level protocol details, WLED analysis behavior, Shairport/NQPTP integration, and license compatibility. They are the authoritative reference for protocol and stack decisions.
+`SECURITY.md` at the repository root is the trusted-LAN note. The research files record byte-level protocol details, WLED analysis behavior, Shairport/NQPTP integration, and license compatibility. They are the authoritative reference for protocol and stack decisions. The design records are not the operator manual.
 
 ---
 

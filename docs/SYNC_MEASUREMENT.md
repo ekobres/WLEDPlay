@@ -31,11 +31,13 @@ Send delay semantics (for lead `-1.2` → on-time = `1200` ms):
 
 Record both values once alignment looks right.
 
-## Defaults
+## Shipped example
 
-| Knob | Default | Meaning |
-|------|---------|---------|
-| `audio.sync_offset_ms` | `1200` | On-time send delay for the default `-1.2` s Shairport lead |
+These values are in [`config/config-example.yaml`](../config/config-example.yaml), which the image copies to `/etc/wledplay/config.yaml`. If the audio fields are absent, the Rust fallback is `sync_offset_ms: 0` and `shairport_latency_offset_s: 0.0`.
+
+| Knob | Shipped example | Meaning |
+|------|-----------------|---------|
+| `audio.sync_offset_ms` | `1200` | On-time send delay for the shipped `-1.2` s Shairport lead |
 | `audio.shairport_latency_offset_s` | `-1.2` | Shairport stdout ~1.2 s early vs presentation (restart) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | unset | Docker override for the Shairport offset, seconds |
 | `WLEDPLAY_SYNC_OFFSET_MS` | unset | Live send delay override (negative env values clamp to `0`) |

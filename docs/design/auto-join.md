@@ -769,48 +769,46 @@ It should not duplicate:
 
 Expose Auto Join state and configuration through the existing WLEDPlay backend API style.
 
-Exact endpoint naming should follow existing project conventions.
-
-Conceptually:
+The shipped routes are:
 
 ```text
-GET  /api/auto-join
-PUT  /api/auto-join
-GET  /api/airplay/devices
+GET   /status            auto_join object
+GET   /config            auto_join_enabled, auto_join_target_id, auto_join_target_name
+PATCH /config            those three fields, partial body
+GET   /airplay/devices
 ```
 
-Example state response:
+`GET /status` includes:
 
 ```json
 {
-  "enabled": true,
-  "target": {
-    "id": "AA:BB:CC:DD:EE:FF",
-    "name": "Living Room"
-  },
-  "runtime": {
-    "state": "waiting",
-    "targetAvailable": true,
-    "targetPlaying": false,
-    "wledplayBusy": false,
-    "pendingConfigChange": false
+  "auto_join": {
+    "enabled": true,
+    "target_id": "AA:BB:CC:DD:EE:FF",
+    "target_name": "Living Room",
+    "state": "idle_waiting",
+    "target_available": true,
+    "target_playing": false,
+    "wledplay_busy": false,
+    "pending_config_change": false
   }
 }
 ```
 
-Example update:
+`PATCH /config` accepts:
 
 ```json
 {
-  "enabled": true,
-  "targetId": "AA:BB:CC:DD:EE:FF"
+  "auto_join_enabled": true,
+  "auto_join_target_id": "AA:BB:CC:DD:EE:FF",
+  "auto_join_target_name": "Living Room"
 }
 ```
 
 The backend should validate that:
 
-- `enabled` is boolean
-- `targetId` is valid or null
+- `auto_join_enabled` is boolean
+- `auto_join_target_id` is a non-empty id or empty
 - Auto Join cannot be functionally active without a configured target
 
 The UI may allow enabling Auto Join before selecting a target, but runtime state should then be:

@@ -225,5 +225,22 @@ shairport-sync -c /tmp/shairport-sync.conf > "$PCM_FIFO" &
 SHAIRPORT_PID=$!
 
 echo "WLEDPlay stack running (AirPlay: ${WLEDPLAY_AIRPLAY_NAME}, WLED: ${WLEDPLAY_MULTICAST_ADDRESS}:${WLEDPLAY_PORT})"
-wait "$WLEDPLAY_PID" || true
+# Compose restart: unless-stopped brings the container back after this process exits.
+# wledplay exiting is the orderly restart path. Shairport, NQPTP, or the sidecar
+# dying is a failed child: stop the rest and exit non-zero.
+child_failed=0
+while true; do
+  if ! kill -0 "$WLEDPLAY_PID" 2>/dev/null; then
+    break
+  fi
+  if ! kill -0 "$SHAIRPORT_PID" 2>/dev/null \
+    || ! kill -0 "$NQPTP_PID" 2>/dev/null \
+    || ! kill -0 "$SIDECAR_PID" 2>/dev/null; then
+    echo "A stack process exited; stopping the container so it can restart."
+    child_failed=1
+    break
+  fi
+  sleep 1
+done
 shutdown
+exit "$child_failed"

@@ -191,7 +191,7 @@ Sets `samplePeak` and `udpSamplePeak`. `udpSamplePeak` cleared on transmit.
 
 | WLED mic path | WLEDPlay digital path |
 |---------------|----------------------|
-| I2S @ 22050 Hz | Resample AirPlay 44100 stereo → 22050 mono |
+| I2S @ 22050 Hz | AirPlay 48000 Hz S16LE stereo, downmixed and decimated to 22050 Hz mono |
 | `micDataReal` from ADC/I2S | Normalized float from S16 PCM |
 | `micLev` DC tracker | Retained (handles DC offset in stream) |
 | `useMicFilter` default on | **Off** by default for digital (configurable) |

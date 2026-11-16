@@ -180,16 +180,13 @@ Container entrypoint order:
 
 1. Start **dbus** + **avahi-daemon** (mDNS; pin to `WLEDPLAY_AIRPLAY_INTERFACE` when set)
 2. Start **nqptp** (AirPlay 2)
-3. Start **wledplay** (reads pipe)
-4. Start **shairport-sync** (stdout → pipe)
+3. Start the **Auto Join sidecar**
+4. Start **wledplay** (reads the PCM pipe)
+5. Start **shairport-sync** (stdout → pipe)
 
-On SIGTERM:
+On SIGTERM the entrypoint stops wledplay, the sidecar, shairport-sync, nqptp, Avahi, and dbus.
 
-1. Stop wledplay (flush UDP, close HTTP)
-2. SIGTERM shairport-sync
-3. Stop nqptp
-
-Restart policy: if shairport-sync exits, supervisor restarts full stack.
+If `wledplay` exits, the entrypoint shuts the stack down and the container exits 0. `POST /restart` uses that path. If shairport-sync, nqptp, or the sidecar exits first, the entrypoint shuts the stack down and the container exits 1. Compose `restart: unless-stopped` starts the whole stack again either way.
 
 ---
 

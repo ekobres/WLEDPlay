@@ -462,6 +462,8 @@ mod tests {
             applied_unicast: cfg.network.unicast.clone(),
             applied_multicast: cfg.network.multicast.clone(),
             applied_shairport: cfg.audio.shairport_latency_offset_s,
+            applied_multicast_address: cfg.wled.multicast_address.clone(),
+            applied_port: cfg.wled.port,
             restart: restart.clone(),
         };
         (

@@ -49,6 +49,7 @@ auto_join:
   target_name: ""
 
 pcm:
+  # File and stdin default. The container passes --pcm-rate 48000, which replaces this.
   rate: 44100
   channels: 2
   format: s16le

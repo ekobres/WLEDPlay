@@ -59,7 +59,7 @@ Copy the examples to gitignored local files and edit. Pulls update the examples 
 ./scripts/ensure-config.sh
 ```
 
-That copies [`config/config-example.yaml`](config/config-example.yaml) → `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) → `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, interface, Shairport lead, and the metadata pipe are still patched at start from yaml/env.
+That copies [`config/config-example.yaml`](config/config-example.yaml) → `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) → `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, NIC pins, and Shairport lead are patched at start from yaml or env. Docker always creates the metadata FIFO at `WLEDPLAY_METADATA_PIPE` (default `/run/wledplay.meta`) and passes it to Shairport and `wledplay`. An empty `metadata.pipe` in yaml does not turn metadata off inside the container.
 
 Environment overrides:
 
@@ -96,6 +96,7 @@ The operator UI listens on `0.0.0.0:8080` by default and does not authenticate. 
 - `GET /artwork` — current cover art (404 if none)
 - `GET /config` / `PATCH /config` — live settings
 - `GET /interfaces` — usable IPv4 NICs
+- `GET /airplay/devices` — AirPlay receivers Auto Join can see
 - `POST /restart` — orderly process restart
 
 ## Docker (Linux host)

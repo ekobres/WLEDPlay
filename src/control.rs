@@ -17,6 +17,9 @@ pub struct Control {
     pub applied_unicast: String,
     pub applied_multicast: String,
     pub applied_shairport: f64,
+    /// Multicast group and UDP port take effect on the next process start.
+    pub applied_multicast_address: String,
+    pub applied_port: u16,
     pub restart: Arc<AtomicBool>,
 }
 
@@ -139,7 +142,9 @@ impl Control {
             let mut live = self.config.lock().unwrap();
             let mut sender = self.sender.lock().unwrap();
             sender.set_multicast_enabled(cfg.wled.multicast_enabled);
-            sender.set_unicast(cfg.unicast_sockets());
+            let mut pinned = cfg.clone();
+            pinned.wled.port = self.applied_port;
+            sender.set_unicast(pinned.unicast_sockets());
             *live = cfg.clone();
         }
 
@@ -179,6 +184,8 @@ impl Control {
             || cfg.network.unicast != self.applied_unicast
             || cfg.network.multicast != self.applied_multicast
             || (cfg.audio.shairport_latency_offset_s - self.applied_shairport).abs() > 0.0001
+            || cfg.wled.multicast_address != self.applied_multicast_address
+            || cfg.wled.port != self.applied_port
     }
 }
 
@@ -578,6 +585,8 @@ mod tests {
             applied_unicast: cfg.network.unicast.clone(),
             applied_multicast: cfg.network.multicast.clone(),
             applied_shairport: cfg.audio.shairport_latency_offset_s,
+            applied_multicast_address: cfg.wled.multicast_address.clone(),
+            applied_port: cfg.wled.port,
             restart: Arc::new(AtomicBool::new(false)),
         };
         assert!(!control.view().needs_restart);
@@ -618,8 +627,58 @@ mod tests {
             applied_unicast: cfg.network.unicast.clone(),
             applied_multicast: cfg.network.multicast.clone(),
             applied_shairport: cfg.audio.shairport_latency_offset_s,
+            applied_multicast_address: cfg.wled.multicast_address.clone(),
+            applied_port: cfg.wled.port,
             restart: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[test]
+    fn port_and_multicast_group_wait_for_restart() {
+        let control = test_control(None);
+        let seeded = control
+            .apply_patch(super::ConfigPatch {
+                destinations: Some(vec!["192.0.2.10".into()]),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(!seeded.needs_restart);
+        let before = {
+            let sender = control.sender.lock().unwrap();
+            (sender.multicast_target(), sender.unicast_targets().to_vec())
+        };
+        assert_eq!(before.0, "239.0.0.1:11988".parse().unwrap());
+        assert_eq!(before.1, vec!["192.0.2.10:11988".parse().unwrap()]);
+
+        let port_only = control
+            .apply_patch(super::ConfigPatch {
+                port: Some(12001),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(port_only.needs_restart);
+        assert_eq!(port_only.values.port, 12001);
+        let after_port = {
+            let sender = control.sender.lock().unwrap();
+            (sender.multicast_target(), sender.unicast_targets().to_vec())
+        };
+        assert_eq!(after_port, before);
+
+        let group_only = control
+            .apply_patch(super::ConfigPatch {
+                port: Some(11988),
+                multicast_address: Some("239.1.1.1".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(group_only.needs_restart);
+        assert_eq!(group_only.values.multicast_address, "239.1.1.1");
+        assert_eq!(group_only.values.port, 11988);
+        let after_group = {
+            let sender = control.sender.lock().unwrap();
+            (sender.multicast_target(), sender.unicast_targets().to_vec())
+        };
+        assert_eq!(after_group, before);
     }
 
     #[test]
