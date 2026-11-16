@@ -211,14 +211,29 @@ def mac_device_id(deviceid: str) -> str:
     return ":".join(hexonly[i : i + 2].upper() for i in range(0, 12, 2))
 
 
+def _id_forms(value: str) -> list[str]:
+    """Each literal UID a leader might match. Colon and compact forms are not the same string."""
+    raw = (value or "").strip()
+    if not raw:
+        return []
+    forms = [raw]
+    mac = mac_device_id(raw)
+    if mac and mac not in forms:
+        forms.append(mac)
+    if mac and ":" in mac:
+        compact = mac.replace(":", "")
+        if compact not in forms:
+            forms.append(compact)
+    return forms
+
+
 def receiver_output_ids(deviceid: str, fallback: str) -> list[str]:
-    """Ids to give add_output_devices. Shairport is the MAC, not the pairing UUID."""
+    """Ids to give add_output_devices. The leader matches the UID string exactly."""
     found: list[str] = []
-    mac = mac_device_id(deviceid)
-    if mac:
-        found.append(mac)
-    if fallback and not any(ids_match(fallback, existing) for existing in found):
-        found.append(fallback)
+    for value in (deviceid, fallback):
+        for form in _id_forms(value):
+            if form not in found:
+                found.append(form)
     return found
 
 
@@ -567,6 +582,7 @@ async def add_receiver(
         if output_lists_receiver(current, receiver_ids, receiver_name):
             return True, "already in group"
         last = "group leader did not add WLEDPlay"
+        before = list(current)
         for rid in receiver_ids:
             try:
                 await add(rid)
@@ -578,7 +594,28 @@ async def add_receiver(
                 continue
             current = await output_snapshot(audio)
             if output_lists_receiver(current, receiver_ids, receiver_name):
+                # #region agent log
+                _debug(
+                    "C",
+                    "autojoin_sidecar.py:add_receiver",
+                    "leader added receiver",
+                    {"tried": rid, "outputs": [(i, n) for i, n in current]},
+                )
+                # #endregion
                 return True, ""
+        # #region agent log
+        _debug(
+            "C",
+            "autojoin_sidecar.py:add_receiver",
+            "leader did not list receiver",
+            {
+                "tried": list(receiver_ids),
+                "before": [(i, n) for i, n in before],
+                "after": [(i, n) for i, n in current],
+                "last": last,
+            },
+        )
+        # #endregion
         return False, last
     finally:
         await _close(atv)
@@ -986,14 +1023,54 @@ def service_label(name: str, stype: str) -> str:
     return name
 
 
+def raop_instance_id(service_name: str) -> str:
+    """RAOP instance names are <12 hex>@Speaker. That prefix is the device id."""
+    if "@" not in service_name:
+        return ""
+    mac = mac_device_id(service_name.split("@", 1)[0])
+    if mac and ":" in mac:
+        return mac
+    return ""
+
+
 def stable_id(props: dict, service_name: str) -> str:
     deviceid = props.get("deviceid") or ""
     mac = mac_device_id(deviceid)
     if mac and ":" in mac:
         return mac
+    from_name = raop_instance_id(service_name)
+    if from_name:
+        return from_name
     if deviceid:
         return deviceid.strip()
     return service_name
+
+
+def _debug(hypothesis: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    payload = {
+        "sessionId": "2528fc",
+        "runId": "post-fix",
+        "hypothesisId": hypothesis,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    line = json.dumps(payload)
+    try:
+        with open(
+            "/Users/erickkobres/WLEDPlay/.cursor/debug-2528fc.log", "a", encoding="utf-8"
+        ) as handle:
+            handle.write(line + "\n")
+    except Exception:
+        pass
+    try:
+        sys.stderr.write(line + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+    # #endregion
 
 
 class AvahiBrowser:
@@ -1005,6 +1082,7 @@ class AvahiBrowser:
         self.bus = None
         self.server = None
         self.browsers = []
+        self.matches = []
         self.resolvers = {}
         self.records = {}
         self.services = {}
@@ -1083,21 +1161,25 @@ class AvahiBrowser:
                     self.bus.get_object("org.freedesktop.Avahi", path),
                     "org.freedesktop.Avahi.ServiceBrowser",
                 )
-                browser.connect_to_signal(
+                self._listen(
+                    browser,
                     "ItemNew",
                     lambda *args, kind=stype, gen=self.generation: self._on_new(gen, kind, *args),
                 )
-                browser.connect_to_signal(
+                self._listen(
+                    browser,
                     "ItemRemove",
                     lambda *args, kind=stype, gen=self.generation: self._on_remove(
                         gen, kind, *args
                     ),
                 )
-                browser.connect_to_signal(
+                self._listen(
+                    browser,
                     "AllForNow",
                     lambda kind=stype, gen=self.generation: self._finish_browser(gen, kind),
                 )
-                browser.connect_to_signal(
+                self._listen(
+                    browser,
                     "Failure",
                     lambda message, kind=stype, gen=self.generation: self._fail_browser(
                         gen, kind, message
@@ -1111,7 +1193,16 @@ class AvahiBrowser:
         self._set_status(opened > 0, self.pass_error)
         self._maybe_publish()
 
+    def _listen(self, obj, signal: str, handler) -> None:
+        self.matches.append(obj.connect_to_signal(signal, handler))
+
     def _drop_clients(self) -> None:
+        for match in self.matches:
+            try:
+                match.remove()
+            except Exception:
+                pass
+        self.matches.clear()
         for path, _browser_obj in self.browsers:
             self._free(path, "ServiceBrowser")
         for path in list(self.resolvers.values()):
@@ -1148,6 +1239,8 @@ class AvahiBrowser:
 
     def _resolve(self, interface: int, protocol: int, name: str, stype: str, domain: str) -> None:
         key = (name, stype)
+        if key in self.resolvers:
+            return
         try:
             path = self.server.ServiceResolverNew(
                 self._dbus.Int32(interface),
@@ -1174,11 +1267,13 @@ class AvahiBrowser:
                 self.bus.get_object("org.freedesktop.Avahi", path),
                 "org.freedesktop.Avahi.ServiceResolver",
             )
-            resolver.connect_to_signal(
+            self._listen(
+                resolver,
                 "Found",
                 lambda *args, key=key, gen=self.generation: self._on_found(gen, key, *args),
             )
-            resolver.connect_to_signal(
+            self._listen(
+                resolver,
                 "Failure",
                 lambda message, key=key, gen=self.generation: self._on_resolver_failure(
                     gen, key, message
@@ -1227,7 +1322,12 @@ class AvahiBrowser:
         else:
             rec["present"] = True
             rec["address"] = text or rec.get("address") or ""
-            rec["props"] = props
+            if is_raop and rec.get("named_by_airplay"):
+                merged = dict(props)
+                merged.update(rec.get("props") or {})
+                rec["props"] = merged
+            else:
+                rec["props"] = props
             rec["model"] = props.get("model") or rec.get("model") or ""
             if not is_raop or not rec.get("named_by_airplay"):
                 rec["name"] = label
@@ -1267,9 +1367,24 @@ class AvahiBrowser:
             self._publish_snapshot()
 
     def _publish_snapshot(self) -> None:
+        copied = _copy_records(self.records)
         _store_live(self.records)
-        _replace_snapshot(_copy_records(self.records))
+        _replace_snapshot(copied)
         self._set_status(True, self.pass_error)
+        # #region agent log
+        _debug(
+            "A",
+            "autojoin_sidecar.py:_publish_snapshot",
+            "snapshot published",
+            {
+                "records": len(copied),
+                "raop_name_ids": sum(1 for ident in copied if "@" in ident),
+                "matches": len(self.matches),
+                "resolvers": len(self.resolvers),
+                "error": self.pass_error,
+            },
+        )
+        # #endregion
 
 
 class Handler(BaseHTTPRequestHandler):
