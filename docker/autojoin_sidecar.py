@@ -227,14 +227,32 @@ def _id_forms(value: str) -> list[str]:
     return forms
 
 
-def receiver_output_ids(deviceid: str, fallback: str) -> list[str]:
-    """Ids to give add_output_devices. The leader matches the UID string exactly."""
+def receiver_output_ids(deviceid: str, fallback: str, extras: list[str] | None = None) -> list[str]:
+    """Ids to give add_output_devices. The leader matches the UID string exactly.
+
+    Apple speakers are listed by their psi. Some receivers are listed by pi,
+    which may be the device id. Both are tried before the deviceid text forms.
+    """
     found: list[str] = []
-    for value in (deviceid, fallback):
+    for value in [*(extras or []), deviceid, fallback]:
         for form in _id_forms(value):
             if form not in found:
                 found.append(form)
     return found
+
+
+def self_record_props(index: dict) -> dict:
+    devices = index.get("devices") or {}
+    self_name = (index.get("self_name") or "").lower()
+    self_deviceid = index.get("self_deviceid") or ""
+    for rec in devices.values():
+        props = rec.get("props") or {}
+        name = (rec.get("name") or "").lower()
+        if self_name and name == self_name:
+            return props
+        if self_deviceid and ids_match(props.get("deviceid") or "", self_deviceid):
+            return props
+    return {}
 
 
 def _id_set(props: dict, fields: tuple[str, ...], skip: set[str] | None = None) -> set[str]:
@@ -283,9 +301,28 @@ def receiving_audio(props: dict) -> bool:
     return (flags & 0x800) != 0 or (flags & 0x20000) != 0
 
 
-def playback_kind(props: dict) -> str:
+def leader_session_is_playing(props: dict, props_by_id: dict) -> bool:
+    """An origin leader does not set the receiving bits while it is playing.
+
+    Those bits are set on the speakers taking its stream. A session whose
+    members are not receiving is paused.
+    """
+    if not is_group_leader_txt(props):
+        return False
+    for peer in props_by_id.values():
+        if peer is props:
+            continue
+        if not (shares_session(peer, props) or shares_session(props, peer)):
+            continue
+        if receiving_audio(peer):
+            return True
+    return False
+
+
+def playback_kind(props: dict, props_by_id: dict | None = None) -> str:
     """playing, paused, or idle from the TXT record. No playback connection."""
-    if receiving_audio(props):
+    peers = props_by_id or {}
+    if receiving_audio(props) or leader_session_is_playing(props, peers):
         return "playing"
     if session_ids(props):
         return "paused"
@@ -807,7 +844,12 @@ async def _locate(target_id: str, receiver_id: str) -> _Located:
     found, self_deviceid = await _scan_for_target(
         storage, target_id, receiver_name, network, index
     )
-    output_ids = receiver_output_ids(self_deviceid, receiver_id)
+    own = self_record_props(index)
+    output_ids = receiver_output_ids(
+        self_deviceid,
+        receiver_id,
+        [own.get("psi") or "", own.get("pi") or ""],
+    )
     return _Located(
         found,
         output_ids,
@@ -981,7 +1023,7 @@ def scan_payload() -> dict:
         ident = row["id"]
         live = present.get(ident)
         props = live["props"] if live else {}
-        kind = playback_kind(props) if live else "idle"
+        kind = playback_kind(props, props_by_id) if live else "idle"
         devices.append(
             {
                 "id": ident,
@@ -1050,7 +1092,7 @@ def _debug(hypothesis: str, location: str, message: str, data: dict) -> None:
     # #region agent log
     payload = {
         "sessionId": "2528fc",
-        "runId": "post-fix",
+        "runId": "post-fix-2",
         "hypothesisId": hypothesis,
         "location": location,
         "message": message,
