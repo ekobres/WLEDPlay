@@ -350,10 +350,12 @@ pub fn event_loop_tick(
 
     {
         let mut snd = sender.lock().unwrap();
-        while let Some((pkt, target)) = pop_due_packet(&mut loop_state.delay_q, now) {
-            let _ = snd.send_target(&pkt, target);
+        while let Some((pkt, targets)) = pop_due_packet(&mut loop_state.delay_q, now) {
+            for target in targets {
+                let _ = snd.send_target(&pkt, target);
+                *packets_last_sec += 1;
+            }
             record_transmitted(status, &pkt);
-            *packets_last_sec += 1;
         }
     }
 

@@ -32,8 +32,11 @@ pub const STATUS_INTERVAL: Duration = Duration::from_secs(1);
 pub const EVENT_LOOP_WAKE_CAP: Duration = Duration::from_millis(50);
 /// Count an underrun only after PCM has been silent this long.
 pub const PCM_UNDERRUN_AFTER: Duration = Duration::from_millis(80);
-/// Max queued Audio Sync packets for live send delay (5s at 50 Hz, plus slack).
-pub const DELAY_QUEUE_MAX: usize = 300;
+/// Max queued departures. Each entry is one send time, shared by every
+/// controller with that offset. 8192 covers a 5s hold at 50 Hz with many
+/// different offsets. Overflow drops the newest entry and keeps the packets
+/// that are about to be sent.
+pub const DELAY_QUEUE_MAX: usize = 8192;
 
 pub struct PcmRuntime {
     pub analyzer: Analyzer,
@@ -83,7 +86,7 @@ pub fn note_pcm_gap(open: &mut bool, starved: bool) -> bool {
     false
 }
 
-pub type DelayItem = (Instant, AudioSyncPacket, PacketTarget);
+pub type DelayItem = (Instant, AudioSyncPacket, Vec<PacketTarget>);
 
 pub fn enqueue_packet(
     queue: &mut VecDeque<DelayItem>,
@@ -99,7 +102,7 @@ pub fn enqueue_packet_at(
     packet: AudioSyncPacket,
     due: Instant,
 ) {
-    insert_due(queue, (due, packet, PacketTarget::Fanout));
+    insert_due(queue, (due, packet, vec![PacketTarget::Fanout]));
 }
 
 pub fn enqueue_departure(
@@ -109,17 +112,21 @@ pub fn enqueue_departure(
     multicast: bool,
     unicast: &[(SocketAddr, i32)],
 ) {
+    let mut groups: Vec<(i32, Vec<PacketTarget>)> = Vec::new();
     if multicast {
-        insert_due(queue, (base, packet.clone(), PacketTarget::Multicast));
+        groups.push((0, vec![PacketTarget::Multicast]));
     }
     for (addr, offset_ms) in unicast {
+        if let Some((_, targets)) = groups.iter_mut().find(|(offset, _)| *offset == *offset_ms) {
+            targets.push(PacketTarget::Unicast(*addr));
+        } else {
+            groups.push((*offset_ms, vec![PacketTarget::Unicast(*addr)]));
+        }
+    }
+    for (offset_ms, targets) in groups {
         insert_due(
             queue,
-            (
-                shift_due_ms(base, *offset_ms),
-                packet.clone(),
-                PacketTarget::Unicast(*addr),
-            ),
+            (shift_due_ms(base, offset_ms), packet.clone(), targets),
         );
     }
 }
@@ -143,7 +150,7 @@ fn insert_due(queue: &mut VecDeque<DelayItem>, item: DelayItem) {
         .unwrap_or(queue.len());
     queue.insert(pos, item);
     while queue.len() > DELAY_QUEUE_MAX {
-        queue.pop_front();
+        queue.pop_back();
     }
 }
 
@@ -294,7 +301,7 @@ pub fn step_send_deadline(last_send: Instant, interval: Duration, now: Instant) 
 pub fn pop_due_packet(
     queue: &mut VecDeque<DelayItem>,
     now: Instant,
-) -> Option<(AudioSyncPacket, PacketTarget)> {
+) -> Option<(AudioSyncPacket, Vec<PacketTarget>)> {
     if queue.front().map(|(t, _, _)| now >= *t).unwrap_or(false) {
         let (_, packet, target) = queue.pop_front().unwrap();
         Some((packet, target))
@@ -711,13 +718,15 @@ mod tests {
     }
 
     #[test]
-    fn enqueue_drops_oldest_when_over_cap() {
+    fn enqueue_drops_the_newest_when_over_cap() {
         let mut q = VecDeque::new();
         let now = Instant::now();
-        for _ in 0..DELAY_QUEUE_MAX + 5 {
+        for _ in 0..DELAY_QUEUE_MAX {
             enqueue_packet(&mut q, AudioSyncPacket::silence(), 0, now);
         }
+        enqueue_packet(&mut q, AudioSyncPacket::silence(), 1_000, now);
         assert_eq!(q.len(), DELAY_QUEUE_MAX);
+        assert!(q.iter().all(|(due, _, _)| *due == now));
     }
 
     #[test]
@@ -921,11 +930,11 @@ mod tests {
         );
         assert_eq!(q.len(), 3);
         assert_eq!(q[0].0, base - Duration::from_millis(7));
-        assert!(matches!(q[0].2, PacketTarget::Unicast(addr) if addr == earlier));
+        assert!(matches!(q[0].2.as_slice(), [PacketTarget::Unicast(addr)] if *addr == earlier));
         assert_eq!(q[1].0, base);
-        assert!(matches!(q[1].2, PacketTarget::Multicast));
+        assert!(matches!(q[1].2.as_slice(), [PacketTarget::Multicast]));
         assert_eq!(q[2].0, base + Duration::from_millis(15));
-        assert!(matches!(q[2].2, PacketTarget::Unicast(addr) if addr == later));
+        assert!(matches!(q[2].2.as_slice(), [PacketTarget::Unicast(addr)] if *addr == later));
         enqueue_departure(
             &mut q,
             AudioSyncPacket::silence(),
@@ -933,7 +942,32 @@ mod tests {
             false,
             &[(later, 0)],
         );
-        assert!(q.iter().any(|item| item.0 == base && matches!(item.2, PacketTarget::Unicast(_))));
+        assert!(q.iter().any(|item| item.0 == base && matches!(item.2.as_slice(), [PacketTarget::Unicast(_)])));
+    }
+
+    #[test]
+    fn shared_send_time_is_one_queue_entry() {
+        let mut q = VecDeque::new();
+        let base = Instant::now() + Duration::from_millis(1200);
+        let targets: Vec<(std::net::SocketAddr, i32)> = (1..=8)
+            .map(|n| {
+                (
+                    format!("192.0.2.{n}:11988").parse().unwrap(),
+                    0,
+                )
+            })
+            .collect();
+        enqueue_departure(
+            &mut q,
+            AudioSyncPacket::silence(),
+            base,
+            true,
+            &targets,
+        );
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].0, base);
+        assert_eq!(q[0].2.len(), 9);
+        assert!(matches!(q[0].2[0], PacketTarget::Multicast));
     }
 
     #[test]

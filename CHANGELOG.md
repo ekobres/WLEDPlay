@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The Control card lists WLED controllers found by Avahi and the saved unicast rows. A discovered controller is not sent audio until Unicast is enabled and the card is saved. Each row can shift its send time by a millisecond offset. Avahi listens on the AirPlay NIC and, when one is set, the unicast NIC. Shairport still advertises only on the AirPlay NIC.
+- The Control card lists WLED controllers found by Avahi and the saved unicast rows. A discovered controller is not sent audio until Unicast is enabled and the card is saved. Each row can shift its send time by a millisecond offset. Controllers that share a send time share one delay-queue entry, so a longer unicast list does not discard packets that are about to be sent. Avahi listens on the AirPlay NIC and, when one is set, the unicast NIC. Shairport still advertises only on the AirPlay NIC.
 - Auto Join watches speakers with a standing Avahi browser. The target list is a snapshot from startup, replaced by Rescan for Targets. pyatv runs only when a join is sent. A previously saved target may need to be selected again. Each speaker is one row, and a join tries the receiver id in the form the group leader matches.
 - Each WLED packet renders the spectrum for its own departure slot. A PCM burst no longer repeats one set of bands across later packets.
 - Outgoing WLED packets stay on one departure grid. A wake with two ready windows no longer sends the second in the same instant as the next wake's packet. A peak whose hold has already elapsed is dropped when overdue slots are skipped.
