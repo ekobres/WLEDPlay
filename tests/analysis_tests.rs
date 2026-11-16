@@ -25,7 +25,10 @@ fn silence_packet_is_44_bytes_with_v2_header() {
 fn sine_440_energy_near_expected_band() {
     let mut a = Analyzer::new(AgcMode::Off);
     feed_sine(&mut a, 440.0, 1.0);
-    let pkt = a.build_packet();
+    let mut pkt = a.build_packet();
+    while let Some(next) = a.take_departure(441) {
+        pkt = next;
+    }
     let peak_bin = hz_to_bin(440.0);
     assert!((5..=12).contains(&peak_bin));
     let bass_energy: u32 = pkt.fft_result[3..=6].iter().map(|&v| v as u32).sum();

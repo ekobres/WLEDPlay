@@ -20,7 +20,7 @@ flowchart LR
 
 - [`src/app.rs`](../src/app.rs) wires the CLI, PCM input, metadata, and process lifetime.
 - [`src/runtime.rs`](../src/runtime.rs) owns the send loop and status snapshots. Send delay is `audio.sync_offset_ms`.
-- [`src/audio/`](../src/audio) is the analyzer: 22050 Hz, 512-point FFT, 16 bands. Behavior follows WLED's audio-reactive map. The implementation is independent; see [`docs/LICENSING.md`](LICENSING.md).
+- [`src/audio/`](../src/audio) is the analyzer: 22050 Hz, 512-point FFT, 16 bands. Each scheduled WLED packet renders one window ending on that packet's slot. Behavior follows WLED's audio-reactive map. The implementation is independent; see [`docs/LICENSING.md`](LICENSING.md).
 - [`src/pcm/`](../src/pcm) downmixes and decimates incoming PCM to the analysis rate.
 - [`src/wled/`](../src/wled) builds and sends Audio Sync V2 packets.
 - [`src/auto_join/mod.rs`](../src/auto_join/mod.rs) is join policy. [`src/auto_join/sidecar.rs`](../src/auto_join/sidecar.rs) talks to [`docker/autojoin_sidecar.py`](../docker/autojoin_sidecar.py), which uses pyatv.

@@ -3,7 +3,7 @@ use crate::config::{Config, PcmFormat};
 use crate::control::Control;
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceBind;
-use crate::pcm::PcmDecoder;
+use crate::pcm::{PcmDecoder, ANALYSIS_RATE};
 use crate::runtime::{
     self, event_loop_wait, http_listen, mark_stream_connected, mark_stream_ended, next_due_at,
     open_pcm_input, path_is_fifo, pcm_file_pump, pop_due_packet, record_transmitted,
@@ -534,8 +534,13 @@ pub fn read_pcm(
                 }
                 {
                     let mut rt = runtime.lock().unwrap();
-                    for sample in samples {
-                        rt.analyzer.ingest_mono_sample(sample, now_ms);
+                    let count = samples.len() as u64;
+                    let span = count.saturating_mul(1000) / u64::from(ANALYSIS_RATE);
+                    let start_ms = now_ms.saturating_sub(span);
+                    for (i, sample) in samples.into_iter().enumerate() {
+                        let sample_ms =
+                            start_ms + (i as u64).saturating_mul(1000) / u64::from(ANALYSIS_RATE);
+                        rt.analyzer.ingest_mono_sample(sample, sample_ms);
                     }
                 }
 

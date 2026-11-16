@@ -306,9 +306,23 @@ impl SendLoop {
             if note_pcm_gap(&mut self.underrun_open, starved) {
                 rt.pcm_underruns += 1;
             }
-            let pkt = rt.analyzer.build_packet();
-            publish_audio(status, rt, cfg, pkt.sample_peak != 0);
-            enqueue_packet(&mut self.delay_q, pkt, delay_ms, now);
+            let hz = cfg.audio.update_hz.max(1);
+            let interval_ms = 1000 / u64::from(hz);
+            let hop = Analyzer::departure_hop(hz);
+            let mut slot = 0u64;
+            while slot < 4 {
+                let Some(pkt) = rt.analyzer.take_departure(hop) else {
+                    break;
+                };
+                publish_audio(status, rt, cfg, pkt.sample_peak != 0);
+                enqueue_packet(
+                    &mut self.delay_q,
+                    pkt,
+                    delay_ms.saturating_add(slot * interval_ms),
+                    now,
+                );
+                slot += 1;
+            }
             LoopAction::Continue
         } else if self.udp_active {
             let pkt = rt.analyzer.silence_packet();
@@ -735,7 +749,15 @@ mod tests {
             LoopAction::Continue
         );
         assert!(sl.udp_active);
-        assert!(!sl.delay_q.is_empty());
+        assert!(sl.delay_q.is_empty());
+        for i in 0..512 {
+            rt.analyzer.ingest_mono_sample(0.0, i as u64);
+        }
+        assert_eq!(
+            sl.on_update(&mut rt, &status, &cfg, true, now),
+            LoopAction::Continue
+        );
+        assert_eq!(sl.delay_q.len(), 1);
 
         rt.last_pcm = Some(now - Duration::from_secs(5));
         rt.stream_since = Some(now - Duration::from_secs(5));
@@ -760,6 +782,28 @@ mod tests {
             sl.on_update(&mut rt, &status, &cfg, true, now),
             LoopAction::Exit
         );
+    }
+
+    #[test]
+    fn send_loop_staggers_one_window_per_departure() {
+        let status = status();
+        let cfg = Config::default();
+        let mut rt = PcmRuntime::new(AgcMode::Off);
+        let mut sl = SendLoop::default();
+        let now = Instant::now();
+        rt.stream_active = true;
+        rt.last_pcm = Some(now);
+        for i in 0..(512 + 441) {
+            let t = i as f32 / 22050.0;
+            let s = (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 8_000.0;
+            rt.analyzer.ingest_mono_sample(s, i as u64);
+        }
+        sl.on_update(&mut rt, &status, &cfg, false, now);
+        assert_eq!(sl.delay_q.len(), 2);
+        let gap = sl.delay_q[1].0.saturating_duration_since(sl.delay_q[0].0);
+        assert_eq!(gap, Duration::from_millis(20));
+        sl.on_update(&mut rt, &status, &cfg, false, now + Duration::from_millis(20));
+        assert_eq!(sl.delay_q.len(), 2);
     }
 
     #[test]

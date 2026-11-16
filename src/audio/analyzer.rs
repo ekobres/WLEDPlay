@@ -14,7 +14,10 @@ pub struct Analyzer {
     fft_major_peak: f32,
     fft_magnitude: f32,
     my_magnitude: f32,
-    last_fft_ms: u64,
+    /// Absolute count of analysis samples stored for departure windows.
+    samples_seen: u64,
+    /// Exclusive end index of the next window. Zero until the first slot.
+    next_end: u64,
     stream_active: bool,
     limiter_on: bool,
     decay_time: u16,
@@ -33,7 +36,8 @@ impl Analyzer {
             fft_major_peak: 1.0,
             fft_magnitude: 0.001,
             my_magnitude: 0.001,
-            last_fft_ms: 0,
+            samples_seen: 0,
+            next_end: 0,
             stream_active: false,
             limiter_on: true,
             decay_time: 1400,
@@ -55,6 +59,8 @@ impl Analyzer {
     pub fn reset_silence(&mut self) {
         self.samples.reset();
         self.sample_buffer.clear();
+        self.samples_seen = 0;
+        self.next_end = 0;
         self.fft_calc.fill(0.0);
         self.fft_avg.fill(0.0);
         self.fft_result.fill(0);
@@ -65,24 +71,60 @@ impl Analyzer {
 
     pub fn ingest_mono_sample(&mut self, sample: f32, now_ms: u64) {
         self.samples.process_sample(sample, now_ms);
-        if self.samples.sample_avg > 0.25 {
-            self.sample_buffer.push(sample);
-        }
-        if self.sample_buffer.len() >= SAMPLES_FFT && now_ms.saturating_sub(self.last_fft_ms) >= 21
-        {
-            self.run_fft(now_ms);
+        self.sample_buffer.push(sample);
+        self.samples_seen += 1;
+        let cap = SAMPLE_RATE as usize;
+        if self.sample_buffer.len() > cap {
+            let drop = self.sample_buffer.len() - cap;
+            self.sample_buffer.drain(0..drop);
         }
     }
 
-    pub(crate) fn run_fft(&mut self, now_ms: u64) {
-        self.last_fft_ms = now_ms;
-        let mut batch = [0.0f32; SAMPLES_FFT];
-        let start = self.sample_buffer.len() - SAMPLES_FFT;
-        batch.copy_from_slice(&self.sample_buffer[start..]);
-        self.sample_buffer
-            .drain(0..start.min(self.sample_buffer.len()));
+    /// Samples between scheduled Audio Sync packets. At 50 Hz this is 441.
+    pub fn departure_hop(update_hz: u32) -> usize {
+        (SAMPLE_RATE / update_hz.max(1)).max(1) as usize
+    }
 
-        let (peak, mag) = self.fft.analyze(&batch);
+    /// Render the window that ends on the next unsent slot.
+    ///
+    /// One call produces one spectrum. A later call without new audio returns
+    /// `None`, so a departure cannot repeat the previous window. A stall that
+    /// has more than four slots waiting skips to the newest one.
+    pub fn take_departure(&mut self, hop: usize) -> Option<AudioSyncPacket> {
+        let hop = hop.max(1) as u64;
+        if self.next_end == 0 {
+            self.next_end = SAMPLES_FFT as u64;
+        }
+        if self.samples_seen < self.next_end {
+            return None;
+        }
+        let ready = 1 + (self.samples_seen - self.next_end) / hop;
+        if ready > 4 {
+            let extra = (self.samples_seen - self.next_end) / hop;
+            self.next_end += extra * hop;
+        }
+        let end = self.next_end;
+        let start = end - SAMPLES_FFT as u64;
+        let buf_start = self.samples_seen - self.sample_buffer.len() as u64;
+        let offset = (start - buf_start) as usize;
+        let mut batch = [0.0f32; SAMPLES_FFT];
+        batch.copy_from_slice(&self.sample_buffer[offset..offset + SAMPLES_FFT]);
+        let end_ms = end.saturating_mul(1000) / u64::from(SAMPLE_RATE);
+        self.finish_fft(&batch, end_ms);
+        self.next_end = end + hop;
+        let keep_from = self.next_end.saturating_sub(SAMPLES_FFT as u64);
+        let buf_start = self.samples_seen - self.sample_buffer.len() as u64;
+        if keep_from > buf_start {
+            let drop = (keep_from - buf_start) as usize;
+            let drop = drop.min(self.sample_buffer.len());
+            self.sample_buffer.drain(0..drop);
+        }
+        Some(self.build_packet())
+    }
+
+    fn finish_fft(&mut self, batch: &[f32; SAMPLES_FFT], now_ms: u64) {
+        self.samples.sim_time_ms = now_ms;
+        let (peak, mag) = self.fft.analyze(batch);
         self.fft_major_peak = peak;
         self.fft_magnitude = mag;
 
@@ -240,8 +282,11 @@ mod tests {
         for i in 0..900 {
             let t = i as f32 / 22050.0;
             let s = (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 14000.0;
-            a.ingest_mono_sample(s, i as u64 * 22);
+            a.ingest_mono_sample(s, i as u64);
         }
+        assert_eq!(Analyzer::departure_hop(50), 441);
+        assert_eq!(Analyzer::departure_hop(0), 22050);
+        assert!(a.take_departure(441).is_some());
         assert!(a.fft_frames() > 0);
         assert!(a.dominant_frequency() >= 1.0);
         let _ = a.fft_bands();
@@ -258,12 +303,56 @@ mod tests {
         a.samples.sim_time_ms = 250;
         a.detect_fft_peak();
 
-        a.sample_buffer = vec![0.2; crate::audio::fft::SAMPLES_FFT];
         a.samples.sample_avg = 0.4;
         a.samples.sample_agc = 0.2;
         a.samples.sound_agc = AgcMode::Normal;
         a.samples.mult_agc = 1.5;
-        a.run_fft(10_000);
+        a.finish_fft(&[0.2; crate::audio::fft::SAMPLES_FFT], 10_000);
         a.set_stream_active(true);
+    }
+
+    fn push_level(a: &mut Analyzer, n: usize, level: f32) {
+        let seen = a.samples_seen;
+        for i in 0..n {
+            a.ingest_mono_sample(level, seen + i as u64);
+        }
+    }
+
+    #[test]
+    fn each_departure_renders_once_and_a_burst_keeps_both_windows() {
+        let mut a = Analyzer::new(AgcMode::Off);
+        push_level(&mut a, 512, 0.0);
+        let first = a.take_departure(441).expect("first window");
+        assert!(a.take_departure(441).is_none());
+        assert!(first.fft_result.iter().all(|&b| b == 0));
+
+        let seen = a.samples_seen as usize;
+        for i in 0..441 {
+            let t = (seen + i) as f32 / 22050.0;
+            let s = (t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 14_000.0;
+            a.ingest_mono_sample(s, (seen + i) as u64);
+        }
+        let second = a.take_departure(441).expect("second window");
+        assert!(a.take_departure(441).is_none());
+        assert!(second.fft_result.iter().any(|&b| b > 0));
+        assert_ne!(first.fft_result, second.fft_result);
+    }
+
+    #[test]
+    fn stalled_departures_keep_the_newest_window() {
+        let mut a = Analyzer::new(AgcMode::Off);
+        push_level(&mut a, 512 + 441 * 10, 1_000.0);
+        assert!(a.take_departure(441).is_some());
+        assert!(a.take_departure(441).is_none());
+        assert_eq!(a.fft_frames(), 1);
+    }
+
+    #[test]
+    fn sample_buffer_cap_still_renders_the_newest_window() {
+        let mut a = Analyzer::new(AgcMode::Off);
+        push_level(&mut a, crate::audio::fft::SAMPLE_RATE as usize + 8, 2_000.0);
+        assert!(a.sample_buffer.len() <= crate::audio::fft::SAMPLE_RATE as usize);
+        assert!(a.take_departure(441).is_some());
+        assert!(a.take_departure(441).is_none());
     }
 }

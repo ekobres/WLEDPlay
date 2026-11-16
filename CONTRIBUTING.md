@@ -2,6 +2,23 @@
 
 WLEDPlay is a LAN appliance: Shairport Sync and NQPTP are separate processes, and the Rust binary analyzes PCM and sends WLED UDP. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before changing join policy, timing, or the optional upstream patches.
 
+## PCM without AirPlay
+
+A PCM file exercises the analyzer and the WLED UDP path without Shairport. The file default is 44100 Hz stereo S16LE. A live Shairport source already emits PCM in real time, so that path uses `--no-realtime`. A file still needs pacing, which is the default.
+
+```bash
+cargo build --release
+python3 scripts/gen_test_pcm.py -o /tmp/test.pcm
+./scripts/ensure-config.sh
+cat /tmp/test.pcm | ./target/release/wledplay --config config/config.yaml --input stdin
+```
+
+Set the controller to Audio Reactive, Sync Mode Receive, port 11988. WLEDPlay stops UDP shortly after the PCM ends and exits when stdin closes.
+
+```bash
+cargo run -- --input stdin --pcm-rate 44100 --pcm-channels 2 < /tmp/test.pcm
+```
+
 ## Checks
 
 ```bash
