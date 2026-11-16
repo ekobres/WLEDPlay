@@ -12,28 +12,44 @@ if [ -f "$HOST_CFG/shairport-sync.conf" ]; then
 elif [ -f "$HOST_CFG/shairport-sync-example.conf" ]; then
   SHAIRPORT_SRC="$HOST_CFG/shairport-sync-example.conf"
 fi
+# Read one `key: value` from a top-level YAML section. Controller rows also use
+# `name` and `unicast`, so an unscoped search would treat `unicast: false` as
+# the unicast NIC and the process would exit at startup.
 yaml_scalar() {
   key=$1
+  section=$2
   [ -f "$CFG_YAML" ] || return 0
-  val=$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*\"\\(.*\\)\"[[:space:]]*$/\\1/p" "$CFG_YAML" 2>/dev/null | head -1)
-  if [ -n "$val" ]; then
-    printf '%s' "$val"
-    return
-  fi
-  sed -n "s/^[[:space:]]*${key}:[[:space:]]*\\([^#[:space:]\"].*\\)$/\\1/p" "$CFG_YAML" 2>/dev/null | head -1 | tr -d '[:space:]'
+  awk -v section="$section" -v key="$key" '
+    $0 ~ "^" section ":" { inside = 1; next }
+    inside && $0 ~ "^[^[:space:]#]" { exit }
+    inside {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line !~ "^" key ":") next
+      sub("^" key ":[[:space:]]*", "", line)
+      if (line ~ /^".*"$/) {
+        sub(/^"/, "", line)
+        sub(/"$/, "", line)
+      }
+      if (line != "") print line
+      exit
+    }
+  ' "$CFG_YAML"
 }
 
 pick_env() {
   var=$1
   key=$2
+  section=$3
   eval "cur=\${$var:-}"
   if [ -z "$cur" ]; then
-    cur=$(yaml_scalar "$key")
+    cur=$(yaml_scalar "$key" "$section")
     eval "$var=\$cur"
   fi
 }
 
-pick_env WLEDPLAY_AIRPLAY_NAME name
+pick_env WLEDPLAY_AIRPLAY_NAME name airplay
 WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-WLEDPlay}"
 WLEDPLAY_MULTICAST_ADDRESS="${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
 WLEDPLAY_PORT="${WLEDPLAY_PORT:-11988}"
@@ -42,10 +58,10 @@ WLEDPLAY_PCM_RATE="${WLEDPLAY_PCM_RATE:-48000}"
 WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
 WLEDPLAY_DESTINATION="${WLEDPLAY_DESTINATION:-}"
-pick_env WLEDPLAY_HTTP_INTERFACE http
-pick_env WLEDPLAY_AIRPLAY_INTERFACE airplay
-pick_env WLEDPLAY_UNICAST_INTERFACE unicast
-pick_env WLEDPLAY_MULTICAST_INTERFACE multicast
+pick_env WLEDPLAY_HTTP_INTERFACE http network
+pick_env WLEDPLAY_AIRPLAY_INTERFACE airplay network
+pick_env WLEDPLAY_UNICAST_INTERFACE unicast network
+pick_env WLEDPLAY_MULTICAST_INTERFACE multicast network
 export WLEDPLAY_HTTP_INTERFACE WLEDPLAY_AIRPLAY_INTERFACE
 export WLEDPLAY_UNICAST_INTERFACE WLEDPLAY_MULTICAST_INTERFACE
 WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"

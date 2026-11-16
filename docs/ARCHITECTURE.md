@@ -14,7 +14,7 @@ flowchart LR
   analyzer --> wled[WLED UDP 11988]
 ```
 
-`docker/entrypoint.sh` starts dbus, Avahi, NQPTP, Shairport Sync, the Auto Join sidecar, and `wledplay`. Rust is the config authority. Before exec, the shell reads a few top-level scalars from YAML with `sed` so it can fill environment variables. Nested settings are loaded by the Rust process, not by the shell.
+`docker/entrypoint.sh` starts dbus, Avahi, NQPTP, Shairport Sync, the Auto Join sidecar, and `wledplay`. Rust is the config authority. Before exec, the shell reads `airplay.name` and the `network` interface pins from their own YAML sections so it can fill environment variables. A controller row's `name` or `unicast` flag is not one of those pins. Nested settings are loaded by the Rust process, not by the shell.
 
 ## Modules
 
