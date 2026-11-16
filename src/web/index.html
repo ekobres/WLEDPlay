@@ -181,7 +181,7 @@
     .wled-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
     .wled-table th, .wled-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
     .wled-table input[type="text"] { width: 100%; }
-    .wled-table input[type="number"] { width: 72px; }
+    .wled-table input[type="number"] { width: 7rem; padding: 8px 4px 8px 8px; }
     button.info {
       width: 18px; height: 18px; padding: 0; border-radius: 50%;
       background: #1d243c; color: var(--muted); border: 1px solid var(--line);
@@ -1003,6 +1003,7 @@
     let wledDismissed = [];
     let wledBaseline = "";
     let wledBounds = { min_delay_ms: -5000, max_delay_ms: 5000 };
+    let wledHoldRenderUntil = 0;
 
     function wledKey(rows, dismissed) {
       const body = (rows || []).map((r) => ({
@@ -1040,6 +1041,7 @@
         const addr = document.createElement("td");
         addr.textContent = row.address || "";
         const online = document.createElement("td");
+        online.dataset.online = "1";
         online.textContent = row.online ? "yes" : "no";
         const flag = document.createElement("input");
         flag.type = "checkbox";
@@ -1098,17 +1100,46 @@
 
     let wledReady = false;
 
+    function wledEditing() {
+      const active = document.activeElement;
+      const table = $("ctl-wled");
+      if (active && table.contains(active) && active !== table) return true;
+      return performance.now() < wledHoldRenderUntil;
+    }
+
+    function paintWledOnline(nextRows) {
+      const rows = $("ctl-wled").querySelectorAll("tbody tr");
+      if (rows.length !== wledRows.length || rows.length !== nextRows.length) return false;
+      nextRows.forEach((row, i) => {
+        wledRows[i].online = !!row.online;
+        const cell = rows[i].querySelector("[data-online]");
+        if (cell) cell.textContent = row.online ? "yes" : "no";
+      });
+      rows.forEach((tr) => {
+        const delay = tr.querySelector('input[type="number"]');
+        if (!delay) return;
+        delay.min = String(wledBounds.min_delay_ms);
+        delay.max = String(wledBounds.max_delay_ms);
+      });
+      return true;
+    }
+
     async function refreshWled(force) {
-      if (!force && isLiveDirty()) return;
+      if (!force && (isLiveDirty() || wledEditing())) return;
       try {
         const d = await fetch("/wled/controllers").then((r) => r.json());
+        if (!force && (isLiveDirty() || wledEditing())) return;
         wledBounds = {
           min_delay_ms: Number(d.min_delay_ms) || 0,
           max_delay_ms: Number(d.max_delay_ms) || 0
         };
-        wledRows = (d.controllers || []).map((r) => Object.assign({}, r));
-        wledDismissed = (d.dismissed || []).slice();
-        wledBaseline = wledKey(wledRows, wledDismissed);
+        const nextRows = (d.controllers || []).map((r) => Object.assign({}, r));
+        const nextDismissed = (d.dismissed || []).slice();
+        const nextKey = wledKey(nextRows, nextDismissed);
+        if (!force && wledReady && nextKey === wledBaseline && paintWledOnline(nextRows)) return;
+        wledRows = nextRows;
+        wledDismissed = nextDismissed;
+        wledBaseline = nextKey;
         wledReady = true;
         renderWled();
       } catch { /* ignore */ }
@@ -1470,6 +1501,10 @@
       paintHint(lastConfig);
       syncActionButtons();
     };
+
+    $("ctl-wled").addEventListener("pointerdown", () => {
+      wledHoldRenderUntil = performance.now() + 1500;
+    });
 
     $("rescan-wled").onclick = async () => {
       await fetch("/wled/rescan", { method: "POST" });

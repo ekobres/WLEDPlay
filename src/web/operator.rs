@@ -212,6 +212,7 @@ mod tests {
         assert!(html.contains("Delay (ms)"));
         assert!(html.contains("name_locked"));
         assert!(html.contains("function refreshWled"));
+        assert!(html.contains("function wledEditing"));
         assert!(html.contains("wledBaseline"));
         assert!(html.contains("Targets scanned"));
         assert!(html.contains("aj.snapshot_at"));
