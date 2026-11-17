@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libplist3 libuuid1 libpopt0 libsodium23 \
     libavahi-client3 libavahi-common3 \
     libavcodec59 libavformat59 libavutil57 libswresample4 \
-    python3 python3-pip python3-dbus python3-gi gir1.2-glib-2.0 iproute2 \
+    python3 python3-pip python3-dbus python3-gi gir1.2-glib-2.0 iproute2 tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages 'pyatv==0.16.1' 'srptools==1.0.1'
 

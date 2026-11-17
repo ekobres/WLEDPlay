@@ -41,6 +41,7 @@ network:
 
 logging:
   # error, warn, info, debug, or trace. The Logs card can change this while running.
+  # debug and trace add one analysis line per second while audio is playing.
   level: info
 
 web:

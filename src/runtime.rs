@@ -93,12 +93,16 @@ pub fn enqueue_packet(
     packet: AudioSyncPacket,
     delay_ms: u64,
     now: Instant,
-) {
-    enqueue_packet_at(queue, packet, now + Duration::from_millis(delay_ms));
+) -> usize {
+    enqueue_packet_at(queue, packet, now + Duration::from_millis(delay_ms))
 }
 
-pub fn enqueue_packet_at(queue: &mut VecDeque<DelayItem>, packet: AudioSyncPacket, due: Instant) {
-    insert_due(queue, (due, packet, vec![PacketTarget::Fanout]));
+pub fn enqueue_packet_at(
+    queue: &mut VecDeque<DelayItem>,
+    packet: AudioSyncPacket,
+    due: Instant,
+) -> usize {
+    insert_due(queue, (due, packet, vec![PacketTarget::Fanout]))
 }
 
 pub fn enqueue_departure(
@@ -107,7 +111,8 @@ pub fn enqueue_departure(
     base: Instant,
     multicast: bool,
     unicast: &[(SocketAddr, i32)],
-) {
+) -> usize {
+    let mut dropped = 0;
     let mut groups: Vec<(i32, Vec<PacketTarget>)> = Vec::new();
     if multicast {
         groups.push((0, vec![PacketTarget::Multicast]));
@@ -120,11 +125,12 @@ pub fn enqueue_departure(
         }
     }
     for (offset_ms, targets) in groups {
-        insert_due(
+        dropped += insert_due(
             queue,
             (shift_due_ms(base, offset_ms), packet.clone(), targets),
         );
     }
+    dropped
 }
 
 fn shift_due_ms(base: Instant, offset_ms: i32) -> Instant {
@@ -139,15 +145,18 @@ fn shift_due_ms(base: Instant, offset_ms: i32) -> Instant {
     }
 }
 
-fn insert_due(queue: &mut VecDeque<DelayItem>, item: DelayItem) {
+fn insert_due(queue: &mut VecDeque<DelayItem>, item: DelayItem) -> usize {
     let pos = queue
         .iter()
         .position(|(due, _, _)| *due > item.0)
         .unwrap_or(queue.len());
     queue.insert(pos, item);
+    let mut dropped = 0;
     while queue.len() > DELAY_QUEUE_MAX {
         queue.pop_back();
+        dropped += 1;
     }
+    dropped
 }
 
 /// Send time for the next window. Windows from one wake are spaced by
@@ -353,9 +362,28 @@ pub struct SendLoop {
     /// Next free send time on the monotonic `Instant` clock. Only the event
     /// loop reserves slots, and it advances this while it holds the PCM lock.
     pub next_due: Option<Instant>,
+    /// Newest delay-queue entries discarded because the queue was full.
+    pub delay_drops: u64,
+    analysis_prev: Option<AnalysisCounters>,
 }
 
 impl SendLoop {
+    /// One debug line, or nothing when idle and the counters are unchanged.
+    pub fn analysis_line(
+        &mut self,
+        status: &SharedStatus,
+        active: bool,
+        packets_this_sec: u64,
+    ) -> Option<String> {
+        note_analysis_log(
+            status,
+            active,
+            packets_this_sec,
+            self.delay_drops,
+            &mut self.analysis_prev,
+        )
+    }
+
     pub fn on_update(
         &mut self,
         rt: &mut PcmRuntime,
@@ -409,13 +437,13 @@ impl SendLoop {
                     break;
                 };
                 publish_audio(status, rt, cfg, pkt.sample_peak != 0);
-                enqueue_departure(
+                self.delay_drops += enqueue_departure(
                     &mut self.delay_q,
                     pkt,
                     due,
                     cfg.wled.multicast_enabled,
                     &crate::config::unicast_delay_targets(cfg),
-                );
+                ) as u64;
                 due += interval;
                 slot += 1;
             }
@@ -426,13 +454,13 @@ impl SendLoop {
         } else if self.udp_active {
             let pkt = rt.analyzer.silence_packet();
             publish_audio(status, rt, cfg, false);
-            enqueue_departure(
+            self.delay_drops += enqueue_departure(
                 &mut self.delay_q,
                 pkt,
                 now + Duration::from_millis(delay_ms),
                 cfg.wled.multicast_enabled,
                 &crate::config::unicast_delay_targets(cfg),
-            );
+            ) as u64;
             self.idle_packets_sent += 1;
             if self.idle_packets_sent >= IDLE_GRACE_PACKETS {
                 self.udp_active = false;
@@ -503,6 +531,79 @@ pub fn update_status(
         .map(|t| now.saturating_duration_since(t).as_secs_f32())
         .unwrap_or(0.0);
     s.metadata.refresh_position(rt.stream_active);
+}
+
+/// Counters compared between once-per-second analysis lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnalysisCounters {
+    pub packets_this_sec: u64,
+    pub udp_errors: u64,
+    pub underruns: u64,
+    pub overruns: u64,
+    pub drops: u64,
+}
+
+pub fn should_log_analysis(
+    active: bool,
+    prev: Option<&AnalysisCounters>,
+    next: &AnalysisCounters,
+) -> bool {
+    if active {
+        return true;
+    }
+    match prev {
+        Some(prev) => prev != next,
+        None => false,
+    }
+}
+
+pub fn format_analysis_line(
+    rms: f32,
+    peak: bool,
+    freq: f32,
+    bands: &[u8; 16],
+    counters: &AnalysisCounters,
+    offset_ms: i32,
+) -> String {
+    let peak = u8::from(peak);
+    format!(
+        "audio rms={rms:.3} peak={peak} freq={freq:.1} Hz bands={bands:?} packets={} udp_errors={} underruns={} overruns={} drops={} offset_ms={offset_ms}",
+        counters.packets_this_sec,
+        counters.udp_errors,
+        counters.underruns,
+        counters.overruns,
+        counters.drops,
+    )
+}
+
+pub fn note_analysis_log(
+    status: &SharedStatus,
+    active: bool,
+    packets_this_sec: u64,
+    drops: u64,
+    prev: &mut Option<AnalysisCounters>,
+) -> Option<String> {
+    let snap = status.lock().unwrap();
+    let next = AnalysisCounters {
+        packets_this_sec,
+        udp_errors: snap.counters.udp_errors,
+        underruns: snap.counters.pcm_underruns,
+        overruns: snap.counters.analysis_overruns,
+        drops,
+    };
+    let log = should_log_analysis(active, prev.as_ref(), &next);
+    *prev = Some(next);
+    if !log {
+        return None;
+    }
+    Some(format_analysis_line(
+        snap.audio.rms,
+        snap.audio.peak,
+        snap.audio.dominant_frequency,
+        &snap.audio.bands,
+        &next,
+        snap.audio.sync_offset_ms,
+    ))
 }
 
 pub fn apply_transmitted_packet(audio: &mut AudioStatus, pkt: &AudioSyncPacket) {
@@ -720,9 +821,85 @@ mod tests {
         for _ in 0..DELAY_QUEUE_MAX {
             enqueue_packet(&mut q, AudioSyncPacket::silence(), 0, now);
         }
-        enqueue_packet(&mut q, AudioSyncPacket::silence(), 1_000, now);
+        assert_eq!(
+            enqueue_packet(&mut q, AudioSyncPacket::silence(), 1_000, now),
+            1
+        );
         assert_eq!(q.len(), DELAY_QUEUE_MAX);
         assert!(q.iter().all(|(due, _, _)| *due == now));
+    }
+
+    #[test]
+    fn enqueue_counts_each_overflow_when_the_queue_is_already_over_cap() {
+        let mut q = VecDeque::new();
+        let now = Instant::now();
+        for _ in 0..DELAY_QUEUE_MAX + 2 {
+            q.push_back((now, AudioSyncPacket::silence(), vec![]));
+        }
+        assert_eq!(
+            enqueue_packet(&mut q, AudioSyncPacket::silence(), 0, now),
+            3
+        );
+        assert_eq!(q.len(), DELAY_QUEUE_MAX);
+    }
+
+    #[test]
+    fn analysis_line_follows_the_stream_and_counter_changes() {
+        let idle = AnalysisCounters {
+            packets_this_sec: 0,
+            udp_errors: 0,
+            underruns: 0,
+            overruns: 0,
+            drops: 0,
+        };
+        let busy = AnalysisCounters { drops: 2, ..idle };
+        assert!(should_log_analysis(true, None, &idle));
+        assert!(!should_log_analysis(false, None, &idle));
+        assert!(!should_log_analysis(false, Some(&idle), &idle));
+        assert!(should_log_analysis(false, Some(&idle), &busy));
+
+        let bands = [0u8; 16];
+        let line = format_analysis_line(0.125, true, 440.0, &bands, &busy, 1200);
+        assert!(line.contains("rms=0.125"));
+        assert!(line.contains("peak=1"));
+        assert!(line.contains("freq=440.0"));
+        assert!(line.contains("packets=0"));
+        assert!(line.contains("drops=2"));
+        assert!(line.contains("offset_ms=1200"));
+
+        let status = status();
+        {
+            let mut snap = status.lock().unwrap();
+            snap.audio.rms = 0.5;
+            snap.audio.peak = true;
+            snap.audio.dominant_frequency = 100.0;
+            snap.audio.bands[0] = 9;
+            snap.audio.sync_offset_ms = 40;
+            snap.counters.udp_errors = 1;
+            snap.counters.pcm_underruns = 2;
+            snap.counters.analysis_overruns = 3;
+        }
+        let mut prev = None;
+        assert!(note_analysis_log(&status, false, 0, 0, &mut prev).is_none());
+        let line = note_analysis_log(&status, false, 4, 1, &mut prev).unwrap();
+        assert!(line.contains("packets=4"));
+        assert!(line.contains("udp_errors=1"));
+        assert!(line.contains("underruns=2"));
+        assert!(line.contains("overruns=3"));
+        assert!(line.contains("drops=1"));
+        assert!(line.contains("offset_ms=40"));
+        assert!(line.contains("bands=[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]"));
+        assert!(note_analysis_log(&status, false, 4, 1, &mut prev).is_none());
+        let active = note_analysis_log(&status, true, 4, 1, &mut prev).unwrap();
+        assert!(active.contains("rms=0.500"));
+        assert!(active.contains("peak=1"));
+
+        let mut sl = SendLoop::default();
+        assert!(sl.analysis_line(&status, false, 0).is_none());
+        sl.delay_drops = 1;
+        let from_loop = sl.analysis_line(&status, false, 4).unwrap();
+        assert!(from_loop.contains("drops=1"));
+        assert!(sl.analysis_line(&status, false, 4).is_none());
     }
 
     #[test]

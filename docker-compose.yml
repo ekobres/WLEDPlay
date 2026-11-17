@@ -13,6 +13,8 @@ services:
       # Local yaml/conf are gitignored. ./scripts/ensure-config.sh copies examples
       # if missing. Entrypoint prefers local files, then examples, then image defaults.
       - ./config:/host-config
+      # Host zone file, so WLEDPlay log timestamps match local time.
+      - /etc/localtime:/etc/localtime:ro
     environment:
       WLEDPLAY_AIRPLAY_NAME: "${WLEDPLAY_AIRPLAY_NAME:-}"
       WLEDPLAY_MULTICAST_ADDRESS: "${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"

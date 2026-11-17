@@ -357,6 +357,7 @@ pub fn event_loop_tick(
         let rt = runtime.lock().unwrap();
         let live = live_cfg.lock().unwrap();
         let snd = sender.lock().unwrap();
+        let active = rt.stream_active;
         update_status(
             status,
             &rt,
@@ -367,6 +368,9 @@ pub fn event_loop_tick(
             &live,
             now,
         );
+        if let Some(line) = loop_state.analysis_line(status, active, *packets_last_sec) {
+            tracing::debug!("{line}");
+        }
         *packets_last_sec = 0;
         *last_status = now;
     }

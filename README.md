@@ -129,7 +129,7 @@ Requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
 
 Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
 
-The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are their own output, Shairport's log is stderr (stdout stays the PCM FIFO), and `console.log` is the combined container output. Each file keeps its last 2 MB after it grows past 8 MB. The Logs card reads those files.
+The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are their own output, Shairport's log is stderr (stdout stays the PCM FIFO), and `console.log` is the combined container output. Each file keeps its last 2 MB after it grows past 8 MB. The Logs card reads those files. WLEDPlay lines are stamped in the container's local time with a numeric offset such as `-05:00` or `+00:00`. Compose mounts `/etc/localtime` so that clock matches the host, and the image includes `tzdata` so an explicit `TZ` works when the mount is absent. Debug and trace add one analysis line per second while audio is playing (RMS, peak, frequency, FFT bands, packet counters, delay-queue drops, and the timing offset), and another line when one of those counters changes while idle.
 
 No `/dev/snd` required.
 
