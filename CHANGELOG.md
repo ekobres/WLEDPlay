@@ -3,7 +3,7 @@
 ## Unreleased
 
 - A track change publishes the new title and artist together, and the cover art is replaced instead of keeping the previous picture. The once-per-second debug line reports UDP sends, audio frames, and whether a peak occurred during that second.
-- Startup waits about five seconds for the Auto Join sidecar port, keeps watching for the NQPTP clock file, and asks Compose for realtime scheduling so Shairport can set it. Auto Join waits while this receiver is not advertised yet.
+- Startup waits about five seconds for the Auto Join sidecar port, keeps watching for the NQPTP clock file, and grants Shairport `SYS_NICE` so it can set realtime scheduling. An `rtprio` limit is not set, because the runtime rejects it and will not start the container. Auto Join waits while this receiver is not advertised yet.
 - WLEDPlay log timestamps use local time with a numeric offset. Debug and trace record RMS, peak, frequency, FFT bands, packet counters, delay-queue drops, and the timing offset about once a second while audio is playing.
 - The Logs card shows WLEDPlay, Shairport Sync, NQPTP, and the container console. It follows the end, scrolls back, searches, downloads, and colors each line by level. The WLEDPlay level applies immediately and is saved. Each log keeps its last 2 MB after it passes 8 MB.
 - AirPlay player records are resolved on the AirPlay NIC. A sighting on the unicast NIC no longer takes the only resolve slot, which was dropping the session player list.

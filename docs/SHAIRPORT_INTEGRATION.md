@@ -198,7 +198,7 @@ Use **`network_mode: host`** because WLEDPlay requires:
 
 - Bonjour/mDNS (AirPlay advertisement) on IPv4 and IPv6. With the default Shairport patch, timing peers are the AirPlay interface's global addresses, both families. Link-local addresses and other NICs are left out, and NQPTP watches every address the client offers. A stock build advertises every up, non-loopback address on every NIC.
 - UDP multicast to WLED (`239.0.0.1:11988`)
-- AirPlay 2 PTP (NQPTP). The entrypoint waits up to 5 seconds for `/dev/shm/nqptp`, then keeps watching for it. Compose grants `SYS_NICE` and `rtprio` so Shairport can set realtime scheduling.
+- AirPlay 2 PTP (NQPTP). The entrypoint waits up to 5 seconds for `/dev/shm/nqptp`, then keeps watching for it. Compose grants `SYS_NICE` so Shairport can set realtime scheduling. An `rtprio` limit is not set, because the runtime rejects it and will not start the container.
 
 No `- /dev/snd` mount required.
 
