@@ -54,6 +54,8 @@ WLEDPLAY_AIRPLAY_NAME="${WLEDPLAY_AIRPLAY_NAME:-WLEDPlay}"
 WLEDPLAY_MULTICAST_ADDRESS="${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
 WLEDPLAY_PORT="${WLEDPLAY_PORT:-11988}"
 WLEDPLAY_LOG_LEVEL="${WLEDPLAY_LOG_LEVEL:-info}"
+WLEDPLAY_LOG_DIR="${WLEDPLAY_LOG_DIR:-/var/log/wledplay}"
+export WLEDPLAY_LOG_DIR
 WLEDPLAY_PCM_RATE="${WLEDPLAY_PCM_RATE:-48000}"
 WLEDPLAY_PCM_CHANNELS="${WLEDPLAY_PCM_CHANNELS:-2}"
 WLEDPLAY_PCM_FORMAT="${WLEDPLAY_PCM_FORMAT:-s16le}"
@@ -76,6 +78,8 @@ SIDECAR_PID=""
 NQPTP_PID=""
 SHAIRPORT_PID=""
 WLEDPLAY_PID=""
+ROTATE_PID=""
+TEE_PIDS=""
 
 wait_for() {
   path=$1
@@ -87,6 +91,46 @@ wait_for() {
     i=$((i + 1))
   done
   return 1
+}
+
+# Each process log is also copied to the container console. The fifo is opened
+# read-write so tee does not block waiting for the writer. stdbuf flushes each
+# line so the Logs card sees it immediately. Files stay under 8MB.
+setup_logs() {
+  mkdir -p "$WLEDPLAY_LOG_DIR"
+  exec 3>&1
+  rm -f "$WLEDPLAY_LOG_DIR/console.fifo"
+  mkfifo "$WLEDPLAY_LOG_DIR/console.fifo"
+  stdbuf -oL tee -a "$WLEDPLAY_LOG_DIR/console.log" <>"$WLEDPLAY_LOG_DIR/console.fifo" >&3 &
+  TEE_PIDS="$TEE_PIDS $!"
+  exec >"$WLEDPLAY_LOG_DIR/console.fifo" 2>&1
+  rotate_logs &
+  ROTATE_PID=$!
+}
+
+start_log_tee() {
+  name=$1
+  fifo="$WLEDPLAY_LOG_DIR/$name.fifo"
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  stdbuf -oL tee -a "$WLEDPLAY_LOG_DIR/$name.log" <>"$fifo" &
+  TEE_PIDS="$TEE_PIDS $!"
+}
+
+rotate_logs() {
+  while true; do
+    sleep 60
+    for name in wledplay shairport nqptp console; do
+      file="$WLEDPLAY_LOG_DIR/$name.log"
+      [ -f "$file" ] || continue
+      size=$(wc -c < "$file" 2>/dev/null || echo 0)
+      if [ "$size" -gt 8388608 ]; then
+        tail -c 2097152 "$file" > "$file.part"
+        cat "$file.part" > "$file"
+        rm -f "$file.part"
+      fi
+    done
+  done
 }
 
 start_mdns() {
@@ -163,6 +207,9 @@ shutdown() {
   kill "$SIDECAR_PID" 2>/dev/null || true
   kill "$SHAIRPORT_PID" 2>/dev/null || true
   kill "$NQPTP_PID" 2>/dev/null || true
+  exec >&3 2>&3 || true
+  # shellcheck disable=SC2086
+  kill $TEE_PIDS "$ROTATE_PID" 2>/dev/null || true
   if [ -f /run/avahi-daemon/pid ]; then
     kill "$(cat /run/avahi-daemon/pid)" 2>/dev/null || true
   fi
@@ -173,10 +220,12 @@ shutdown() {
 }
 trap shutdown INT TERM
 
+setup_logs
 start_mdns
 
 echo "Starting nqptp..."
-nqptp &
+start_log_tee nqptp
+nqptp > "$WLEDPLAY_LOG_DIR/nqptp.fifo" 2>&1 &
 NQPTP_PID=$!
 # AirPlay 2 does not start the stdout backend until this clock exists.
 if ! wait_for /dev/shm/nqptp 50; then
@@ -233,6 +282,7 @@ echo "Starting Auto Join..."
 start_autojoin
 
 echo "Starting wledplay..."
+start_log_tee wledplay
 # shellcheck disable=SC2086
 /wledplay \
   --config "$CFG_YAML" \
@@ -244,11 +294,12 @@ echo "Starting wledplay..."
   --pcm-channels "${WLEDPLAY_PCM_CHANNELS}" \
   --pcm-format "${WLEDPLAY_PCM_FORMAT}" \
   $DEST_ARGS \
-  --metadata-pipe "$META_FIFO" &
+  --metadata-pipe "$META_FIFO" > "$WLEDPLAY_LOG_DIR/wledplay.fifo" 2>&1 &
 WLEDPLAY_PID=$!
 
 echo "Starting shairport-sync -> FIFO -> wledplay..."
-shairport-sync -c /tmp/shairport-sync.conf > "$PCM_FIFO" &
+start_log_tee shairport
+shairport-sync -c /tmp/shairport-sync.conf > "$PCM_FIFO" 2>"$WLEDPLAY_LOG_DIR/shairport.fifo" &
 SHAIRPORT_PID=$!
 
 echo "WLEDPlay stack running (AirPlay: ${WLEDPLAY_AIRPLAY_NAME}, WLED: ${WLEDPLAY_MULTICAST_ADDRESS}:${WLEDPLAY_PORT})"

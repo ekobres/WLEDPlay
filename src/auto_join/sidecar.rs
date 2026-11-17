@@ -219,7 +219,17 @@ fn spawn(base: &str, scan_every: Duration) -> AutoJoinHub {
     let wled_w = wled.clone();
     let worker = thread::Builder::new()
         .name("auto-join".into())
-        .spawn(move || serve_loop(base, scan_every, rx, discovery_w, watch_w, results_w, wled_w))
+        .spawn(move || {
+            serve_loop(
+                base,
+                scan_every,
+                rx,
+                discovery_w,
+                watch_w,
+                results_w,
+                wled_w,
+            )
+        })
         .expect("auto join thread");
     AutoJoinHub {
         epoch: Instant::now(),
@@ -1041,8 +1051,7 @@ mod tests {
         hub.drive(false, &auto, "WLEDPlay", Instant::now(), &status);
         assert!(!wled_flag.load(Ordering::Relaxed));
         let start = Instant::now();
-        while wled_rescans.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2)
-        {
+        while wled_rescans.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2) {
             thread::sleep(Duration::from_millis(20));
         }
         assert!(wled_rescans.load(Ordering::SeqCst) >= 1);

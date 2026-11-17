@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing_subscriber::EnvFilter;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -182,13 +181,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
     let mut cfg = Config::load(cli.config.as_deref());
     apply_cli(&mut cfg, &cli);
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&cfg.logging.level)),
-        )
-        .try_init()
-        .ok();
+    crate::logctl::install(&cfg.logging.level);
 
     let pace_realtime = pace_realtime(&cli);
     log_startup(&cfg, pace_realtime);
@@ -249,6 +242,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
             rescan: auto_join.rescan_flag(),
             wled_rescan: auto_join.wled_rescan_flag(),
             wled_seen: auto_join.wled_seen(),
+            log_dir: crate::logs::log_dir(),
         };
         tokio::spawn(async move {
             web::serve(&listen, port, state)

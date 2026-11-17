@@ -10,6 +10,7 @@ The HTTP server listens on `0.0.0.0:8080` unless you bind it to one interface. T
 - `POST /restart` restarts the stack. An AirPlay session can drop.
 - `POST /airplay/rescan` starts another AirPlay speaker lookup on the AirPlay network.
 - `GET /wled/controllers` lists saved and discovered WLED controllers. `POST /wled/rescan` starts another WLED lookup. `POST /wled/measure` requests `/json/info` from the controller addresses in the body. None of these routes authenticate.
+- `GET /logs` and `GET /logs/download` return process logs. `PATCH /config` with `log_level` changes the WLEDPlay log level. None of these authenticate.
 
 Anyone who can open that port can do both. `GET /status`, `GET /levels`, and `GET /artwork` also expose now-playing metadata and cover art.
 

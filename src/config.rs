@@ -1084,8 +1084,11 @@ mod tests {
                 name_locked: true,
             },
         ];
-        cfg.wled
-            .replace_send_list(vec!["192.0.2.11".into(), "nope".into(), "192.0.2.12".into()]);
+        cfg.wled.replace_send_list(vec![
+            "192.0.2.11".into(),
+            "nope".into(),
+            "192.0.2.12".into(),
+        ]);
         assert!(!cfg.wled.controllers[0].unicast);
         assert!(cfg.wled.controllers[1].unicast);
         assert_eq!(cfg.wled.controllers[1].delay_ms, 3);

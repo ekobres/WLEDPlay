@@ -97,11 +97,7 @@ pub fn enqueue_packet(
     enqueue_packet_at(queue, packet, now + Duration::from_millis(delay_ms));
 }
 
-pub fn enqueue_packet_at(
-    queue: &mut VecDeque<DelayItem>,
-    packet: AudioSyncPacket,
-    due: Instant,
-) {
+pub fn enqueue_packet_at(queue: &mut VecDeque<DelayItem>, packet: AudioSyncPacket, due: Instant) {
     insert_due(queue, (due, packet, vec![PacketTarget::Fanout]));
 }
 
@@ -942,7 +938,9 @@ mod tests {
             false,
             &[(later, 0)],
         );
-        assert!(q.iter().any(|item| item.0 == base && matches!(item.2.as_slice(), [PacketTarget::Unicast(_)])));
+        assert!(q
+            .iter()
+            .any(|item| item.0 == base && matches!(item.2.as_slice(), [PacketTarget::Unicast(_)])));
     }
 
     #[test]
@@ -950,20 +948,9 @@ mod tests {
         let mut q = VecDeque::new();
         let base = Instant::now() + Duration::from_millis(1200);
         let targets: Vec<(std::net::SocketAddr, i32)> = (1..=8)
-            .map(|n| {
-                (
-                    format!("192.0.2.{n}:11988").parse().unwrap(),
-                    0,
-                )
-            })
+            .map(|n| (format!("192.0.2.{n}:11988").parse().unwrap(), 0))
             .collect();
-        enqueue_departure(
-            &mut q,
-            AudioSyncPacket::silence(),
-            base,
-            true,
-            &targets,
-        );
+        enqueue_departure(&mut q, AudioSyncPacket::silence(), base, true, &targets);
         assert_eq!(q.len(), 1);
         assert_eq!(q[0].0, base);
         assert_eq!(q[0].2.len(), 9);

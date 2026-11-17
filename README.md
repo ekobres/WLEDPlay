@@ -84,6 +84,9 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 - `POST /wled/rescan` — look up WLED controllers again
 - `POST /wled/measure` — estimate each controller's delay from its LED count, frame rate, and a short network sample. The table stores those delays on Control Save
 - `POST /restart` — orderly process restart
+- `GET /logs` — lines from the WLEDPlay, Shairport Sync, NQPTP, or console log. `source` selects the file (`wledplay` by default). `tail`, `offset`, `before`, `q`, and `limit` select the window
+- `GET /logs/download` — that same file as a download
+- `PATCH /config` with `log_level` — sets the WLEDPlay tracing level (`error`, `warn`, `info`, `debug`, or `trace`) immediately and stores `logging.level`
 
 ## Configuration
 
@@ -117,13 +120,16 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 | `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `1` (default) applies `docker/shairport-mixed-stack.patch`; `0` builds stock 5.6.3 |
 | `WLEDPLAY_NQPTP_PATCH` | Build arg. `1` (default) applies `docker/nqptp-timing-peers.patch`; `0` builds stock 1.2.9 |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Live send delay in milliseconds (`audio.sync_offset_ms`). Negative values clamp to `0` |
-| `WLEDPLAY_LOG_LEVEL` | Log level |
+| `WLEDPLAY_LOG_LEVEL` | Log level at startup (`logging.level`). The Logs card can change the running level |
+| `WLEDPLAY_LOG_DIR` | Directory of `wledplay.log`, `shairport.log`, `nqptp.log`, and `console.log` (default `/var/log/wledplay`) |
 
 ## Docker
 
 Requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
 
 Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
+
+The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are their own output, Shairport's log is stderr (stdout stays the PCM FIFO), and `console.log` is the combined container output. Each file keeps its last 2 MB after it grows past 8 MB. The Logs card reads those files.
 
 No `/dev/snd` required.
 

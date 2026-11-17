@@ -4,6 +4,8 @@ pub mod auto_join;
 pub mod clock;
 pub mod config;
 pub mod control;
+pub mod logctl;
+pub mod logs;
 pub mod metadata;
 pub mod netif;
 pub mod pcm;

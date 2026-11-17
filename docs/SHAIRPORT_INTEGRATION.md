@@ -184,6 +184,8 @@ Container entrypoint order:
 4. Start **wledplay** (reads the PCM pipe)
 5. Start **shairport-sync** (stdout → pipe)
 
+WLEDPlay output, NQPTP output, and Shairport stderr are also copied to `/var/log/wledplay`. Shairport stdout stays the PCM FIFO. `console.log` is the combined container output. Each file keeps its last 2 MB after it passes 8 MB.
+
 On SIGTERM the entrypoint stops wledplay, the sidecar, shairport-sync, nqptp, Avahi, and dbus.
 
 If `wledplay` exits, the entrypoint shuts the stack down and the container exits 0. `POST /restart` uses that path. If shairport-sync, nqptp, or the sidecar exits first, the entrypoint shuts the stack down and the container exits 1. Compose `restart: unless-stopped` starts the whole stack again either way.

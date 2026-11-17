@@ -324,6 +324,26 @@ mod tests {
         let level_at = html.find("id=\"levelbar\"").expect("levelbar");
         let stats_at = html.find("id=\"counters\"").expect("counters");
         assert!(stats_at < level_at && level_at < bands_at);
+        assert!(html.contains("data-card=\"log\""));
+        assert!(html.contains("id=\"sum-log\""));
+        assert!(html.contains("id=\"log-source\""));
+        assert!(html.contains("<option value=\"wledplay\" selected>WLEDPlay</option>"));
+        assert!(html.contains(">Shairport Sync</option>"));
+        assert!(html.contains(">NQPTP</option>"));
+        assert!(html.contains(">Console</option>"));
+        assert!(html.contains("id=\"log-level\""));
+        assert!(html.contains("id=\"log-tail\""));
+        assert!(html.contains("id=\"log-search\""));
+        assert!(html.contains("id=\"log-download\""));
+        assert!(html.contains("id=\"log-view\""));
+        assert!(html.contains("function refreshLogs"));
+        assert!(html.contains("function logTick"));
+        assert!(html.contains(".log-line.error"));
+        assert!(html.contains(".log-line.warn"));
+        assert!(html.contains(".log-line.info"));
+        assert!(html.contains(".log-line.debug"));
+        assert!(html.contains(".log-line.trace"));
+        assert!(html.contains("/logs/download"));
     }
 
     #[test]

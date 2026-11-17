@@ -7,11 +7,11 @@ pub use operator::{
 
 use crate::clock::{self, ClockSession, ClockStatus};
 use crate::config::{delay_ms_bounds, merge_controllers, WledSight};
-use crate::wled::{measure_delays, MeasureInput};
 use crate::control::{ConfigPatch, Control};
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceInfo;
-use axum::extract::State;
+use crate::wled::{measure_delays, MeasureInput};
+use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -19,6 +19,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -31,6 +32,7 @@ pub struct AppState {
     pub rescan: Arc<AtomicBool>,
     pub wled_rescan: Arc<AtomicBool>,
     pub wled_seen: Arc<Mutex<Vec<WledSight>>>,
+    pub log_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +255,8 @@ pub fn router(state: AppState) -> Router {
         .route("/wled/controllers", get(wled_controllers))
         .route("/wled/rescan", post(wled_rescan_handler))
         .route("/wled/measure", post(wled_measure))
+        .route("/logs", get(logs_handler))
+        .route("/logs/download", get(logs_download))
         .route("/restart", post(restart_handler))
         .with_state(state)
 }
@@ -396,9 +400,106 @@ async fn config_patch(State(state): State<AppState>, Json(patch): Json<ConfigPat
     let Some(ctrl) = &state.control else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let level_change = patch.log_level.is_some();
     match ctrl.apply_patch(patch) {
-        Ok(view) => Json(view).into_response(),
+        Ok(view) => {
+            if level_change {
+                let level = ctrl.config.lock().unwrap().logging.level.clone();
+                let _ = crate::logctl::reload(&level);
+            }
+            Json(view).into_response()
+        }
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LogParams {
+    source: Option<String>,
+    tail: Option<bool>,
+    offset: Option<u64>,
+    before: Option<u64>,
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct LogBody {
+    #[serde(flatten)]
+    page: crate::logs::LogPage,
+    level: String,
+}
+
+fn current_log_level(state: &AppState) -> String {
+    match &state.control {
+        Some(ctrl) => ctrl.config.lock().unwrap().logging.level.clone(),
+        None => "info".into(),
+    }
+}
+
+fn log_request(params: &LogParams) -> crate::logs::LogRequest {
+    crate::logs::LogRequest {
+        source: params.source.clone().unwrap_or_else(|| "wledplay".into()),
+        tail: params.tail.unwrap_or(true),
+        offset: params.offset,
+        before: params.before,
+        query: params.q.clone().unwrap_or_default(),
+        limit: params.limit.unwrap_or(200),
+    }
+}
+
+fn log_disposition(name: &str) -> header::HeaderValue {
+    match name {
+        "shairport.log" => {
+            header::HeaderValue::from_static("attachment; filename=\"shairport.log\"")
+        }
+        "nqptp.log" => header::HeaderValue::from_static("attachment; filename=\"nqptp.log\""),
+        "console.log" => header::HeaderValue::from_static("attachment; filename=\"console.log\""),
+        _ => header::HeaderValue::from_static("attachment; filename=\"wledplay.log\""),
+    }
+}
+
+async fn logs_handler(State(state): State<AppState>, Query(params): Query<LogParams>) -> Response {
+    match crate::logs::read_logs(&state.log_dir, &log_request(&params)) {
+        Ok(page) => Json(LogBody {
+            page,
+            level: current_log_level(&state),
+        })
+        .into_response(),
+        Err(crate::logs::LogReadError::BadSource) => (
+            StatusCode::BAD_REQUEST,
+            "log source must be wledplay, shairport, nqptp, or console",
+        )
+            .into_response(),
+        Err(crate::logs::LogReadError::Io(err)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, err).into_response()
+        }
+    }
+}
+
+async fn logs_download(State(state): State<AppState>, Query(params): Query<LogParams>) -> Response {
+    let source = params.source.unwrap_or_else(|| "wledplay".into());
+    match crate::logs::read_file(&state.log_dir, &source) {
+        Ok((name, bytes)) => {
+            let mut response = bytes.into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            response
+                .headers_mut()
+                .insert(header::CONTENT_DISPOSITION, log_disposition(&name));
+            response
+        }
+        Err(crate::logs::LogFileError::BadSource) => (
+            StatusCode::BAD_REQUEST,
+            "log source must be wledplay, shairport, nqptp, or console",
+        )
+            .into_response(),
+        Err(crate::logs::LogFileError::Missing) => StatusCode::NOT_FOUND.into_response(),
+        Err(crate::logs::LogFileError::Read(err)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, err).into_response()
+        }
     }
 }
 
@@ -450,7 +551,10 @@ async fn wled_measure(
     let (min_delay_ms, max_delay_ms) = match &state.control {
         Some(control) => {
             let cfg = control.config.lock().expect("config");
-            delay_ms_bounds(cfg.audio.sync_offset_ms, cfg.audio.shairport_latency_offset_s)
+            delay_ms_bounds(
+                cfg.audio.sync_offset_ms,
+                cfg.audio.shairport_latency_offset_s,
+            )
         }
         None => (0, 0),
     };
@@ -463,9 +567,7 @@ async fn wled_measure(
     Json(MeasureReport { results }).into_response()
 }
 
-async fn wled_controllers(
-    State(state): State<AppState>,
-) -> Json<crate::config::WledTable> {
+async fn wled_controllers(State(state): State<AppState>) -> Json<crate::config::WledTable> {
     let seen = state.wled_seen.lock().unwrap().clone();
     let table = match &state.control {
         Some(control) => {
@@ -516,6 +618,7 @@ mod tests {
             rescan: Arc::new(AtomicBool::new(false)),
             wled_rescan: Arc::new(AtomicBool::new(false)),
             wled_seen: Arc::new(Mutex::new(Vec::new())),
+            log_dir: std::env::temp_dir(),
         }
     }
 
@@ -552,6 +655,7 @@ mod tests {
                 rescan: Arc::new(AtomicBool::new(false)),
                 wled_rescan: Arc::new(AtomicBool::new(false)),
                 wled_seen: Arc::new(Mutex::new(Vec::new())),
+                log_dir: std::env::temp_dir(),
             },
             restart,
         )
@@ -1225,5 +1329,200 @@ mod tests {
         let text = String::from_utf8(body).unwrap();
         assert!(text.contains("not an IPv4 address"));
         assert!(text.contains("\"delay_ms\":4") || text.contains("\"delay_ms\": 4"));
+    }
+
+    #[test]
+    fn log_download_names() {
+        assert!(super::log_disposition("wledplay.log")
+            .to_str()
+            .unwrap()
+            .contains("wledplay.log"));
+        assert!(super::log_disposition("shairport.log")
+            .to_str()
+            .unwrap()
+            .contains("shairport.log"));
+        assert!(super::log_disposition("nqptp.log")
+            .to_str()
+            .unwrap()
+            .contains("nqptp.log"));
+        assert!(super::log_disposition("console.log")
+            .to_str()
+            .unwrap()
+            .contains("console.log"));
+        assert!(super::log_disposition("other")
+            .to_str()
+            .unwrap()
+            .contains("wledplay.log"));
+    }
+
+    #[tokio::test]
+    async fn logs_can_be_read_downloaded_and_the_level_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("wledplay.log"),
+            "2026-11-17T10:00:00Z INFO ready\n2026-11-17T10:00:01Z ERROR down\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("shairport.log"), "0.1: error: late\n").unwrap();
+        let (mut state, _) = control_state();
+        let cfg_path = dir.path().join("cfg.yaml");
+        std::fs::write(&cfg_path, "").unwrap();
+        state.log_dir = dir.path().to_path_buf();
+        state.control.as_mut().unwrap().config_path = Some(cfg_path.clone());
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder().uri("/logs").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("ready"));
+        assert!(text.contains("\"level\":\"info\"") || text.contains("\"level\": \"info\""));
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs?source=wledplay&tail=false&offset=0&q=error&limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("ERROR"));
+        assert!(!text.contains("ready"));
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs?source=nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs?source=nqptp")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs/download")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8(body).unwrap().contains("ready"));
+
+        let (status, body) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs/download?source=shairport")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(String::from_utf8(body).unwrap().contains("late"));
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs/download?source=nqptp")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .uri("/logs/download?source=../secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = send(
+            router(bare_state()),
+            Request::builder().uri("/logs").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("PATCH")
+                .uri("/config")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"log_level":"debug"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            state
+                .control
+                .as_ref()
+                .unwrap()
+                .config
+                .lock()
+                .unwrap()
+                .logging
+                .level,
+            "debug"
+        );
+        assert!(std::fs::read_to_string(&cfg_path)
+            .unwrap()
+            .contains("debug"));
+
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("PATCH")
+                .uri("/config")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"log_level":"verbose"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let broken = dir.path().join("broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::create_dir(broken.join("console.log")).unwrap();
+        let mut bad = bare_state();
+        bad.log_dir = broken;
+        let (status, _) = send(
+            router(bad.clone()),
+            Request::builder()
+                .uri("/logs?source=console")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let (status, _) = send(
+            router(bad),
+            Request::builder()
+                .uri("/logs/download?source=console")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

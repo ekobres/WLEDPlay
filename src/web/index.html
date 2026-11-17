@@ -63,6 +63,31 @@
     }
     .card-body { margin-top: 12px; }
     .card.collapsed .card-body { display: none; }
+    .log-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .log-bar select, .log-bar input[type="search"] {
+      width: auto; background: #0e1424; color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit;
+    }
+    .log-bar input[type="search"] { min-width: 12rem; flex: 1; }
+    .log-field {
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .log-field select { text-transform: none; letter-spacing: 0; font-size: 15px; }
+    .log-tail { display: inline-flex; align-items: center; gap: 6px; }
+    .log-view {
+      margin-top: 8px; max-height: 360px; overflow: auto;
+      background: #0e1424; border-radius: 8px; padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+    }
+    .log-line.error { color: var(--peak); }
+    .log-line.warn { color: #e0a045; }
+    .log-line.info { color: var(--text); }
+    .log-line.debug { color: var(--muted); }
+    .log-line.trace { color: #66708c; }
+    .log-empty { color: var(--muted); }
+    .log-view mark { background: #3d4d22; color: inherit; border-radius: 2px; }
     .track-card { display: flex; gap: 16px; align-items: center; }
     #art {
       width: 96px; height: 96px; object-fit: cover; border-radius: 8px;
@@ -516,6 +541,42 @@
       </div>
       </div>
     </div>
+    <div class="card" data-card="log">
+      <div class="card-head">
+        <button type="button" class="card-toggle" aria-expanded="true" aria-controls="body-log">
+          <span class="chevron" aria-hidden="true"></span>
+          <span class="label">Logs</span>
+        </button>
+        <span class="card-summary" id="sum-log">—</span>
+      </div>
+      <div class="card-body" id="body-log">
+        <div class="log-bar">
+          <label class="log-field" for="log-source">Log
+            <select id="log-source">
+              <option value="wledplay" selected>WLEDPlay</option>
+              <option value="shairport">Shairport Sync</option>
+              <option value="nqptp">NQPTP</option>
+              <option value="console">Console</option>
+            </select>
+          </label>
+          <label class="log-field" for="log-level">Level
+            <select id="log-level">
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info" selected>info</option>
+              <option value="debug">debug</option>
+              <option value="trace">trace</option>
+            </select>
+          </label>
+          <label class="log-tail"><input id="log-tail" type="checkbox" checked> Tail</label>
+          <input id="log-search" type="search" placeholder="Search lines" aria-label="Search log lines">
+          <button type="button" id="log-download">Download</button>
+        </div>
+        <div class="hint">Tail follows the newest lines. Scroll up for older ones. The level applies to WLEDPlay and is saved.</div>
+        <div class="hint" id="log-msg"></div>
+        <div id="log-view" class="log-view" role="log" aria-live="off" aria-label="Log lines"></div>
+      </div>
+    </div>
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -556,6 +617,15 @@
     let vizOn = true;
     let levelsTimer = 0;
     let statusTimer = 0;
+    let logTimer = 0;
+    let logEpoch = 0;
+    let logFollow = null;
+    let logLines = [];
+    let logAtStart = false;
+    let logStick = true;
+    let logLoading = false;
+    let logRendering = false;
+    let logPrepend = false;
     let lastPaintMs = 0;
     let shownRms = 0;
     let shownBeat = 0;
@@ -888,6 +958,10 @@
       const saved = readCardState();
       saved[id] = open;
       localStorage.setItem(CARD_STORE, JSON.stringify(saved));
+      if (id === "log" && open) {
+        logFollow = null;
+        refreshLogs();
+      }
     }
 
     function initCards() {
@@ -899,6 +973,239 @@
         if (!toggle) return;
         toggle.setAttribute("aria-expanded", open ? "true" : "false");
         toggle.addEventListener("click", () => setCardExpanded(id, card.classList.contains("collapsed")));
+      });
+    }
+
+    function nearBottom(el) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    }
+
+    function fillLine(el, text, q) {
+      el.replaceChildren();
+      if (!q) {
+        el.textContent = text;
+        return;
+      }
+      const lower = text.toLowerCase();
+      const needle = q.toLowerCase();
+      let i = 0;
+      while (i < text.length) {
+        const at = lower.indexOf(needle, i);
+        if (at < 0) {
+          el.append(document.createTextNode(text.slice(i)));
+          return;
+        }
+        if (at > i) el.append(document.createTextNode(text.slice(i, at)));
+        const mark = document.createElement("mark");
+        mark.textContent = text.slice(at, at + needle.length);
+        el.append(mark);
+        i = at + Math.max(needle.length, 1);
+      }
+    }
+
+    function paintLogSummary(time) {
+      $("sum-log").textContent = time || "—";
+    }
+
+    function syncLogLevel(level) {
+      const sel = $("log-level");
+      if (!level || document.activeElement === sel) return;
+      const known = [...sel.options].some((opt) => opt.value === level);
+      if (known) sel.value = level;
+    }
+
+    function renderLogs(stick) {
+      const box = $("log-view");
+      const atBottom = stick || nearBottom(box);
+      const prevHeight = box.scrollHeight;
+      const prevTop = box.scrollTop;
+      const q = $("log-search").value.trim();
+      logRendering = true;
+      box.replaceChildren();
+      if (!logLines.length) {
+        const empty = document.createElement("div");
+        empty.className = "log-empty";
+        if (box.dataset.missing === "1") empty.textContent = "No log file yet.";
+        else empty.textContent = q ? "No matching lines." : "Log is empty.";
+        box.appendChild(empty);
+      } else {
+        for (const line of logLines) {
+          const row = document.createElement("div");
+          row.className = "log-line" + (line.level ? " " + line.level : "");
+          fillLine(row, line.text, q);
+          box.appendChild(row);
+        }
+      }
+      if (logPrepend) box.scrollTop = box.scrollHeight - prevHeight + prevTop;
+      else if (atBottom) box.scrollTop = box.scrollHeight;
+      logRendering = false;
+    }
+
+    function mergeLogLines(incoming) {
+      if (!incoming.length) return;
+      const first = incoming[0].offset;
+      while (logLines.length && logLines[logLines.length - 1].offset >= first) logLines.pop();
+      logLines.push(...incoming);
+      if (logLines.length > 4000) logLines = logLines.slice(-4000);
+    }
+
+    async function getLog(source, opts) {
+      const params = new URLSearchParams({ source });
+      if (opts.tail != null) params.set("tail", opts.tail ? "true" : "false");
+      if (opts.offset != null) params.set("offset", String(opts.offset));
+      if (opts.before != null) params.set("before", String(opts.before));
+      if (opts.q) params.set("q", opts.q);
+      if (opts.limit) params.set("limit", String(opts.limit));
+      const res = await fetch("/logs?" + params.toString());
+      if (!res.ok) throw new Error((await res.text()) || "Log request failed");
+      return res.json();
+    }
+
+    async function loadOlder() {
+      if (logLoading || logAtStart || $("log-search").value.trim() || !logLines.length) return;
+      const epoch = logEpoch;
+      const source = $("log-source").value;
+      logLoading = true;
+      try {
+        const page = await getLog(source, { before: logLines[0].offset, limit: 200, tail: false });
+        if (epoch !== logEpoch) return;
+        const older = (page.lines || []).filter((line) => line.offset < logLines[0].offset);
+        if (!older.length) {
+          logAtStart = true;
+          return;
+        }
+        logLines = older.concat(logLines);
+        logAtStart = !!page.at_start;
+        logPrepend = true;
+        renderLogs(false);
+        logPrepend = false;
+      } catch (err) {
+        $("log-msg").textContent = err.message || "Log request failed";
+      } finally {
+        logLoading = false;
+      }
+    }
+
+    async function refreshLogs() {
+      const epoch = logEpoch;
+      const card = document.querySelector('[data-card="log"]');
+      const open = card && !card.classList.contains("collapsed");
+      const source = $("log-source").value;
+      const q = $("log-search").value.trim();
+      const tail = $("log-tail").checked;
+      try {
+        let page;
+        if (!open) {
+          page = await getLog(source, { tail: true, limit: 1 });
+          if (epoch !== logEpoch) return;
+          logFollow = null;
+        } else if (q) {
+          page = await getLog(source, { q, tail: true, limit: 200 });
+          if (epoch !== logEpoch) return;
+          logLines = page.lines || [];
+          logFollow = null;
+          logAtStart = true;
+          $("log-view").dataset.missing = page.missing ? "1" : "";
+          renderLogs(logStick);
+        } else if (tail && logFollow == null) {
+          page = await getLog(source, { tail: true, limit: 200 });
+          if (epoch !== logEpoch) return;
+          logLines = page.lines || [];
+          logFollow = page.next_offset;
+          logAtStart = !!page.at_start;
+          $("log-view").dataset.missing = page.missing ? "1" : "";
+          renderLogs(true);
+        } else if (tail) {
+          page = await getLog(source, { tail: false, offset: logFollow, limit: 200 });
+          if (epoch !== logEpoch) return;
+          if (page.reset) {
+            logFollow = null;
+            return;
+          }
+          if (page.lines && page.lines.length) {
+            const stick = logStick && nearBottom($("log-view"));
+            mergeLogLines(page.lines);
+            renderLogs(stick);
+          }
+          logFollow = page.next_offset;
+        } else {
+          page = await getLog(source, { tail: true, limit: 1 });
+          if (epoch !== logEpoch) return;
+        }
+        paintLogSummary(page.latest_time);
+        syncLogLevel(page.level);
+      } catch (err) {
+        if (epoch !== logEpoch) return;
+        $("log-msg").textContent = err.message || "Log request failed";
+      }
+    }
+
+    function logTick() {
+      if (document.hidden) return;
+      refreshLogs();
+      if (!document.hidden) logTimer = setTimeout(logTick, 1000);
+    }
+
+    function bindLogs() {
+      $("log-source").addEventListener("change", () => {
+        logEpoch += 1;
+        logFollow = null;
+        logLines = [];
+        logAtStart = false;
+        logStick = $("log-tail").checked;
+        refreshLogs();
+      });
+      $("log-tail").addEventListener("change", () => {
+        logStick = $("log-tail").checked;
+        if (logStick) {
+          logFollow = null;
+          refreshLogs();
+        }
+      });
+      let searchTimer = 0;
+      $("log-search").addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          logEpoch += 1;
+          logFollow = null;
+          logStick = true;
+          refreshLogs();
+        }, 200);
+      });
+      $("log-level").addEventListener("change", async () => {
+        const level = $("log-level").value;
+        try {
+          const res = await fetch("/config", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ log_level: level }),
+          });
+          $("log-msg").textContent = res.ok ? "Level set to " + level : await res.text();
+        } catch (err) {
+          $("log-msg").textContent = "Level change failed";
+        }
+      });
+      $("log-download").addEventListener("click", () => {
+        const link = document.createElement("a");
+        link.href = "/logs/download?source=" + encodeURIComponent($("log-source").value);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      });
+      $("log-view").addEventListener("scroll", () => {
+        if (logRendering) return;
+        const box = $("log-view");
+        if (nearBottom(box)) {
+          logStick = true;
+          if (!$("log-tail").checked && !$("log-search").value.trim()) {
+            $("log-tail").checked = true;
+            logFollow = null;
+          }
+        } else if ($("log-tail").checked) {
+          $("log-tail").checked = false;
+          logStick = false;
+        }
+        if (box.scrollTop < 40) loadOlder();
       });
     }
 
@@ -1651,10 +1958,13 @@
       if (document.hidden) {
         stopLevels();
         clearTimeout(statusTimer);
+        clearTimeout(logTimer);
       } else {
         startLevels();
         clearTimeout(statusTimer);
         statusTick();
+        clearTimeout(logTimer);
+        logTick();
       }
     });
 
@@ -1684,9 +1994,11 @@
       });
     });
 
+    bindLogs();
     initCards();
     setViz(true);
     statusTick();
+    logTick();
     loadConfig();
     setInterval(() => { if (!document.hidden) loadConfig(); }, 4000);
   </script>

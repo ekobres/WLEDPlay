@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Logs card shows WLEDPlay, Shairport Sync, NQPTP, and the container console. It follows the end, scrolls back, searches, downloads, and colors each line by level. The WLEDPlay level applies immediately and is saved. Each log keeps its last 2 MB after it passes 8 MB.
 - AirPlay player records are resolved on the AirPlay NIC. A sighting on the unicast NIC no longer takes the only resolve slot, which was dropping the session player list.
 - The Control card lists WLED controllers found by Avahi and the saved unicast rows. A discovered controller is not sent audio until Unicast is enabled and the card is saved. Each row can shift its send time by a millisecond offset. Controllers that share a send time share one delay-queue entry, so a longer unicast list does not discard packets that are about to be sent. Avahi listens on the AirPlay NIC and, when one is set, the unicast NIC. Shairport still advertises only on the AirPlay NIC.
 - Measure delays fills each controller delay from its LED count, frame rate, and a short network sample, sending slower controllers earlier. The table is stored on Control Save.

@@ -40,6 +40,7 @@ network:
   multicast: ""
 
 logging:
+  # error, warn, info, debug, or trace. The Logs card can change this while running.
   level: info
 
 web:

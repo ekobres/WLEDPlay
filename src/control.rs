@@ -42,6 +42,8 @@ pub struct ConfigPatch {
     pub auto_join_enabled: Option<bool>,
     pub auto_join_target_id: Option<String>,
     pub auto_join_target_name: Option<String>,
+    #[serde(default)]
+    pub log_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,6 +264,10 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             return Err("auto_join_target_name must be at most 128 characters".into());
         }
     }
+    let log_level = match &patch.log_level {
+        Some(level) => Some(crate::logs::normalize_level(level)?.to_string()),
+        None => None,
+    };
     validate_iface(&patch.http_interface)?;
     validate_iface(&patch.airplay_interface)?;
     validate_iface(&patch.unicast_interface)?;
@@ -350,6 +356,9 @@ fn apply_patch_to(cfg: &mut Config, patch: ConfigPatch) -> Result<(), String> {
     }
     if let Some(name) = patch.auto_join_target_name {
         cfg.auto_join.target_name = name.trim().to_string();
+    }
+    if let Some(level) = log_level {
+        cfg.logging.level = level;
     }
     Ok(())
 }
@@ -770,6 +779,7 @@ mod tests {
                 auto_join_enabled: Some(true),
                 auto_join_target_id: Some("  aa-bb  ".into()),
                 auto_join_target_name: Some(" Kitchen ".into()),
+                log_level: None,
             })
             .unwrap();
         assert!(view.persisted);
@@ -997,5 +1007,29 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.wled.destinations, vec!["192.0.2.10".to_string()]);
         assert_eq!(cfg.wled.dismissed, vec!["192.0.2.12".to_string()]);
+    }
+
+    #[test]
+    fn log_level_patch_is_stored_and_rejected_when_unknown() {
+        let mut cfg = Config::default();
+        super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                log_level: Some(" warning ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(cfg.logging.level, "warn");
+        let err = super::apply_patch_to(
+            &mut cfg,
+            super::ConfigPatch {
+                log_level: Some("verbose".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("log level"));
+        assert_eq!(cfg.logging.level, "warn");
     }
 }

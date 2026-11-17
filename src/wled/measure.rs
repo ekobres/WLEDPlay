@@ -281,7 +281,11 @@ fn estimate_one(
     }
 }
 
-pub fn measure_delays(inputs: &[MeasureInput], min_delay_ms: i32, max_delay_ms: i32) -> Vec<DelayEstimate> {
+pub fn measure_delays(
+    inputs: &[MeasureInput],
+    min_delay_ms: i32,
+    max_delay_ms: i32,
+) -> Vec<DelayEstimate> {
     measure_delays_with(
         inputs,
         min_delay_ms,
@@ -428,12 +432,12 @@ mod tests {
             ipv4_socket(" 192.0.2.10:8080 ").unwrap(),
             "192.0.2.10:8080".parse().unwrap()
         );
+        assert_eq!(ipv4_socket("not-an-ip").unwrap_err(), "not an IPv4 address");
+        assert_eq!(ipv4_socket("").unwrap_err(), "not an IPv4 address");
         assert_eq!(
-            ipv4_socket("not-an-ip").unwrap_err(),
+            ipv4_socket("2001:db8::1").unwrap_err(),
             "not an IPv4 address"
         );
-        assert_eq!(ipv4_socket("").unwrap_err(), "not an IPv4 address");
-        assert_eq!(ipv4_socket("2001:db8::1").unwrap_err(), "not an IPv4 address");
     }
 
     #[test]
