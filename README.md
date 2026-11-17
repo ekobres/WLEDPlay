@@ -82,6 +82,7 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 - `POST /airplay/rescan` — look up AirPlay speakers again and replace that list
 - `GET /wled/controllers` — saved unicast rows merged with WLED controllers found on the network
 - `POST /wled/rescan` — look up WLED controllers again
+- `POST /wled/measure` — estimate each controller's delay from its LED count, frame rate, and a short network sample. The table stores those delays on Control Save
 - `POST /restart` — orderly process restart
 
 ## Configuration

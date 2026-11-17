@@ -208,6 +208,9 @@ mod tests {
         assert!(html.contains("id=\"ctl-wled\""));
         assert!(html.contains("Rescan for WLED"));
         assert!(html.contains("/wled/rescan"));
+        assert!(html.contains("id=\"measure-wled\""));
+        assert!(html.contains("Measure delays"));
+        assert!(html.contains("/wled/measure"));
         assert!(html.contains("delay_ms"));
         assert!(html.contains("Delay (ms)"));
         assert!(html.contains("name_locked"));

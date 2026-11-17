@@ -3,6 +3,7 @@
 ## Unreleased
 
 - The Control card lists WLED controllers found by Avahi and the saved unicast rows. A discovered controller is not sent audio until Unicast is enabled and the card is saved. Each row can shift its send time by a millisecond offset. Controllers that share a send time share one delay-queue entry, so a longer unicast list does not discard packets that are about to be sent. Avahi listens on the AirPlay NIC and, when one is set, the unicast NIC. Shairport still advertises only on the AirPlay NIC.
+- Measure delays fills each controller delay from its LED count, frame rate, and a short network sample, sending slower controllers earlier. The table is stored on Control Save.
 - Startup reads the unicast NIC from the `network` section. A controller row's `unicast: false` flag is no longer taken as the interface name, which was exiting the process on boot.
 - Delay fields in the controller table keep the cursor. A status refresh no longer rebuilds a row while that field is being edited.
 - Auto Join watches speakers with a standing Avahi browser. The target list is a snapshot from startup, replaced by Rescan for Targets. pyatv runs only when a join is sent. A previously saved target may need to be selected again. Each speaker is one row, and a join tries the receiver id in the form the group leader matches.

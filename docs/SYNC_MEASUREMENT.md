@@ -13,6 +13,8 @@ This measurement **requires a Linux (or FreeBSD) host**. Official AP2 + NQPTP ca
 
 An enabled unicast controller can add `delay_ms` to that hold. Zero matches the send delay. Positive is later, negative is earlier, and a negative value cannot exceed the Shairport lead. The resulting hold stays within 0–5000 ms. Multicast stays on the send delay. The Control card Save writes the table. Discovery does not.
 
+Measure delays fills those offsets without storing them. It reads each controller's `/json/info` (LED count and frame rate) and three HTTP samples, then sends slower controllers earlier so they finish with the fastest one. A new estimate within 10 ms of the current delay is left alone. The base send delay does not change.
+
 Send delay semantics (for lead `-1.2` → on-time = `1200` ms):
 
 - `0` — AFAP after decode (up to 1.2 s early vs presentation)

@@ -440,10 +440,11 @@
         <label>Unicast controllers</label>
         <button type="button" class="info" popovertarget="tip-dest" aria-label="About unicast destinations">?</button>
       </div>
-      <div id="tip-dest" popover class="tip">Discovered controllers are listed here and are not sent audio until Unicast is enabled. Delay is milliseconds added to the send delay. A negative value cannot exceed the Shairport lead. Save writes this table.</div>
+      <div id="tip-dest" popover class="tip">Discovered controllers are listed here and are not sent audio until Unicast is enabled. Delay is milliseconds added to the send delay. A negative value cannot exceed the Shairport lead. Measure compares the controllers and fills each delay so slower ones are sent earlier. Save writes this table.</div>
       <div class="target-row">
         <span class="hint" id="wled-discovery">Looking for WLED controllers</span>
         <button type="button" id="rescan-wled">Rescan for WLED</button>
+        <button type="button" id="measure-wled">Measure delays</button>
       </div>
       <table id="ctl-wled" class="wled-table">
         <thead>
@@ -1509,6 +1510,64 @@
     $("rescan-wled").onclick = async () => {
       await fetch("/wled/rescan", { method: "POST" });
       await refreshWled(false);
+    };
+
+    $("measure-wled").onclick = async () => {
+      const btn = $("measure-wled");
+      if (!wledRows.length) {
+        $("wled-discovery").textContent = "No controllers to measure";
+        return;
+      }
+      btn.disabled = true;
+      $("wled-discovery").textContent = "Measuring…";
+      try {
+        const response = await fetch("/wled/measure", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            controllers: wledRows.map((row) => ({
+              address: String(row.address || "").trim(),
+              delay_ms: Number(row.delay_ms) || 0
+            }))
+          })
+        });
+        if (!response.ok) {
+          $("wled-discovery").textContent = "Measure failed";
+          btn.disabled = false;
+          return;
+        }
+        const data = await response.json();
+        const byAddress = {};
+        (data.results || []).forEach((item) => {
+          byAddress[String(item.address || "").trim()] = item;
+        });
+        let changed = 0;
+        let failed = 0;
+        wledRows.forEach((row) => {
+          const item = byAddress[String(row.address || "").trim()];
+          if (!item || !item.ok) {
+            failed += 1;
+            return;
+          }
+          let n = Math.trunc(Number(item.delay_ms));
+          if (!Number.isFinite(n)) {
+            failed += 1;
+            return;
+          }
+          n = Math.min(wledBounds.max_delay_ms, Math.max(wledBounds.min_delay_ms, n));
+          if (n !== (Number(row.delay_ms) || 0)) changed += 1;
+          row.delay_ms = n;
+        });
+        renderWled();
+        syncActionButtons();
+        paintHint(lastConfig);
+        let msg = changed ? "Delays filled" : "Delays already match";
+        if (failed) msg += " · " + failed + " not reached";
+        $("wled-discovery").textContent = msg;
+      } catch {
+        $("wled-discovery").textContent = "Measure failed";
+      }
+      btn.disabled = false;
     };
 
     $("ctl-wled-add").onclick = () => {

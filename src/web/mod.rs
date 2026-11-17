@@ -6,7 +6,8 @@ pub use operator::{
 };
 
 use crate::clock::{self, ClockSession, ClockStatus};
-use crate::config::{merge_controllers, WledSight};
+use crate::config::{delay_ms_bounds, merge_controllers, WledSight};
+use crate::wled::{measure_delays, MeasureInput};
 use crate::control::{ConfigPatch, Control};
 use crate::metadata::{self, SharedArtwork, TrackMetadata};
 use crate::netif::InterfaceInfo;
@@ -251,6 +252,7 @@ pub fn router(state: AppState) -> Router {
         .route("/airplay/rescan", post(rescan_handler))
         .route("/wled/controllers", get(wled_controllers))
         .route("/wled/rescan", post(wled_rescan_handler))
+        .route("/wled/measure", post(wled_measure))
         .route("/restart", post(restart_handler))
         .with_state(state)
 }
@@ -424,6 +426,41 @@ async fn rescan_handler(State(state): State<AppState>) -> StatusCode {
 async fn wled_rescan_handler(State(state): State<AppState>) -> StatusCode {
     state.wled_rescan.store(true, Ordering::Relaxed);
     StatusCode::ACCEPTED
+}
+
+#[derive(Debug, Deserialize)]
+struct MeasureRequest {
+    #[serde(default)]
+    controllers: Vec<MeasureInput>,
+}
+
+#[derive(Debug, Serialize)]
+struct MeasureReport {
+    results: Vec<crate::wled::DelayEstimate>,
+}
+
+async fn wled_measure(
+    State(state): State<AppState>,
+    payload: Result<Json<MeasureRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Json(request) = match payload {
+        Ok(json) => json,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let (min_delay_ms, max_delay_ms) = match &state.control {
+        Some(control) => {
+            let cfg = control.config.lock().expect("config");
+            delay_ms_bounds(cfg.audio.sync_offset_ms, cfg.audio.shairport_latency_offset_s)
+        }
+        None => (0, 0),
+    };
+    let controllers = request.controllers;
+    let results = tokio::task::spawn_blocking(move || {
+        measure_delays(&controllers, min_delay_ms, max_delay_ms)
+    })
+    .await
+    .unwrap_or_default();
+    Json(MeasureReport { results }).into_response()
 }
 
 async fn wled_controllers(
@@ -1107,5 +1144,86 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let text = String::from_utf8(body).unwrap();
         assert!(text.contains("\"controllers\":[]") || text.contains("\"controllers\": []"));
+    }
+
+    #[tokio::test]
+    async fn wled_measure_fills_delay_and_rejects_a_bad_body() {
+        let (state, _) = control_state();
+        {
+            let mut cfg = state.control.as_ref().unwrap().config.lock().unwrap();
+            cfg.audio.sync_offset_ms = 1200;
+            cfg.audio.shairport_latency_offset_s = -1.2;
+        }
+        let (status, _) = send(
+            router(state.clone()),
+            Request::builder()
+                .method("POST")
+                .uri("/wled/measure")
+                .header("content-type", "application/json")
+                .body(Body::from("nope"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut sock, _)) => {
+                        use std::io::Write;
+                        let body = r#"{"leds":{"count":2000,"fps":20}}"#;
+                        let packet = format!(
+                            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = sock.write_all(packet.as_bytes());
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+        });
+        let payload = format!(
+            "{{\"controllers\":[{{\"address\":\"{addr}\",\"delay_ms\":0}},{{\"address\":\"not-an-ip\",\"delay_ms\":4}}]}}"
+        );
+        let (status, body) = send(
+            router(state),
+            Request::builder()
+                .method("POST")
+                .uri("/wled/measure")
+                .header("content-type", "application/json")
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await;
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap();
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains(&addr.to_string()));
+        assert!(text.contains("not an IPv4 address"));
+        assert!(text.contains("\"ok\":false") || text.contains("\"ok\": false"));
+        assert!(text.contains("\"ok\":true") || text.contains("\"ok\": true"));
+
+        let (status, body) = send(
+            router(bare_state()),
+            Request::builder()
+                .method("POST")
+                .uri("/wled/measure")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"controllers":[{"address":"not-an-ip","delay_ms":4}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("not an IPv4 address"));
+        assert!(text.contains("\"delay_ms\":4") || text.contains("\"delay_ms\": 4"));
     }
 }
