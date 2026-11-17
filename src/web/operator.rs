@@ -301,6 +301,8 @@ mod tests {
         assert!(html.contains("shownRms >= 0.95"));
         assert!(!html.contains("s.peak ?"));
         assert!(html.contains("id=\"viz-decay\""));
+        assert!(html.contains("wledplay.vizDecay"));
+        assert!(html.contains("function initDecay"));
         assert!(html.contains("id=\"beat\""));
         assert!(html.contains("id=\"beatbar\""));
         assert!(html.contains("function fallToward"));

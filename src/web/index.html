@@ -934,6 +934,7 @@
     }
 
     const CARD_STORE = "wledplay.cards";
+    const DECAY_STORE = "wledplay.vizDecay";
 
     function readCardState() {
       try {
@@ -1280,6 +1281,27 @@
       if (el.getAttribute("role") === "switch") {
         el.setAttribute("aria-checked", el.checked ? "true" : "false");
       }
+    }
+
+    function savedDecay() {
+      try {
+        const raw = localStorage.getItem(DECAY_STORE);
+        if (raw === "0") return false;
+        if (raw === "1") return true;
+      } catch (e) { /* private mode */ }
+      return true;
+    }
+
+    function initDecay() {
+      $("viz-decay").checked = savedDecay();
+      syncSwitch("viz-decay");
+    }
+
+    function persistDecay() {
+      syncSwitch("viz-decay");
+      try {
+        localStorage.setItem(DECAY_STORE, $("viz-decay").checked ? "1" : "0");
+      } catch (e) { /* private mode */ }
     }
 
     function setViz(on) {
@@ -1944,7 +1966,7 @@
 
     $("viz-toggle").addEventListener("change", () => setViz($("viz-toggle").checked));
     $("viz-decay").addEventListener("change", () => {
-      syncSwitch("viz-decay");
+      persistDecay();
       if (vizOn && lastLevels) paintSpectrum(sourceMeters(lastLevels));
     });
     $("viz-source").addEventListener("change", () => {
@@ -1996,6 +2018,7 @@
 
     bindLogs();
     initCards();
+    initDecay();
     setViz(true);
     statusTick();
     logTick();
