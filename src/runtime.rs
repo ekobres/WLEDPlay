@@ -2,7 +2,8 @@
 
 use crate::audio::Analyzer;
 use crate::config::{AgcMode, Config};
-use crate::web::{AudioStatus, SharedStatus};
+use crate::perf::{HostSampler, PerfSnapshot, SendSpread};
+use crate::web::{AudioStatus, PerformanceStatus, SharedStatus};
 use crate::wled::{AudioSyncPacket, PacketTarget};
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -306,10 +307,10 @@ pub fn step_send_deadline(last_send: Instant, interval: Duration, now: Instant) 
 pub fn pop_due_packet(
     queue: &mut VecDeque<DelayItem>,
     now: Instant,
-) -> Option<(AudioSyncPacket, Vec<PacketTarget>)> {
+) -> Option<(Instant, AudioSyncPacket, Vec<PacketTarget>)> {
     if queue.front().map(|(t, _, _)| now >= *t).unwrap_or(false) {
-        let (_, packet, target) = queue.pop_front().unwrap();
-        Some((packet, target))
+        let (due, packet, target) = queue.pop_front().unwrap();
+        Some((due, packet, target))
     } else {
         None
     }
@@ -364,6 +365,8 @@ pub struct SendLoop {
     pub next_due: Option<Instant>,
     /// Newest delay-queue entries discarded because the queue was full.
     pub delay_drops: u64,
+    send_spread: SendSpread,
+    host: HostSampler,
     /// Peak bit seen on any departure since the last analysis line.
     peak_this_sec: bool,
     frames_marked: u64,
@@ -371,6 +374,29 @@ pub struct SendLoop {
 }
 
 impl SendLoop {
+    pub fn note_send(&mut self, due: Instant, now: Instant) {
+        self.send_spread.record(now.saturating_duration_since(due));
+    }
+
+    pub fn pop_send(&mut self, now: Instant) -> Option<(AudioSyncPacket, Vec<PacketTarget>)> {
+        let (due, packet, targets) = pop_due_packet(&mut self.delay_q, now)?;
+        self.note_send(due, now);
+        Some((packet, targets))
+    }
+
+    pub fn perf_snapshot(&mut self, now: Instant) -> PerfSnapshot {
+        let (send_late_ms, send_jitter_ms) = self.send_spread.take();
+        let host = self.host.sample(now);
+        PerfSnapshot {
+            cpu_percent: host.cpu_percent,
+            memory_bytes: host.memory_bytes,
+            container: host.container,
+            send_late_ms,
+            send_jitter_ms,
+            delay_drops: self.delay_drops,
+        }
+    }
+
     /// One debug line, or nothing when idle and the counters are unchanged.
     pub fn analysis_line(
         &mut self,
@@ -508,6 +534,7 @@ pub fn update_status(
     packets_per_sec: u64,
     cfg: &Config,
     now: Instant,
+    perf: PerfSnapshot,
 ) {
     let mut s = status.lock().unwrap();
     s.audio.sample_rate = crate::pcm::ANALYSIS_RATE;
@@ -537,6 +564,14 @@ pub fn update_status(
     s.counters.pcm_underruns = rt.pcm_underruns;
     s.counters.analysis_overruns = rt.analysis_overruns;
     s.counters.airplay_connections = rt.connections;
+    s.counters.delay_drops = perf.delay_drops;
+    s.performance = PerformanceStatus {
+        cpu_percent: perf.cpu_percent,
+        memory_bytes: perf.memory_bytes,
+        container: perf.container,
+        send_late_ms: perf.send_late_ms,
+        send_jitter_ms: perf.send_jitter_ms,
+    };
     s.airplay.receiver_name = cfg.airplay.name.clone();
     s.airplay.connections = rt.connections;
     s.airplay.stream_duration_s = rt
@@ -1345,6 +1380,31 @@ mod tests {
     }
 
     #[test]
+    fn send_loop_reports_slot_lateness() {
+        let mut sl = SendLoop::default();
+        let now = Instant::now();
+        enqueue_packet(&mut sl.delay_q, AudioSyncPacket::silence(), 5_000, now);
+        assert!(sl.pop_send(now).is_none());
+        sl.delay_q.clear();
+        enqueue_packet(
+            &mut sl.delay_q,
+            AudioSyncPacket::silence(),
+            0,
+            now - Duration::from_millis(8),
+        );
+        assert!(sl.pop_send(now).is_some());
+        sl.note_send(now - Duration::from_millis(3), now);
+        sl.delay_drops = 2;
+        let snap = sl.perf_snapshot(now);
+        assert_eq!(snap.send_late_ms, 3);
+        assert_eq!(snap.send_jitter_ms, 5);
+        assert_eq!(snap.delay_drops, 2);
+        let again = sl.perf_snapshot(now);
+        assert_eq!(again.send_late_ms, 0);
+        assert_eq!(again.send_jitter_ms, 0);
+    }
+
+    #[test]
     fn status_and_publish_cover_active_and_idle() {
         let status = status();
         let mut cfg = Config::default();
@@ -1352,7 +1412,17 @@ mod tests {
         cfg.wled.destinations = vec!["10.0.0.1".into()];
         let mut rt = PcmRuntime::new(AgcMode::Off);
         let now = Instant::now();
-        update_status(&status, &rt, "none".into(), 0, 0, 0, &cfg, now);
+        update_status(
+            &status,
+            &rt,
+            "none".into(),
+            0,
+            0,
+            0,
+            &cfg,
+            now,
+            PerfSnapshot::default(),
+        );
         assert_eq!(status.lock().unwrap().audio.rms, 0.0);
         assert_eq!(status.lock().unwrap().airplay.stream_duration_s, 0.0);
 
@@ -1361,12 +1431,34 @@ mod tests {
         rt.pcm_frames = 9;
         rt.connections = 3;
         publish_audio(&status, &rt, &cfg, false);
-        update_status(&status, &rt, "239.0.0.1:11988".into(), 4, 1, 7, &cfg, now);
+        update_status(
+            &status,
+            &rt,
+            "239.0.0.1:11988".into(),
+            4,
+            1,
+            7,
+            &cfg,
+            now,
+            PerfSnapshot {
+                cpu_percent: Some(12.5),
+                memory_bytes: Some(4096),
+                container: true,
+                send_late_ms: 4,
+                send_jitter_ms: 2,
+                delay_drops: 6,
+            },
+        );
         {
             let s = status.lock().unwrap();
             assert!(s.airplay.connected);
             assert_eq!(s.counters.pcm_frames, 9);
             assert_eq!(s.counters.airplay_connections, 3);
+            assert_eq!(s.counters.delay_drops, 6);
+            assert_eq!(s.performance.send_late_ms, 4);
+            assert_eq!(s.performance.send_jitter_ms, 2);
+            assert_eq!(s.performance.memory_bytes, Some(4096));
+            assert!(s.performance.container);
             assert_eq!(s.wled.packets_per_second, 7.0);
             assert!(s.airplay.stream_duration_s >= 2.0);
             assert!(!s.audio.agc_on);

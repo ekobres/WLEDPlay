@@ -6,9 +6,9 @@ use crate::netif::InterfaceBind;
 use crate::pcm::{PcmDecoder, ANALYSIS_RATE};
 use crate::runtime::{
     self, event_loop_wait, http_listen, mark_stream_connected, mark_stream_ended, next_due_at,
-    open_pcm_input, path_is_fifo, pcm_file_pump, pop_due_packet, record_transmitted,
-    resolve_optional_nic, start_ms, stdin_available_bytes, step_send_deadline, update_status,
-    LoopAction, PcmRuntime, PcmSessionGap, SendLoop,
+    open_pcm_input, path_is_fifo, pcm_file_pump, record_transmitted, resolve_optional_nic,
+    start_ms, stdin_available_bytes, step_send_deadline, update_status, LoopAction, PcmRuntime,
+    PcmSessionGap, SendLoop,
 };
 use crate::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use crate::wled::WledSender;
@@ -344,7 +344,7 @@ pub fn event_loop_tick(
 
     {
         let mut snd = sender.lock().unwrap();
-        while let Some((pkt, targets)) = pop_due_packet(&mut loop_state.delay_q, now) {
+        while let Some((pkt, targets)) = loop_state.pop_send(now) {
             for target in targets {
                 let _ = snd.send_target(&pkt, target);
                 *packets_last_sec += 1;
@@ -354,6 +354,7 @@ pub fn event_loop_tick(
     }
 
     if now.saturating_duration_since(*last_status) >= Duration::from_secs(1) {
+        let perf = loop_state.perf_snapshot(now);
         let rt = runtime.lock().unwrap();
         let live = live_cfg.lock().unwrap();
         let snd = sender.lock().unwrap();
@@ -367,6 +368,7 @@ pub fn event_loop_tick(
             *packets_last_sec,
             &live,
             now,
+            perf,
         );
         let frames = rt.analyzer.fft_frames();
         if let Some(line) = loop_state.analysis_line(status, active, *packets_last_sec, frames) {

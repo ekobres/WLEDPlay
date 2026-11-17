@@ -79,6 +79,7 @@ pub struct RuntimeStatus {
     pub wled: WledStatus,
     pub metadata: TrackMetadataStatus,
     pub counters: CounterStatus,
+    pub performance: PerformanceStatus,
     pub auto_join: AutoJoinStatus,
     pub session: AirPlaySession,
     pub airplay_devices: Vec<AirPlayDeviceInfo>,
@@ -208,6 +209,17 @@ pub struct CounterStatus {
     pub pcm_underruns: u64,
     pub analysis_overruns: u64,
     pub airplay_connections: u64,
+    pub delay_drops: u64,
+}
+
+/// Host and send-path sample taken once a second.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct PerformanceStatus {
+    pub cpu_percent: Option<f32>,
+    pub memory_bytes: Option<u64>,
+    pub container: bool,
+    pub send_late_ms: u32,
+    pub send_jitter_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

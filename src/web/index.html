@@ -108,8 +108,11 @@
       font-size: 0.78rem; color: var(--muted);
     }
     .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px 18px; margin-top: 12px; }
+    .stats.compact { grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 8px 12px; }
     .stats .span-all { grid-column: 1 / -1; }
     .stats .value { font-size: 1rem; }
+    .stats.compact .value { font-size: 0.92rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .stat-label { display: flex; align-items: center; gap: 4px; }
     .session-players {
       width: 100%; border-collapse: collapse; margin-top: 14px;
       font-size: 0.72rem; line-height: 1.35;
@@ -304,29 +307,73 @@
         <span class="card-summary" id="sum-stats">0 /s · —</span>
       </div>
       <div class="card-body" id="body-stats">
-      <div class="stats">
+      <div class="stats compact">
         <div>
-          <div class="label">Packet rate</div>
+          <div class="stat-label"><div class="label">Packet rate</div><button type="button" class="info" popovertarget="tip-stat-pps" aria-label="About packet rate">?</button></div>
+          <div id="tip-stat-pps" popover class="tip">UDP audio-sync packets sent in the last second.</div>
           <div class="value" id="pps">0 /s</div>
         </div>
         <div>
-          <div class="label">Stream</div>
-          <div class="value" id="stream">0s · 0 connects</div>
-        </div>
-        <div>
-          <div class="label">Sync offset</div>
-          <div class="value" id="sync">0 ms</div>
-        </div>
-        <div>
-          <div class="label">Destinations</div>
-          <div class="value" id="dest">—</div>
-        </div>
-        <div>
-          <div class="label">PTP sample</div>
+          <div class="stat-label"><div class="label">PTP sample</div><button type="button" class="info" popovertarget="tip-stat-clock" aria-label="About PTP sample">?</button></div>
+          <div id="tip-stat-clock" popover class="tip">Age of the newest NQPTP clock sample. Late or fast samples are marked.</div>
           <div class="value" id="clock">—</div>
         </div>
+        <div>
+          <div class="stat-label"><div class="label">CPU</div><button type="button" class="info" popovertarget="tip-stat-cpu" aria-label="About CPU">?</button></div>
+          <div id="tip-stat-cpu" popover class="tip">Share of one processor core over the last second. The container when cgroup counters exist, and this process otherwise. Can exceed 100% when more than one core is busy.</div>
+          <div class="value" id="stat-cpu">—</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Memory</div><button type="button" class="info" popovertarget="tip-stat-mem" aria-label="About memory">?</button></div>
+          <div id="tip-stat-mem" popover class="tip">Resident memory. The container when cgroup counters exist, and this process otherwise.</div>
+          <div class="value" id="stat-mem">—</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Send lateness</div><button type="button" class="info" popovertarget="tip-stat-late" aria-label="About send lateness">?</button></div>
+          <div id="tip-stat-late" popover class="tip">How long the latest due packet waited past its send slot. This is the audio path's own delay, not a measurement of the WLED controllers.</div>
+          <div class="value" id="stat-late">0 ms</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Jitter</div><button type="button" class="info" popovertarget="tip-stat-jitter" aria-label="About jitter">?</button></div>
+          <div id="tip-stat-jitter" popover class="tip">Spread between the shortest and longest send wait in the last second.</div>
+          <div class="value" id="stat-jitter">0 ms</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Queue drops</div><button type="button" class="info" popovertarget="tip-stat-drops" aria-label="About queue drops">?</button></div>
+          <div id="tip-stat-drops" popover class="tip">Delay-queue entries discarded because the queue was full.</div>
+          <div class="value" id="stat-drops">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">UDP errors</div><button type="button" class="info" popovertarget="tip-stat-udp" aria-label="About UDP errors">?</button></div>
+          <div id="tip-stat-udp" popover class="tip">Sends that failed.</div>
+          <div class="value" id="stat-udp">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Underruns</div><button type="button" class="info" popovertarget="tip-stat-underrun" aria-label="About underruns">?</button></div>
+          <div id="tip-stat-underrun" popover class="tip">Times the PCM input ran dry during playback.</div>
+          <div class="value" id="stat-underrun">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Overruns</div><button type="button" class="info" popovertarget="tip-stat-overrun" aria-label="About overruns">?</button></div>
+          <div id="tip-stat-overrun" popover class="tip">Analysis frames skipped because a newer frame was already waiting.</div>
+          <div class="value" id="stat-overrun">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">PCM frames</div><button type="button" class="info" popovertarget="tip-stat-pcm" aria-label="About PCM frames">?</button></div>
+          <div id="tip-stat-pcm" popover class="tip">PCM frames read since start.</div>
+          <div class="value" id="stat-pcm">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">FFT frames</div><button type="button" class="info" popovertarget="tip-stat-fft" aria-label="About FFT frames">?</button></div>
+          <div id="tip-stat-fft" popover class="tip">Spectrum frames produced since start.</div>
+          <div class="value" id="stat-fft">0</div>
+        </div>
+        <div>
+          <div class="stat-label"><div class="label">Packets sent</div><button type="button" class="info" popovertarget="tip-stat-packets" aria-label="About packets sent">?</button></div>
+          <div id="tip-stat-packets" popover class="tip">UDP datagrams sent since start.</div>
+          <div class="value" id="stat-packets">0</div>
+        </div>
       </div>
-      <pre id="counters"></pre>
       </div>
     </div>
     <div class="card" data-card="viz">
@@ -397,6 +444,11 @@
       <div class="stats">
         <div><div class="label">Encoding</div><div class="value" id="sess-encoding">—</div></div>
         <div><div class="label">Client</div><div class="value" id="sess-client">—</div></div>
+        <div>
+          <div class="stat-label"><div class="label">Stream</div><button type="button" class="info" popovertarget="tip-sess-stream" aria-label="About stream">?</button></div>
+          <div id="tip-sess-stream" popover class="tip">How long the current AirPlay stream has been open, and how many connections this process has accepted.</div>
+          <div class="value" id="sess-stream">0.0s · 0 connects</div>
+        </div>
       </div>
       <table class="session-players">
         <thead>
@@ -781,23 +833,49 @@
         art.dataset.key = "";
       }
       $("pps").textContent = Number(s.wled.packets_per_second || 0).toFixed(0) + " /s";
-      $("dest").textContent = (s.wled.destinations && s.wled.destinations.length)
-        ? s.wled.destinations.join(", ")
-        : (s.wled.destination || "—");
-      $("sync").textContent = (s.audio.sync_offset_ms || 0) + " ms";
-      $("stream").textContent = Number(s.airplay.stream_duration_s || 0).toFixed(1)
-        + "s · " + (s.airplay.connections || 0) + " connects";
       paintClock(s.clock);
+      const p = s.performance || {};
+      const host = p.container ? "The container." : "This process.";
+      $("tip-stat-cpu").textContent = "Share of one processor core over the last second. "
+        + host + " Can exceed 100% when more than one core is busy.";
+      $("tip-stat-mem").textContent = "Resident memory. " + host;
+      $("stat-cpu").textContent = p.cpu_percent == null ? "—" : Number(p.cpu_percent).toFixed(0) + "%";
+      $("stat-mem").textContent = formatBytes(p.memory_bytes);
+      $("stat-late").textContent = formatMs(p.send_late_ms);
+      $("stat-jitter").textContent = formatMs(p.send_jitter_ms);
+      const c = s.counters || {};
+      $("stat-drops").textContent = formatCount(c.delay_drops);
+      $("stat-udp").textContent = formatCount(c.udp_errors);
+      $("stat-underrun").textContent = formatCount(c.pcm_underruns);
+      $("stat-overrun").textContent = formatCount(c.analysis_overruns);
+      $("stat-pcm").textContent = formatCount(c.pcm_frames);
+      $("stat-fft").textContent = formatCount(c.fft_frames);
+      $("stat-packets").textContent = formatCount(c.packets_sent);
       $("sum-stats").textContent = $("pps").textContent + " · " + $("clock").textContent;
       paintSession(s);
-      const c = s.counters || {};
-      $("counters").textContent =
-        "pcm " + (c.pcm_frames || 0)
-        + "  fft " + (c.fft_frames || 0)
-        + "  packets " + (c.packets_sent || 0)
-        + "  udp_err " + (c.udp_errors || 0)
-        + "  underrun " + (c.pcm_underruns || 0)
-        + "  overrun " + (c.analysis_overruns || 0);
+    }
+
+    function formatBytes(n) {
+      if (n == null || n === "") return "—";
+      const v = Number(n);
+      if (!Number.isFinite(v) || v < 0) return "—";
+      if (v < 1024) return v + " B";
+      if (v < 1048576) return (v / 1024).toFixed(0) + " KB";
+      if (v < 1073741824) return (v / 1048576).toFixed(1) + " MB";
+      return (v / 1073741824).toFixed(2) + " GB";
+    }
+
+    function formatMs(n) {
+      if (n == null || n === "") return "—";
+      const v = Number(n);
+      if (!Number.isFinite(v)) return "—";
+      if (v >= 1000) return (v / 1000).toFixed(1) + " s";
+      return v.toFixed(0) + " ms";
+    }
+
+    function formatCount(n) {
+      const v = Number(n || 0);
+      return Number.isFinite(v) ? String(Math.round(v)) : "0";
     }
 
     function dash(value) {
@@ -927,6 +1005,8 @@
       const airplay = s.airplay || {};
       $("sess-encoding").textContent = dash(airplay.encoding);
       $("sess-client").textContent = dash(airplay.source);
+      $("sess-stream").textContent = Number(airplay.stream_duration_s || 0).toFixed(1)
+        + "s · " + (airplay.connections || 0) + " connects";
       paintPlayers(group.players);
       const count = (group.players || []).length;
       $("sum-session").textContent = dash(airplay.encoding)

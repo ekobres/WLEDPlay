@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Statistics card shows CPU, memory, send lateness, jitter, and the protocol counters, each with a description. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.
 - The visualizer Decay switch stays off after a page refresh.
 - Auto Join resolves this receiver again after startup until its advertisement is stored, so a target that is already playing can be joined without Rescan for Targets. That retry does not replace the target list.
 - A track change publishes the new title and artist together, and the cover art is replaced instead of keeping the previous picture. The once-per-second debug line reports UDP sends, audio frames, and whether a peak occurred during that second.

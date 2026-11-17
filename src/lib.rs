@@ -9,6 +9,7 @@ pub mod logs;
 pub mod metadata;
 pub mod netif;
 pub mod pcm;
+pub mod perf;
 pub mod runtime;
 pub mod timing;
 pub mod web;

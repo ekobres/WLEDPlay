@@ -57,7 +57,7 @@ The image is Debian 12. Build and runtime stages use `debian:bookworm-slim`, and
 
 ### Statistics card
 
-Add memory, CPU, and the other host stats that help an operator see whether the container is keeping up. Remove Statistics fields that repeat Control or Configuration. Today those are sync offset and WLED destinations. Keep them on Control and Configuration. The UI requirement to show destinations and sync is still met there. Packet rate, stream duration, PTP sample, and the protocol counters are not duplicates.
+Done. The card shows packet rate, PTP sample, CPU, memory, send lateness, jitter, and the protocol counters. Each reading has a description. CPU and memory are the container when its cgroup counters exist, and this process otherwise. Send lateness is how long the latest due packet waited past its slot. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.
 
 ### Special cases and troubleshooting
 
