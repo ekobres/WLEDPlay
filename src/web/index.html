@@ -769,7 +769,7 @@
       paintTrackProgress(!!s.airplay.connected);
       const art = $("art");
       if (md.has_artwork) {
-        const key = parts.join("|");
+        const key = parts.join("|") + "#" + (md.artwork_rev || 0);
         if (art.dataset.key !== key) {
           art.src = "/artwork?t=" + encodeURIComponent(key);
           art.dataset.key = key;

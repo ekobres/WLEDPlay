@@ -132,6 +132,8 @@ pub struct TrackMetadataStatus {
     pub album: Option<String>,
     pub title: Option<String>,
     pub has_artwork: bool,
+    /// Bumps when the cover bytes change, so the UI can reload `/artwork`.
+    pub artwork_rev: u64,
     pub position_s: Option<f32>,
     pub duration_s: Option<f32>,
     #[serde(skip)]

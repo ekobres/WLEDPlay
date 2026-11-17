@@ -278,10 +278,10 @@ impl AutoJoinService {
         }
         if input.self_id.is_empty() {
             self.phase = Phase::TargetActive;
-            self.last_error = "unable to identify WLEDPlay receiver".into();
+            self.last_error = "receiver is not advertised yet".into();
             self.log(
                 &mut logs,
-                "Auto Join failed: unable to identify WLEDPlay receiver".into(),
+                "Auto Join waiting: receiver is not advertised yet".into(),
             );
             return self.finish(&input, None, logs);
         }
@@ -1321,7 +1321,7 @@ mod tests {
             true,
             &[],
         );
-        assert!(no_self.view.last_error.contains("unable to identify"));
+        assert!(no_self.view.last_error.contains("not advertised yet"));
         assert!(no_self.join.is_none());
     }
 

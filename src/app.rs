@@ -368,7 +368,8 @@ pub fn event_loop_tick(
             &live,
             now,
         );
-        if let Some(line) = loop_state.analysis_line(status, active, *packets_last_sec) {
+        let frames = rt.analyzer.fft_frames();
+        if let Some(line) = loop_state.analysis_line(status, active, *packets_last_sec, frames) {
             tracing::debug!("{line}");
         }
         *packets_last_sec = 0;
@@ -607,10 +608,39 @@ fn log_track(meta: &TrackMetadata) {
     tracing::info!("Track: {artist} — {title}");
 }
 
+fn note_track(meta: &TrackMetadata, logged: &mut Option<(Option<String>, Option<String>)>) {
+    if meta.title.is_none() && meta.artist.is_none() {
+        return;
+    }
+    let pair = (meta.artist.clone(), meta.title.clone());
+    if logged.as_ref() == Some(&pair) {
+        return;
+    }
+    *logged = Some(pair);
+    log_track(meta);
+}
+
 fn log_clip(source: Option<&str>) {
     if let Some(src) = source {
-        tracing::info!("AirPlay source: {src}");
+        tracing::debug!("AirPlay source: {src}");
     }
+}
+
+fn note_ignored(type_code: &str, code: &str) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+    let mut guard = SEEN.lock().unwrap();
+    let seen = guard.get_or_insert_with(HashSet::new);
+    if seen.insert(format!("{type_code}/{code}")) {
+        tracing::trace!("ignored metadata {type_code}/{code}");
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MetadataFold {
+    batch: Option<crate::metadata::MetaBatch>,
+    logged: Option<(Option<String>, Option<String>)>,
 }
 
 fn metadata_retry_delay(max_cycles: Option<u32>) -> Duration {
@@ -629,12 +659,13 @@ pub fn consume_metadata_reader(
     let mut raw = String::new();
     let mut line = String::new();
     let mut meta = TrackMetadata::default();
+    let mut fold = MetadataFold::default();
     loop {
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => break,
             Ok(_) => {
-                apply_metadata_line(&mut raw, &line, &mut meta, artwork, status);
+                apply_metadata_line(&mut raw, &line, &mut meta, artwork, status, &mut fold);
             }
             Err(e) => {
                 tracing::warn!("metadata read: {e}");
@@ -644,32 +675,42 @@ pub fn consume_metadata_reader(
     }
 }
 
-pub fn apply_metadata_line(
+pub(crate) fn apply_metadata_line(
     raw: &mut String,
     line: &str,
     meta: &mut TrackMetadata,
     artwork: &SharedArtwork,
     status: &SharedStatus,
+    fold: &mut MetadataFold,
 ) {
     raw.push_str(line);
     let mut session = status.lock().unwrap().clock_session.clone();
+    let mut art_changed = false;
     for item in metadata::drain_items(raw) {
         clock::fold_metadata(&item, &mut session);
         let mut art = artwork.lock().unwrap();
-        if metadata::apply_item(meta, &mut art, &item) {
-            if item.code == "minm" || item.code == "asar" {
-                log_track(meta);
+        let accepted = metadata::accept_item(meta, &mut art, &mut fold.batch, &item);
+        art_changed |= accepted.art_changed;
+        match accepted.effect {
+            metadata::ItemEffect::Ignored => note_ignored(&item.type_code, &item.code),
+            metadata::ItemEffect::Staged => {}
+            metadata::ItemEffect::Applied => {
+                if item.code == "minm" || item.code == "asar" || item.code == "asal" {
+                    note_track(meta, &mut fold.logged);
+                }
+                if item.code == "clip" {
+                    log_clip(meta.source.as_deref());
+                }
             }
-            if item.code == "clip" {
-                log_clip(meta.source.as_deref());
-            }
-        } else {
-            tracing::debug!("ignored metadata {}/{}", item.type_code, item.code);
+            metadata::ItemEffect::Published => note_track(meta, &mut fold.logged),
         }
     }
     let mut s = status.lock().unwrap();
     s.clock_session = session;
     s.metadata.set_from_track(meta);
+    if art_changed {
+        s.metadata.artwork_rev = s.metadata.artwork_rev.wrapping_add(1);
+    }
     let playing = s.airplay.connected;
     s.metadata.refresh_position(playing);
     s.airplay.source = meta.source.clone();
@@ -997,11 +1038,12 @@ mod tests {
         let artwork = Arc::new(Mutex::new(None));
         let mut meta = TrackMetadata::default();
         let mut raw = String::new();
+        let mut fold = MetadataFold::default();
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"Hey Jude");
         let line = format!(
             "<item><type>636f7265</type><code>6d696e6d</code><data encoding=\"base64\">{b64}</data></item>\n"
         );
-        apply_metadata_line(&mut raw, &line, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &line, &mut meta, &artwork, &status, &mut fold);
         assert_eq!(
             status.lock().unwrap().metadata.title.as_deref(),
             Some("Hey Jude")
@@ -1011,7 +1053,7 @@ mod tests {
             "<item><type>73736e63</type><code>636c6970</code><data encoding=\"base64\">{}</data></item>\n",
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"iPhone")
         );
-        apply_metadata_line(&mut raw, &clip, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &clip, &mut meta, &artwork, &status, &mut fold);
         assert_eq!(
             status.lock().unwrap().airplay.source.as_deref(),
             Some("iPhone")
@@ -1021,15 +1063,18 @@ mod tests {
             "<item><type>636f7265</type><code>61736172</code><data encoding=\"base64\">{}</data></item>\n",
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"Artist")
         );
-        apply_metadata_line(&mut raw, &asar, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &asar, &mut meta, &artwork, &status, &mut fold);
         let empty_clip = "<item><type>73736e63</type><code>636c6970</code></item>\n";
-        apply_metadata_line(&mut raw, empty_clip, &mut meta, &artwork, &status);
+        apply_metadata_line(
+            &mut raw, empty_clip, &mut meta, &artwork, &status, &mut fold,
+        );
         apply_metadata_line(
             &mut raw,
             "<item><type>636f7265</type><code>61626364</code></item>\n",
             &mut meta,
             &artwork,
             &status,
+            &mut fold,
         );
         let mut empty_meta = TrackMetadata::default();
         let empty_minm = "<item><type>636f7265</type><code>6d696e6d</code><data encoding=\"base64\"></data></item>\n";
@@ -1039,12 +1084,13 @@ mod tests {
             &mut empty_meta,
             &artwork,
             &status,
+            &mut fold,
         );
         let prgr = format!(
             "<item><type>73736e63</type><code>70726772</code><data encoding=\"base64\">{}</data></item>\n",
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"0/22050/44100")
         );
-        apply_metadata_line(&mut raw, &prgr, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &prgr, &mut meta, &artwork, &status, &mut fold);
         {
             let st = status.lock().unwrap();
             assert!((st.metadata.position_s.unwrap() - 0.5).abs() < 1e-3);
@@ -1054,7 +1100,7 @@ mod tests {
             "<item><type>73736e63</type><code>6c656164</code><data encoding=\"base64\">{}</data></item>\n",
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"-9700000000")
         );
-        apply_metadata_line(&mut raw, &lead, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &lead, &mut meta, &artwork, &status, &mut fold);
         assert!(status.lock().unwrap().clock_session.lead_ms.unwrap() < -9_000.0);
         let styp = format!(
             "<item><type>73736e63</type><code>73747970</code><data encoding=\"base64\">{}</data></item>\n",
@@ -1064,13 +1110,146 @@ mod tests {
             "<item><type>73736e63</type><code>73647363</code><data encoding=\"base64\">{}</data></item>\n",
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"44100/16/2")
         );
-        apply_metadata_line(&mut raw, &styp, &mut meta, &artwork, &status);
-        apply_metadata_line(&mut raw, &sdsc, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, &styp, &mut meta, &artwork, &status, &mut fold);
+        apply_metadata_line(&mut raw, &sdsc, &mut meta, &artwork, &status, &mut fold);
         assert_eq!(status.lock().unwrap().airplay.encoding, "ALAC · 44100/16/2");
         let pend = "<item><type>73736e63</type><code>70656e64</code></item>\n";
-        apply_metadata_line(&mut raw, pend, &mut meta, &artwork, &status);
+        apply_metadata_line(&mut raw, pend, &mut meta, &artwork, &status, &mut fold);
         assert!(status.lock().unwrap().clock_session.lead_ms.is_none());
         assert!(status.lock().unwrap().airplay.encoding.is_empty());
+    }
+
+    #[test]
+    fn bundled_track_keeps_artist_with_title_and_replaces_artwork() {
+        let status = status();
+        let artwork = Arc::new(Mutex::new(None));
+        let mut meta = TrackMetadata {
+            artist: Some("Billy Joel".into()),
+            title: Some("It's Still Rock and Roll to Me".into()),
+            has_artwork: true,
+            ..TrackMetadata::default()
+        };
+        *artwork.lock().unwrap() = Some(crate::metadata::Artwork {
+            bytes: vec![1, 2, 3],
+            content_type: "image/jpeg".into(),
+        });
+        let mut fold = MetadataFold::default();
+        let mut raw = String::new();
+        let encode = |text: &str| {
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, text.as_bytes())
+        };
+        let feed =
+            |raw: &mut String, fold: &mut MetadataFold, meta: &mut TrackMetadata, xml: &str| {
+                apply_metadata_line(raw, xml, meta, &artwork, &status, fold);
+            };
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d647374</code></item>\n",
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d64656e</code></item>\n",
+        );
+        assert_eq!(meta.artist.as_deref(), Some("Billy Joel"));
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d647374</code></item>\n",
+        );
+        let title = encode("Oh Yeah");
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            &format!(
+                "<item><type>636f7265</type><code>6d696e6d</code><data encoding=\"base64\">{title}</data></item>\n"
+            ),
+        );
+        assert_eq!(meta.artist.as_deref(), Some("Billy Joel"));
+        let artist = encode("Yello");
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            &format!(
+                "<item><type>636f7265</type><code>61736172</code><data encoding=\"base64\">{artist}</data></item>\n"
+            ),
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d64656e</code></item>\n",
+        );
+        assert_eq!(meta.title.as_deref(), Some("Oh Yeah"));
+        assert_eq!(meta.artist.as_deref(), Some("Yello"));
+        assert!(artwork.lock().unwrap().is_none());
+        assert_eq!(status.lock().unwrap().metadata.artwork_rev, 1);
+        let pict = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            [0xFF, 0xD8, 0xFF, 9],
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            &format!(
+                "<item><type>73736e63</type><code>50494354</code><data encoding=\"base64\">{pict}</data></item>\n"
+            ),
+        );
+        assert!(artwork.lock().unwrap().is_some());
+        assert_eq!(status.lock().unwrap().metadata.artwork_rev, 2);
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d647374</code></item>\n",
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            &format!(
+                "<item><type>636f7265</type><code>6d696e6d</code><data encoding=\"base64\">{title}</data></item>\n"
+            ),
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            &format!(
+                "<item><type>636f7265</type><code>61736172</code><data encoding=\"base64\">{artist}</data></item>\n"
+            ),
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>73736e63</type><code>6d64656e</code></item>\n",
+        );
+        assert_eq!(status.lock().unwrap().metadata.artwork_rev, 2);
+        assert!(artwork.lock().unwrap().is_some());
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>636f7265</type><code>7a7a7a7a</code></item>\n",
+        );
+        feed(
+            &mut raw,
+            &mut fold,
+            &mut meta,
+            "<item><type>636f7265</type><code>7a7a7a7a</code></item>\n",
+        );
+        let mut logged = None;
+        note_track(&TrackMetadata::default(), &mut logged);
+        note_track(&meta, &mut logged);
+        note_track(&meta, &mut logged);
     }
 
     #[test]

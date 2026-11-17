@@ -364,6 +364,9 @@ pub struct SendLoop {
     pub next_due: Option<Instant>,
     /// Newest delay-queue entries discarded because the queue was full.
     pub delay_drops: u64,
+    /// Peak bit seen on any departure since the last analysis line.
+    peak_this_sec: bool,
+    frames_marked: u64,
     analysis_prev: Option<AnalysisCounters>,
 }
 
@@ -373,12 +376,19 @@ impl SendLoop {
         &mut self,
         status: &SharedStatus,
         active: bool,
-        packets_this_sec: u64,
+        sends_this_sec: u64,
+        frames_total: u64,
     ) -> Option<String> {
+        let frames_this_sec = frames_total.saturating_sub(self.frames_marked);
+        self.frames_marked = frames_total;
+        let peak = self.peak_this_sec;
+        self.peak_this_sec = false;
         note_analysis_log(
             status,
             active,
-            packets_this_sec,
+            sends_this_sec,
+            frames_this_sec,
+            peak,
             self.delay_drops,
             &mut self.analysis_prev,
         )
@@ -436,6 +446,9 @@ impl SendLoop {
                 let Some(pkt) = rt.analyzer.take_departure(hop) else {
                     break;
                 };
+                if pkt.sample_peak != 0 {
+                    self.peak_this_sec = true;
+                }
                 publish_audio(status, rt, cfg, pkt.sample_peak != 0);
                 self.delay_drops += enqueue_departure(
                     &mut self.delay_q,
@@ -536,7 +549,8 @@ pub fn update_status(
 /// Counters compared between once-per-second analysis lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnalysisCounters {
-    pub packets_this_sec: u64,
+    pub sends_this_sec: u64,
+    pub frames_this_sec: u64,
     pub udp_errors: u64,
     pub underruns: u64,
     pub overruns: u64,
@@ -567,8 +581,9 @@ pub fn format_analysis_line(
 ) -> String {
     let peak = u8::from(peak);
     format!(
-        "audio rms={rms:.3} peak={peak} freq={freq:.1} Hz bands={bands:?} packets={} udp_errors={} underruns={} overruns={} drops={} offset_ms={offset_ms}",
-        counters.packets_this_sec,
+        "audio rms={rms:.3} peak={peak} freq={freq:.1} Hz bands={bands:?} sends={} frames={} udp_errors={} underruns={} overruns={} drops={} offset_ms={offset_ms}",
+        counters.sends_this_sec,
+        counters.frames_this_sec,
         counters.udp_errors,
         counters.underruns,
         counters.overruns,
@@ -579,13 +594,16 @@ pub fn format_analysis_line(
 pub fn note_analysis_log(
     status: &SharedStatus,
     active: bool,
-    packets_this_sec: u64,
+    sends_this_sec: u64,
+    frames_this_sec: u64,
+    peak: bool,
     drops: u64,
     prev: &mut Option<AnalysisCounters>,
 ) -> Option<String> {
     let snap = status.lock().unwrap();
     let next = AnalysisCounters {
-        packets_this_sec,
+        sends_this_sec,
+        frames_this_sec,
         udp_errors: snap.counters.udp_errors,
         underruns: snap.counters.pcm_underruns,
         overruns: snap.counters.analysis_overruns,
@@ -598,12 +616,25 @@ pub fn note_analysis_log(
     }
     Some(format_analysis_line(
         snap.audio.rms,
-        snap.audio.peak,
+        peak,
         snap.audio.dominant_frequency,
         &snap.audio.bands,
         &next,
         snap.audio.sync_offset_ms,
     ))
+}
+
+pub fn nqptp_clock_ready(shm_dir: &Path) -> bool {
+    !shm_dir.is_dir() || shm_dir.join("nqptp").exists()
+}
+
+pub fn warn_if_nqptp_clock_missing(shm_dir: &Path) {
+    if !nqptp_clock_ready(shm_dir) {
+        tracing::warn!(
+            "nqptp clock file {} is missing; AirPlay 2 audio may stay silent",
+            shm_dir.join("nqptp").display()
+        );
+    }
 }
 
 pub fn apply_transmitted_packet(audio: &mut AudioStatus, pkt: &AudioSyncPacket) {
@@ -645,6 +676,7 @@ pub fn mark_stream_connected(rt: &mut PcmRuntime, status: &SharedStatus, now: In
         return;
     }
     tracing::info!("PCM stream connected");
+    warn_if_nqptp_clock_missing(Path::new("/dev/shm"));
     rt.stream_active = true;
     rt.stream_since = Some(now);
     rt.connections += 1;
@@ -846,7 +878,8 @@ mod tests {
     #[test]
     fn analysis_line_follows_the_stream_and_counter_changes() {
         let idle = AnalysisCounters {
-            packets_this_sec: 0,
+            sends_this_sec: 0,
+            frames_this_sec: 0,
             udp_errors: 0,
             underruns: 0,
             overruns: 0,
@@ -863,7 +896,8 @@ mod tests {
         assert!(line.contains("rms=0.125"));
         assert!(line.contains("peak=1"));
         assert!(line.contains("freq=440.0"));
-        assert!(line.contains("packets=0"));
+        assert!(line.contains("sends=0"));
+        assert!(line.contains("frames=0"));
         assert!(line.contains("drops=2"));
         assert!(line.contains("offset_ms=1200"));
 
@@ -880,26 +914,47 @@ mod tests {
             snap.counters.analysis_overruns = 3;
         }
         let mut prev = None;
-        assert!(note_analysis_log(&status, false, 0, 0, &mut prev).is_none());
-        let line = note_analysis_log(&status, false, 4, 1, &mut prev).unwrap();
-        assert!(line.contains("packets=4"));
+        assert!(note_analysis_log(&status, false, 0, 0, false, 0, &mut prev).is_none());
+        let line = note_analysis_log(&status, false, 4, 50, false, 1, &mut prev).unwrap();
+        assert!(line.contains("sends=4"));
+        assert!(line.contains("frames=50"));
+        assert!(line.contains("peak=0"));
         assert!(line.contains("udp_errors=1"));
         assert!(line.contains("underruns=2"));
         assert!(line.contains("overruns=3"));
         assert!(line.contains("drops=1"));
         assert!(line.contains("offset_ms=40"));
         assert!(line.contains("bands=[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]"));
-        assert!(note_analysis_log(&status, false, 4, 1, &mut prev).is_none());
-        let active = note_analysis_log(&status, true, 4, 1, &mut prev).unwrap();
+        assert!(note_analysis_log(&status, false, 4, 50, false, 1, &mut prev).is_none());
+        let active = note_analysis_log(&status, true, 4, 50, true, 1, &mut prev).unwrap();
         assert!(active.contains("rms=0.500"));
         assert!(active.contains("peak=1"));
 
         let mut sl = SendLoop::default();
-        assert!(sl.analysis_line(&status, false, 0).is_none());
+        assert!(sl.analysis_line(&status, false, 0, 0).is_none());
         sl.delay_drops = 1;
-        let from_loop = sl.analysis_line(&status, false, 4).unwrap();
+        sl.peak_this_sec = true;
+        let from_loop = sl.analysis_line(&status, false, 4, 50).unwrap();
         assert!(from_loop.contains("drops=1"));
-        assert!(sl.analysis_line(&status, false, 4).is_none());
+        assert!(from_loop.contains("frames=50"));
+        assert!(from_loop.contains("peak=1"));
+        let quiet = sl.analysis_line(&status, true, 4, 100).unwrap();
+        assert!(quiet.contains("peak=0"));
+        assert!(quiet.contains("frames=50"));
+    }
+
+    #[test]
+    fn nqptp_clock_warns_only_when_the_shm_directory_has_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!nqptp_clock_ready(dir.path()));
+        warn_if_nqptp_clock_missing(dir.path());
+        std::fs::write(dir.path().join("nqptp"), []).unwrap();
+        assert!(nqptp_clock_ready(dir.path()));
+        warn_if_nqptp_clock_missing(dir.path());
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, []).unwrap();
+        assert!(nqptp_clock_ready(&file));
+        warn_if_nqptp_clock_missing(&file);
     }
 
     #[test]

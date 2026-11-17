@@ -76,6 +76,7 @@ PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
 SIDECAR_PID=""
 NQPTP_PID=""
+NQPTP_WATCH_PID=""
 SHAIRPORT_PID=""
 WLEDPLAY_PID=""
 ROTATE_PID=""
@@ -91,6 +92,33 @@ wait_for() {
     i=$((i + 1))
   done
   return 1
+}
+
+wait_for_tcp() {
+  host=$1
+  port=$2
+  tries=${3:-50}
+  i=0
+  while [ "$i" -lt "$tries" ]; do
+    if python3 -c "import socket; s=socket.create_connection(('$host', $port), 0.2); s.close()" >/dev/null 2>&1; then
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+watch_nqptp() {
+  i=0
+  while [ "$i" -lt 600 ]; do
+    if [ -e /dev/shm/nqptp ]; then
+      echo "nqptp clock is ready"
+      return 0
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  echo "warning: nqptp clock file /dev/shm/nqptp is still missing"
 }
 
 # Each process log is also copied to the container console. The fifo is opened
@@ -207,6 +235,7 @@ shutdown() {
   kill "$SIDECAR_PID" 2>/dev/null || true
   kill "$SHAIRPORT_PID" 2>/dev/null || true
   kill "$NQPTP_PID" 2>/dev/null || true
+  kill "$NQPTP_WATCH_PID" 2>/dev/null || true
   exec >&3 2>&3 || true
   # shellcheck disable=SC2086
   kill $TEE_PIDS "$ROTATE_PID" 2>/dev/null || true
@@ -229,7 +258,9 @@ nqptp > "$WLEDPLAY_LOG_DIR/nqptp.fifo" 2>&1 &
 NQPTP_PID=$!
 # AirPlay 2 does not start the stdout backend until this clock exists.
 if ! wait_for /dev/shm/nqptp 50; then
-  echo "warning: nqptp did not create /dev/shm/nqptp; AirPlay 2 audio will not start"
+  echo "warning: nqptp has not created /dev/shm/nqptp yet"
+  watch_nqptp &
+  NQPTP_WATCH_PID=$!
 fi
 if ! kill -0 "$NQPTP_PID" 2>/dev/null; then
   echo "fatal: nqptp exited. AirPlay 2 needs UDP 319/320."
@@ -280,7 +311,17 @@ fi
 
 echo "Starting Auto Join..."
 start_autojoin
+autojoin_url="${WLEDPLAY_AUTOJOIN_URL:-http://127.0.0.1:8091}"
+autojoin_host=$(printf '%s' "$autojoin_url" | sed -E 's#^[a-zA-Z]+://([^:/]+).*#\1#')
+autojoin_port=$(printf '%s' "$autojoin_url" | sed -E 's#^.*:([0-9]+).*#\1#')
+case "$autojoin_port" in
+  ''|*[!0-9]*) autojoin_port=8091 ;;
+esac
+if ! wait_for_tcp "$autojoin_host" "$autojoin_port" 50; then
+  echo "warning: Auto Join sidecar is not accepting connections yet"
+fi
 
+echo "WLEDPlay stack running (AirPlay: ${WLEDPLAY_AIRPLAY_NAME}, WLED: ${WLEDPLAY_MULTICAST_ADDRESS}:${WLEDPLAY_PORT})"
 echo "Starting wledplay..."
 start_log_tee wledplay
 # shellcheck disable=SC2086
@@ -302,7 +343,6 @@ start_log_tee shairport
 shairport-sync -c /tmp/shairport-sync.conf > "$PCM_FIFO" 2>"$WLEDPLAY_LOG_DIR/shairport.fifo" &
 SHAIRPORT_PID=$!
 
-echo "WLEDPlay stack running (AirPlay: ${WLEDPLAY_AIRPLAY_NAME}, WLED: ${WLEDPLAY_MULTICAST_ADDRESS}:${WLEDPLAY_PORT})"
 # Compose restart: unless-stopped brings the container back after this process exits.
 # wledplay exiting is the orderly restart path. Shairport, NQPTP, or the sidecar
 # dying is a failed child: stop the rest and exit non-zero.

@@ -9,6 +9,13 @@ services:
     container_name: wledplay
     network_mode: host
     restart: unless-stopped
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
+      memlock:
+        soft: -1
+        hard: -1
     volumes:
       # Local yaml/conf are gitignored. ./scripts/ensure-config.sh copies examples
       # if missing. Entrypoint prefers local files, then examples, then image defaults.

@@ -14,6 +14,8 @@ The HTTP server listens on `0.0.0.0:8080` unless you bind it to one interface. T
 
 Anyone who can open that port can do both. `GET /status`, `GET /levels`, and `GET /artwork` also expose now-playing metadata and cover art.
 
+The Compose service adds `SYS_NICE` and an `rtprio` limit so Shairport Sync can set realtime scheduling on its audio thread. That capability does not authenticate the HTTP API.
+
 Bind the UI to a management NIC:
 
 - `network.http` in `config/config.yaml`, or
