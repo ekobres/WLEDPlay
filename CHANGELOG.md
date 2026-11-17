@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Visualizer switch in the card header has no extra label.
 - The Statistics card shows CPU, memory, send lateness, jitter, and the protocol counters, each with a description. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.
 - The visualizer Decay switch stays off after a page refresh.
 - Auto Join keeps listening after its first browse. Speakers that show up later are added to the target list, and this receiver is resolved again when Shairport advertises it, so a playing group can be joined without Rescan for Targets.

@@ -237,6 +237,7 @@ mod tests {
         assert!(html.contains("function isDirty()"));
         assert!(!html.contains("Visualizer on"));
         assert!(html.contains(">Visualizer</span>"));
+        assert!(!html.contains("<span>Visualizer</span>"));
         assert!(html.contains("function idleSpectrum"));
         let body_viz = html.find("id=\"body-viz\"").expect("body-viz");
         let toggle_at = html.find("id=\"viz-toggle\"").expect("viz-toggle");
