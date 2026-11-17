@@ -608,15 +608,15 @@ fn log_track(meta: &TrackMetadata) {
     tracing::info!("Track: {artist} — {title}");
 }
 
-fn note_track(meta: &TrackMetadata, logged: &mut Option<(Option<String>, Option<String>)>) {
+fn note_track(meta: &TrackMetadata, logged: &mut (Option<String>, Option<String>)) {
     if meta.title.is_none() && meta.artist.is_none() {
         return;
     }
     let pair = (meta.artist.clone(), meta.title.clone());
-    if logged.as_ref() == Some(&pair) {
+    if *logged == pair {
         return;
     }
-    *logged = Some(pair);
+    *logged = pair;
     log_track(meta);
 }
 
@@ -628,10 +628,9 @@ fn log_clip(source: Option<&str>) {
 
 fn note_ignored(type_code: &str, code: &str) {
     use std::collections::HashSet;
-    use std::sync::Mutex;
-    static SEEN: Mutex<Option<HashSet<String>>> = Mutex::new(None);
-    let mut guard = SEEN.lock().unwrap();
-    let seen = guard.get_or_insert_with(HashSet::new);
+    use std::sync::{LazyLock, Mutex};
+    static SEEN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut seen = SEEN.lock().unwrap();
     if seen.insert(format!("{type_code}/{code}")) {
         tracing::trace!("ignored metadata {type_code}/{code}");
     }
@@ -640,7 +639,7 @@ fn note_ignored(type_code: &str, code: &str) {
 #[derive(Default)]
 pub(crate) struct MetadataFold {
     batch: Option<crate::metadata::MetaBatch>,
-    logged: Option<(Option<String>, Option<String>)>,
+    logged: (Option<String>, Option<String>),
 }
 
 fn metadata_retry_delay(max_cycles: Option<u32>) -> Duration {
@@ -1246,7 +1245,7 @@ mod tests {
             &mut meta,
             "<item><type>636f7265</type><code>7a7a7a7a</code></item>\n",
         );
-        let mut logged = None;
+        let mut logged = (None, None);
         note_track(&TrackMetadata::default(), &mut logged);
         note_track(&meta, &mut logged);
         note_track(&meta, &mut logged);

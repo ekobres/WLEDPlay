@@ -85,10 +85,11 @@ TEE_PIDS=""
 wait_for() {
   path=$1
   tries=${2:-50}
+  pause=${3:-0.1}
   i=0
   while [ "$i" -lt "$tries" ]; do
     [ -e "$path" ] && return 0
-    sleep 0.1
+    sleep "$pause"
     i=$((i + 1))
   done
   return 1
@@ -98,26 +99,33 @@ wait_for_tcp() {
   host=$1
   port=$2
   tries=${3:-50}
-  i=0
-  while [ "$i" -lt "$tries" ]; do
-    if python3 -c "import socket; s=socket.create_connection(('$host', $port), 0.2); s.close()" >/dev/null 2>&1; then
-      return 0
-    fi
-    i=$((i + 1))
-  done
+  if python3 - "$host" "$port" "$tries" <<'PY'
+import socket
+import sys
+import time
+
+host, port, tries = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+for attempt in range(tries):
+    try:
+        sock = socket.create_connection((host, port), 0.2)
+        sock.close()
+        raise SystemExit(0)
+    except OSError:
+        if attempt + 1 < tries:
+            time.sleep(0.1)
+raise SystemExit(1)
+PY
+  then
+    return 0
+  fi
   return 1
 }
 
 watch_nqptp() {
-  i=0
-  while [ "$i" -lt 600 ]; do
-    if [ -e /dev/shm/nqptp ]; then
-      echo "nqptp clock is ready"
-      return 0
-    fi
-    sleep 0.5
-    i=$((i + 1))
-  done
+  if wait_for /dev/shm/nqptp 600 0.5; then
+    echo "nqptp clock is ready"
+    return 0
+  fi
   echo "warning: nqptp clock file /dev/shm/nqptp is still missing"
 }
 

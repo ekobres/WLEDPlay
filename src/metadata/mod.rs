@@ -225,14 +225,14 @@ pub fn apply_item(
             *artwork = None;
             true
         }
-        ("ssnc", "PICT") if !item.data.is_empty() && item.data.len() <= MAX_ARTWORK_BYTES => {
-            *artwork = Some(Artwork {
-                content_type: sniff_image(&item.data).to_string(),
-                bytes: item.data.clone(),
-            });
-            meta.has_artwork = true;
-            true
-        }
+        ("ssnc", "PICT") => match artwork_from(&item.data) {
+            Some(art) => {
+                *artwork = Some(art);
+                meta.has_artwork = true;
+                true
+            }
+            None => false,
+        },
         _ => false,
     }
 }
@@ -247,7 +247,6 @@ pub struct MetaBatch {
     pub saw_title: bool,
     pub saw_artist: bool,
     pub saw_album: bool,
-    pub saw_art: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,48 +272,38 @@ impl Accept {
     }
 }
 
-pub fn artwork_stamp(art: &Option<Artwork>) -> u64 {
-    let Some(art) = art else {
-        return 0;
-    };
-    let mut hash = (art.bytes.len() as u64).wrapping_add(1);
-    for byte in &art.bytes {
-        hash = hash.wrapping_mul(131).wrapping_add(u64::from(*byte));
+fn artwork_from(data: &[u8]) -> Option<Artwork> {
+    if data.is_empty() || data.len() > MAX_ARTWORK_BYTES {
+        None
+    } else {
+        Some(Artwork {
+            content_type: sniff_image(data).to_string(),
+            bytes: data.to_vec(),
+        })
     }
-    hash
+}
+
+fn cover_bytes(art: &Option<Artwork>) -> Option<&[u8]> {
+    art.as_ref().map(|item| item.bytes.as_slice())
 }
 
 fn commit_batch(meta: &mut TrackMetadata, artwork: &mut Option<Artwork>, batch: MetaBatch) -> bool {
     let identity = batch.saw_title || batch.saw_artist || batch.saw_album;
     let mut identity_changed = false;
     if identity {
-        let title = if batch.saw_title {
-            batch.title.clone()
-        } else {
-            None
-        };
-        let artist = if batch.saw_artist {
-            batch.artist.clone()
-        } else {
-            None
-        };
-        let album = if batch.saw_album {
-            batch.album.clone()
-        } else {
-            None
-        };
-        identity_changed = meta.title != title || meta.artist != artist || meta.album != album;
-        if meta.title != title {
+        identity_changed =
+            meta.title != batch.title || meta.artist != batch.artist || meta.album != batch.album;
+        if meta.title != batch.title {
             meta.clear_progress();
         }
-        meta.title = title;
-        meta.artist = artist;
-        meta.album = album;
+        meta.title = batch.title;
+        meta.artist = batch.artist;
+        meta.album = batch.album;
     }
-    if batch.saw_art {
-        let changed = artwork_stamp(artwork) != artwork_stamp(&batch.artwork);
+    if let Some(next) = batch.artwork {
+        let changed = cover_bytes(artwork) != Some(next.bytes.as_slice());
         if changed {
-            *artwork = batch.artwork;
+            *artwork = Some(next);
         }
         meta.has_artwork = artwork.is_some();
         changed
@@ -325,6 +314,28 @@ fn commit_batch(meta: &mut TrackMetadata, artwork: &mut Option<Artwork>, batch: 
         changed
     } else {
         false
+    }
+}
+
+fn loose_accept(
+    meta: &mut TrackMetadata,
+    artwork: &mut Option<Artwork>,
+    item: &MetaItem,
+) -> Accept {
+    let art_changed = match (item.type_code.as_str(), item.code.as_str()) {
+        ("ssnc", "PICT") => {
+            artwork_from(&item.data).is_some() && cover_bytes(artwork) != Some(item.data.as_slice())
+        }
+        ("ssnc", "pend") | ("ssnc", "pfls") => artwork.is_some(),
+        _ => false,
+    };
+    if apply_item(meta, artwork, item) {
+        Accept {
+            effect: ItemEffect::Applied,
+            art_changed,
+        }
+    } else {
+        Accept::of(ItemEffect::Ignored)
     }
 }
 
@@ -355,45 +366,35 @@ pub fn accept_item(
                 Accept::of(ItemEffect::Applied)
             }
         }
-        ("core", "minm") if batch.is_some() => {
-            let pending = batch.as_mut().unwrap();
-            pending.title = utf8_opt(&item.data);
-            pending.saw_title = true;
-            Accept::of(ItemEffect::Staged)
-        }
-        ("core", "asar") if batch.is_some() => {
-            let pending = batch.as_mut().unwrap();
-            pending.artist = utf8_opt(&item.data);
-            pending.saw_artist = true;
-            Accept::of(ItemEffect::Staged)
-        }
-        ("core", "asal") if batch.is_some() => {
-            let pending = batch.as_mut().unwrap();
-            pending.album = utf8_opt(&item.data);
-            pending.saw_album = true;
-            Accept::of(ItemEffect::Staged)
-        }
-        ("ssnc", "PICT") if batch.is_some() => {
-            if item.data.is_empty() || item.data.len() > MAX_ARTWORK_BYTES {
-                return Accept::of(ItemEffect::Ignored);
-            }
-            let pending = batch.as_mut().unwrap();
-            pending.artwork = Some(Artwork {
-                content_type: sniff_image(&item.data).to_string(),
-                bytes: item.data.clone(),
-            });
-            pending.saw_art = true;
-            Accept::of(ItemEffect::Staged)
-        }
         _ => {
-            let before = artwork_stamp(artwork);
-            if apply_item(meta, artwork, item) {
-                Accept {
-                    effect: ItemEffect::Applied,
-                    art_changed: before != artwork_stamp(artwork),
+            if let Some(pending) = batch.as_mut() {
+                match (item.type_code.as_str(), item.code.as_str()) {
+                    ("core", "minm") => {
+                        pending.title = utf8_opt(&item.data);
+                        pending.saw_title = true;
+                        Accept::of(ItemEffect::Staged)
+                    }
+                    ("core", "asar") => {
+                        pending.artist = utf8_opt(&item.data);
+                        pending.saw_artist = true;
+                        Accept::of(ItemEffect::Staged)
+                    }
+                    ("core", "asal") => {
+                        pending.album = utf8_opt(&item.data);
+                        pending.saw_album = true;
+                        Accept::of(ItemEffect::Staged)
+                    }
+                    ("ssnc", "PICT") => match artwork_from(&item.data) {
+                        Some(art) => {
+                            pending.artwork = Some(art);
+                            Accept::of(ItemEffect::Staged)
+                        }
+                        None => Accept::of(ItemEffect::Ignored),
+                    },
+                    _ => loose_accept(meta, artwork, item),
                 }
             } else {
-                Accept::of(ItemEffect::Ignored)
+                loose_accept(meta, artwork, item)
             }
         }
     }
@@ -580,7 +581,6 @@ mod tests {
             bytes: vec![1, 2, 3],
             content_type: "image/jpeg".into(),
         });
-        let old_stamp = artwork_stamp(&art);
         let mut batch = None;
         let opened = accept_item(
             &mut meta,
@@ -660,8 +660,6 @@ mod tests {
             art.as_ref().map(|item| item.bytes.as_slice()),
             Some(&jpeg[..])
         );
-        assert_ne!(artwork_stamp(&art), old_stamp);
-        assert_eq!(artwork_stamp(&None), 0);
 
         let bare = accept_item(
             &mut meta,
@@ -737,6 +735,53 @@ mod tests {
         );
         assert!(!same.art_changed);
         assert!(meta.has_artwork);
+    }
+
+    #[test]
+    fn loose_items_update_the_cover_only_when_it_changes() {
+        let mut meta = TrackMetadata::default();
+        let mut art = Some(Artwork {
+            bytes: vec![1, 2, 3],
+            content_type: "image/jpeg".into(),
+        });
+        let mut batch = None;
+        let same = accept_item(
+            &mut meta,
+            &mut art,
+            &mut batch,
+            &raw_item("ssnc", "PICT", &[1, 2, 3]),
+        );
+        assert_eq!(same.effect, ItemEffect::Applied);
+        assert!(!same.art_changed);
+        assert_eq!(
+            art.as_ref().map(|item| item.bytes.as_slice()),
+            Some(&[1, 2, 3][..])
+        );
+
+        accept_item(
+            &mut meta,
+            &mut art,
+            &mut batch,
+            &raw_item("ssnc", "mdst", &[]),
+        );
+        let flushed = accept_item(
+            &mut meta,
+            &mut art,
+            &mut batch,
+            &raw_item("ssnc", "pfls", &[]),
+        );
+        assert_eq!(flushed.effect, ItemEffect::Applied);
+        assert!(flushed.art_changed);
+        assert!(art.is_none());
+
+        let again = accept_item(
+            &mut meta,
+            &mut art,
+            &mut batch,
+            &raw_item("ssnc", "pend", &[]),
+        );
+        assert_eq!(again.effect, ItemEffect::Applied);
+        assert!(!again.art_changed);
     }
 
     #[test]
