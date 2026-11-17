@@ -3,8 +3,9 @@
 
 Binds 127.0.0.1 only. WLEDPlay's operator API remains the only UI.
 A standing Avahi browser fills the target snapshot and the session table.
+Speakers that appear after the first pass are added. Rescan replaces the list.
 This receiver is resolved again until its advertisement is stored. That
-retry does not replace the target snapshot.
+lookup reuses its resolver slot and does not replace the target list.
 pyatv runs only when a join is sent. Credentials stay in a pyatv settings
 file. PYATV_STORAGE may be that file or a directory; a directory is stored
 as <dir>/pyatv.json.
@@ -397,6 +398,35 @@ def snapshot_index() -> dict:
 
 def _is_receiver_name(name: str, receiver_name: str) -> bool:
     return bool(receiver_name) and name.lower() == receiver_name.lower()
+
+
+def snapshot_row(ident: str, rec: dict) -> dict:
+    return {
+        "id": ident,
+        "name": rec.get("name") or ident,
+        "model": rec.get("model") or "",
+        "address": rec.get("address") or "",
+    }
+
+
+def include_snapshot(rows: list, ident: str, rec: dict, receiver_name: str) -> bool:
+    """Add or refresh one speaker. This receiver stays out of the target list."""
+    if not rec.get("present"):
+        return False
+    if _is_receiver_name(rec.get("name") or "", receiver_name):
+        return False
+    row = snapshot_row(ident, rec)
+    for existing in rows:
+        if existing.get("id") != ident:
+            continue
+        if existing == row:
+            return False
+        existing.clear()
+        existing.update(row)
+        return True
+    rows.append(row)
+    rows.sort(key=lambda item: (item.get("name") or "").casefold())
+    return True
 
 
 def _is_session_peer(
@@ -987,22 +1017,25 @@ def _replace_snapshot(records: dict) -> None:
     name = _receiver_name()
     rows = []
     for ident, rec in records.items():
-        if not rec.get("present"):
-            continue
-        if _is_receiver_name(rec.get("name") or "", name):
-            continue
-        rows.append(
-            {
-                "id": ident,
-                "name": rec.get("name") or ident,
-                "model": rec.get("model") or "",
-                "address": rec.get("address") or "",
-            }
-        )
-    rows.sort(key=lambda row: row["name"].casefold())
+        include_snapshot(rows, ident, rec, name)
     with _lock:
         _snapshot = rows
         _snapshot_at = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+
+
+def _fold_snapshot(ident: str, rec: dict) -> None:
+    """Keep a speaker that arrives after the first pass on the target list."""
+    global _snapshot, _snapshot_at
+    name = _receiver_name()
+    with _lock:
+        rows = [dict(row) for row in _snapshot]
+        stamp = _snapshot_at
+    if not include_snapshot(rows, ident, rec, name):
+        return
+    with _lock:
+        _snapshot = rows
+        if not stamp:
+            _snapshot_at = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
 
 
 def scan_payload() -> dict:
@@ -1115,6 +1148,8 @@ class AvahiBrowser:
         self.wled_network = None
         self.receiver_watch = False
         self.receiver_signals = []
+        self.resolver_signals = {}
+        self.resolve_attempt = {}
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="avahi-browse", daemon=True).start()
@@ -1254,12 +1289,18 @@ class AvahiBrowser:
     def _drop_clients(self) -> None:
         self._drop_signals(self.matches)
         self._drop_signals(self.receiver_signals)
+        for key in list(self.resolver_signals):
+            self._drop_resolver_signals(key)
         for path, _browser_obj in self.browsers:
             self._free(path, "ServiceBrowser")
         for path in list(self.resolvers.values()):
             self._free(path, "ServiceResolver")
         self.browsers.clear()
         self.resolvers.clear()
+        self.resolve_attempt.clear()
+
+    def _drop_resolver_signals(self, key) -> None:
+        self._drop_signals(self.resolver_signals.pop(key, []))
 
     def _free(self, path: str, kind: str) -> None:
         try:
@@ -1271,7 +1312,9 @@ class AvahiBrowser:
     def _on_new(self, gen, _kind, interface, protocol, name, stype, domain, _flags) -> None:
         if gen != self.generation:
             return
-        self._resolve(int(interface), int(protocol), str(name), str(stype), str(domain))
+        self._resolve(
+            int(interface), int(protocol), str(name), str(stype), str(domain), refresh=True
+        )
 
     def _on_remove(self, gen, _kind, _interface, _protocol, name, stype, _domain, _flags) -> None:
         if gen != self.generation:
@@ -1289,11 +1332,26 @@ class AvahiBrowser:
         self._publish_live()
 
     def _resolve(
-        self, interface: int, protocol: int, name: str, stype: str, domain: str, hold=None
+        self,
+        interface: int,
+        protocol: int,
+        name: str,
+        stype: str,
+        domain: str,
+        refresh: bool = False,
+        gate: bool = True,
     ) -> None:
         key = (interface, name, stype)
-        if key in self.resolvers:
+        occupied = key in self.resolvers or key in self.unresolved
+        if occupied and not refresh:
             return
+        self._drop_resolver_signals(key)
+        old = self.resolvers.pop(key, "")
+        self.unresolved.discard(key)
+        if old:
+            self._free(old, "ServiceResolver")
+        attempt = self.resolve_attempt.get(key, 0) + 1
+        self.resolve_attempt[key] = attempt
         try:
             path = self.server.ServiceResolverNew(
                 self._dbus.Int32(interface),
@@ -1305,46 +1363,49 @@ class AvahiBrowser:
                 self._dbus.UInt32(0),
             )
         except Exception as exc:
-            self.unresolved.discard(key)
             self.pass_error = str(exc)
             self._set_status(True, self.pass_error)
             self._maybe_publish()
             return
         path = str(path)
-        self.unresolved.add(key)
+        if gate:
+            self.unresolved.add(key)
         try:
-            old = self.resolvers.pop(key, "")
-            if old:
-                self._free(old, "ServiceResolver")
             resolver = self._dbus.Interface(
                 self.bus.get_object("org.freedesktop.Avahi", path),
                 "org.freedesktop.Avahi.ServiceResolver",
             )
+            bucket = []
+            self.resolver_signals[key] = bucket
             self._listen(
                 resolver,
                 "Found",
-                lambda *args, key=key, gen=self.generation: self._on_found(gen, key, *args),
-                hold,
+                lambda *args, key=key, gen=self.generation, attempt=attempt: self._on_found(
+                    gen, key, attempt, *args
+                ),
+                bucket,
             )
             self._listen(
                 resolver,
                 "Failure",
-                lambda message, key=key, gen=self.generation: self._on_resolver_failure(
-                    gen, key, message
+                lambda message, key=key, gen=self.generation, attempt=attempt: self._on_resolver_failure(
+                    gen, key, attempt, message
                 ),
-                hold,
+                bucket,
             )
             self.resolvers[key] = path
         except Exception as exc:
             self.pass_error = str(exc)
             self._set_status(True, self.pass_error)
             self._note_resolved(key)
+        if not gate:
+            self._maybe_publish()
 
     def _on_found(
-        self, gen, key, _interface, _protocol, name, stype, _domain, _host, _aprotocol,
+        self, gen, key, attempt, _interface, _protocol, name, stype, _domain, _host, _aprotocol,
         address, _port, txt, _flags,
     ) -> None:
-        if gen != self.generation:
+        if gen != self.generation or attempt != self.resolve_attempt.get(key):
             return
         try:
             self._apply_found(key, name, stype, address, txt)
@@ -1389,9 +1450,11 @@ class AvahiBrowser:
                 rec["named_by_airplay"] = not is_raop
         self.services[key] = ident
         self._publish_live()
+        if not self.snapshot_open:
+            _fold_snapshot(ident, rec)
 
-    def _on_resolver_failure(self, gen, key, _message) -> None:
-        if gen != self.generation:
+    def _on_resolver_failure(self, gen, key, attempt, _message) -> None:
+        if gen != self.generation or attempt != self.resolve_attempt.get(key):
             return
         self._note_resolved(key)
 
@@ -1569,13 +1632,12 @@ class AvahiBrowser:
             return False
         iface = self._interface_index(AIRPLAY_IFACE)
         key = (iface, name, "_airplay._tcp")
-        if key in self.unresolved:
-            return False
-        self._drop_signals(self.receiver_signals)
-        old = self.resolvers.pop(key, "")
-        if old:
-            self._free(old, "ServiceResolver")
-        self._resolve(iface, 0, name, "_airplay._tcp", "local", self.receiver_signals)
+        # A lookup started before Shairport is advertising stays in this slot.
+        # Replace it, including one that has not answered, so the real
+        # advertisement can be stored. Keep gating the target list only when
+        # a browse resolve for this name is already part of that wait.
+        gate = key in self.unresolved
+        self._resolve(iface, 0, name, "_airplay._tcp", "local", refresh=True, gate=gate)
         return False
 
     def _publish_snapshot(self) -> None:
