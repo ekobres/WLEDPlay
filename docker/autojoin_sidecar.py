@@ -1151,16 +1151,29 @@ class AvahiBrowser:
         self._open_browsers()
         return False
 
+    def _interface_index(self, name: str) -> int:
+        """Avahi's index for one NIC. -1 browses every interface Avahi allows."""
+        if not name or self.server is None:
+            return -1
+        try:
+            return int(self.server.GetNetworkInterfaceIndexByName(name))
+        except Exception:
+            return -1
+
     def _open_browsers(self) -> None:
         self.pass_error = ""
         self.pending = set()
         self.unresolved = set()
         self.snapshot_open = True
         opened = 0
+        # Speakers are on the AirPlay NIC. A browse of every allowed NIC also
+        # sees that name on the unicast NIC, and one resolver slot would keep
+        # the TXT record from the NIC that answered first.
+        iface = self._dbus.Int32(self._interface_index(AIRPLAY_IFACE))
         for stype in ("_airplay._tcp", "_raop._tcp"):
             try:
                 path = self.server.ServiceBrowserNew(
-                    self._dbus.Int32(-1),
+                    iface,
                     self._dbus.Int32(0),
                     stype,
                     "local",
@@ -1234,7 +1247,7 @@ class AvahiBrowser:
     def _on_remove(self, gen, _kind, _interface, _protocol, name, stype, _domain, _flags) -> None:
         if gen != self.generation:
             return
-        key = (str(name), str(stype))
+        key = (int(_interface), str(name), str(stype))
         ident = self.services.pop(key, "")
         if not ident:
             return
@@ -1247,7 +1260,7 @@ class AvahiBrowser:
         _store_live(self.records)
 
     def _resolve(self, interface: int, protocol: int, name: str, stype: str, domain: str) -> None:
-        key = (name, stype)
+        key = (interface, name, stype)
         if key in self.resolvers:
             return
         try:
@@ -1386,9 +1399,10 @@ class AvahiBrowser:
     def _open_wled(self) -> None:
         self.wled_network = iface_network(UNICAST_IFACE)
         stype = "_wled._tcp"
+        iface = self._dbus.Int32(self._interface_index(UNICAST_IFACE))
         try:
             path = self.server.ServiceBrowserNew(
-                self._dbus.Int32(-1),
+                iface,
                 self._dbus.Int32(0),
                 stype,
                 "local",
@@ -1433,7 +1447,7 @@ class AvahiBrowser:
     def _on_wled_new(self, gen, interface, protocol, name, stype, domain, _flags) -> None:
         if gen != self.wled_generation:
             return
-        key = (str(name), str(stype))
+        key = (int(interface), str(name), str(stype))
         if key in self.wled_resolvers:
             return
         try:
@@ -1466,7 +1480,7 @@ class AvahiBrowser:
     def _on_wled_remove(self, gen, _interface, _protocol, name, stype, _domain, _flags) -> None:
         if gen != self.wled_generation:
             return
-        key = (str(name), str(stype))
+        key = (int(_interface), str(name), str(stype))
         self.wled_resolvers.pop(key, None)
         with _lock:
             for row in _wled_rows.values():

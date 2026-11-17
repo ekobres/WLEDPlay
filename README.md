@@ -104,8 +104,8 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 | `WLEDPLAY_PORT` | Default `11988` |
 | `WLEDPLAY_DESTINATION` | Comma-separated unicast WLED IPs (Docker) |
 | `WLEDPLAY_HTTP_INTERFACE` | NIC for the HTTP UI (empty = `web.listen` / all interfaces) |
-| `WLEDPLAY_AIRPLAY_INTERFACE` | NIC for Shairport. Avahi listens on this NIC |
-| `WLEDPLAY_UNICAST_INTERFACE` | NIC for WLED unicast UDP. When this differs from the AirPlay NIC, Avahi listens on it too |
+| `WLEDPLAY_AIRPLAY_INTERFACE` | NIC for Shairport. Avahi listens here, and the AirPlay browser uses only this NIC |
+| `WLEDPLAY_UNICAST_INTERFACE` | NIC for WLED unicast UDP. When this differs from the AirPlay NIC, Avahi listens on it too, and the WLED browser uses only this NIC |
 | `WLEDPLAY_MULTICAST_INTERFACE` | NIC for WLED multicast (`239.0.0.1`) |
 | `WLEDPLAY_WEB_LISTEN` | HTTP bind address when HTTP NIC is unset (default `0.0.0.0`) |
 | `WLEDPLAY_WEB_PORT` | HTTP port (default `8080`) |

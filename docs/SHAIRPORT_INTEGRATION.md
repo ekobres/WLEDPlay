@@ -178,7 +178,7 @@ Default Shairport lead in Docker is `-1.2` seconds with send delay `1200` ms (on
 
 Container entrypoint order:
 
-1. Start **dbus** + **avahi-daemon** (mDNS; pin to `WLEDPLAY_AIRPLAY_INTERFACE` when set, and also `WLEDPLAY_UNICAST_INTERFACE` when that NIC is different)
+1. Start **dbus** + **avahi-daemon** (mDNS; pin to `WLEDPLAY_AIRPLAY_INTERFACE` when set, and also `WLEDPLAY_UNICAST_INTERFACE` when that NIC is different). The AirPlay browser uses the AirPlay NIC. The WLED browser uses the unicast NIC.
 2. Start **nqptp** (AirPlay 2)
 3. Start the **Auto Join sidecar**
 4. Start **wledplay** (reads the PCM pipe)
