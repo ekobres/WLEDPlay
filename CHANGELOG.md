@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auto Join resolves this receiver again after startup until its advertisement is stored, so a target that is already playing can be joined without Rescan for Targets. That retry does not replace the target list.
 - A track change publishes the new title and artist together, and the cover art is replaced instead of keeping the previous picture. The once-per-second debug line reports UDP sends, audio frames, and whether a peak occurred during that second.
 - Startup waits about five seconds for the Auto Join sidecar port, keeps watching for the NQPTP clock file, and grants Shairport `SYS_NICE` so it can set realtime scheduling. An `rtprio` limit is not set, because the runtime rejects it and will not start the container. Auto Join waits while this receiver is not advertised yet.
 - WLEDPlay log timestamps use local time with a numeric offset. Debug and trace record RMS, peak, frequency, FFT bands, packet counters, delay-queue drops, and the timing offset about once a second while audio is playing.

@@ -3,6 +3,8 @@
 
 Binds 127.0.0.1 only. WLEDPlay's operator API remains the only UI.
 A standing Avahi browser fills the target snapshot and the session table.
+This receiver is resolved again until its advertisement is stored. That
+retry does not replace the target snapshot.
 pyatv runs only when a join is sent. Credentials stay in a pyatv settings
 file. PYATV_STORAGE may be that file or a directory; a directory is stored
 as <dir>/pyatv.json.
@@ -93,6 +95,24 @@ def address_on_network(addr: str, network) -> bool:
         # IPv6 addresses are not members of the IPv4 interface network.
         # Drop the device; do not abort the rest of the scan.
         return False
+
+
+def keep_resolved_address(label: str, address: str, receiver_name: str, network) -> bool:
+    """Keep an address from a resolver.
+
+    Other speakers must sit on the AirPlay NIC. This host's own service can
+    resolve to the other NIC, and that advertisement is still this receiver.
+    """
+    if not address:
+        return False
+    if _is_receiver_name(label, receiver_name):
+        return True
+    return address_on_network(address, network)
+
+
+def _current_self_id() -> str:
+    with _lock:
+        return _self_id
 
 
 def _model_name(conf) -> str:
@@ -1093,6 +1113,8 @@ class AvahiBrowser:
         self.wled_resolvers = {}
         self.wled_generation = 0
         self.wled_network = None
+        self.receiver_watch = False
+        self.receiver_signals = []
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="avahi-browse", daemon=True).start()
@@ -1143,11 +1165,12 @@ class AvahiBrowser:
 
     def _restart(self) -> bool:
         self.generation += 1
+        self.receiver_watch = False
         self._drop_clients()
         self.records.clear()
         self.services.clear()
         self.unresolved.clear()
-        _store_live(self.records)
+        self._publish_live()
         self._open_browsers()
         return False
 
@@ -1214,17 +1237,23 @@ class AvahiBrowser:
                 self.pass_error = str(exc)
         self._set_status(opened > 0, self.pass_error)
         self._maybe_publish()
+        self._arm_receiver_watch()
 
-    def _listen(self, obj, signal: str, handler) -> None:
-        self.matches.append(obj.connect_to_signal(signal, handler))
+    def _listen(self, obj, signal: str, handler, bucket=None) -> None:
+        held = self.matches if bucket is None else bucket
+        held.append(obj.connect_to_signal(signal, handler))
 
-    def _drop_clients(self) -> None:
-        for match in self.matches:
+    def _drop_signals(self, held: list) -> None:
+        for match in held:
             try:
                 match.remove()
             except Exception:
                 pass
-        self.matches.clear()
+        held.clear()
+
+    def _drop_clients(self) -> None:
+        self._drop_signals(self.matches)
+        self._drop_signals(self.receiver_signals)
         for path, _browser_obj in self.browsers:
             self._free(path, "ServiceBrowser")
         for path in list(self.resolvers.values()):
@@ -1252,14 +1281,16 @@ class AvahiBrowser:
         if not ident:
             return
         if any(other == ident for other in self.services.values()):
-            _store_live(self.records)
+            self._publish_live()
             return
         rec = self.records.get(ident)
         if rec is not None:
             rec["present"] = False
-        _store_live(self.records)
+        self._publish_live()
 
-    def _resolve(self, interface: int, protocol: int, name: str, stype: str, domain: str) -> None:
+    def _resolve(
+        self, interface: int, protocol: int, name: str, stype: str, domain: str, hold=None
+    ) -> None:
         key = (interface, name, stype)
         if key in self.resolvers:
             return
@@ -1293,6 +1324,7 @@ class AvahiBrowser:
                 resolver,
                 "Found",
                 lambda *args, key=key, gen=self.generation: self._on_found(gen, key, *args),
+                hold,
             )
             self._listen(
                 resolver,
@@ -1300,6 +1332,7 @@ class AvahiBrowser:
                 lambda message, key=key, gen=self.generation: self._on_resolver_failure(
                     gen, key, message
                 ),
+                hold,
             )
             self.resolvers[key] = path
         except Exception as exc:
@@ -1321,14 +1354,14 @@ class AvahiBrowser:
     def _apply_found(self, key, name, stype, address, txt) -> None:
         props = decode_txt(txt)
         text = str(address or "").strip()
-        if not text or not address_on_network(text, airplay_network()):
-            return
         service_name = str(name)
         service_type = str(stype)
+        label = service_label(service_name, service_type)
+        if not keep_resolved_address(label, text, _receiver_name(), airplay_network()):
+            return
         ident = stable_id(props, service_name)
         if not ident:
             return
-        label = service_label(service_name, service_type)
         is_raop = service_type.startswith("_raop")
         rec = self.records.get(ident)
         if rec is None:
@@ -1355,7 +1388,7 @@ class AvahiBrowser:
                 rec["name"] = label
                 rec["named_by_airplay"] = not is_raop
         self.services[key] = ident
-        _store_live(self.records)
+        self._publish_live()
 
     def _on_resolver_failure(self, gen, key, _message) -> None:
         if gen != self.generation:
@@ -1507,8 +1540,46 @@ class AvahiBrowser:
                 row["online"] = True
                 row["service"] = key
 
-    def _publish_snapshot(self) -> None:
+    def _publish_live(self) -> None:
         _store_live(self.records)
+        if not _current_self_id():
+            self._arm_receiver_watch()
+
+    def _arm_receiver_watch(self) -> None:
+        """Ask again for this receiver until Shairport's advertisement is stored."""
+        glib = self._glib
+        if self.receiver_watch or glib is None:
+            return
+        self.receiver_watch = True
+        glib.idle_add(self._resolve_named_receiver)
+        glib.timeout_add_seconds(2, self._poll_receiver, self.generation)
+
+    def _poll_receiver(self, gen: int) -> bool:
+        if gen != self.generation:
+            return False
+        if _current_self_id():
+            self.receiver_watch = False
+            return False
+        self._resolve_named_receiver()
+        return True
+
+    def _resolve_named_receiver(self) -> bool:
+        name = _receiver_name()
+        if not name or self.server is None or _current_self_id():
+            return False
+        iface = self._interface_index(AIRPLAY_IFACE)
+        key = (iface, name, "_airplay._tcp")
+        if key in self.unresolved:
+            return False
+        self._drop_signals(self.receiver_signals)
+        old = self.resolvers.pop(key, "")
+        if old:
+            self._free(old, "ServiceResolver")
+        self._resolve(iface, 0, name, "_airplay._tcp", "local", self.receiver_signals)
+        return False
+
+    def _publish_snapshot(self) -> None:
+        self._publish_live()
         _replace_snapshot(_copy_records(self.records))
         self._set_status(True, self.pass_error)
 
