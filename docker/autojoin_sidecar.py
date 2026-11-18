@@ -1144,6 +1144,7 @@ class AvahiBrowser:
         self.wled_browsers = []
         self.wled_matches = []
         self.wled_resolvers = {}
+        self.wled_resolver_signals = {}
         self.wled_generation = 0
         self.wled_network = None
         self.receiver_watch = False
@@ -1294,13 +1295,22 @@ class AvahiBrowser:
         for path, _browser_obj in self.browsers:
             self._free(path, "ServiceBrowser")
         for path in list(self.resolvers.values()):
-            self._free(path, "ServiceResolver")
+            if path:
+                self._free(path, "ServiceResolver")
         self.browsers.clear()
         self.resolvers.clear()
         self.resolve_attempt.clear()
 
     def _drop_resolver_signals(self, key) -> None:
         self._drop_signals(self.resolver_signals.pop(key, []))
+
+    def _release_resolver(self, key, keep_slot: bool = False) -> None:
+        self._drop_resolver_signals(key)
+        path = self.resolvers.pop(key, "")
+        if path:
+            self._free(path, "ServiceResolver")
+        if keep_slot:
+            self.resolvers[key] = ""
 
     def _free(self, path: str, kind: str) -> None:
         try:
@@ -1395,6 +1405,8 @@ class AvahiBrowser:
             )
             self.resolvers[key] = path
         except Exception as exc:
+            self._release_resolver(key)
+            self._free(path, "ServiceResolver")
             self.pass_error = str(exc)
             self._set_status(True, self.pass_error)
             self._note_resolved(key)
@@ -1410,6 +1422,7 @@ class AvahiBrowser:
         try:
             self._apply_found(key, name, stype, address, txt)
         finally:
+            self._release_resolver(key, keep_slot=True)
             self._note_resolved(key)
 
     def _apply_found(self, key, name, stype, address, txt) -> None:
@@ -1456,6 +1469,7 @@ class AvahiBrowser:
     def _on_resolver_failure(self, gen, key, attempt, _message) -> None:
         if gen != self.generation or attempt != self.resolve_attempt.get(key):
             return
+        self._release_resolver(key, keep_slot=True)
         self._note_resolved(key)
 
     def _note_resolved(self, key) -> None:
@@ -1536,9 +1550,33 @@ class AvahiBrowser:
         for path in self.wled_browsers:
             self._free(path, "ServiceBrowser")
         for path in list(self.wled_resolvers.values()):
-            self._free(path, "ServiceResolver")
+            if path:
+                self._free(path, "ServiceResolver")
         self.wled_browsers.clear()
         self.wled_resolvers.clear()
+        self.wled_resolver_signals.clear()
+
+    def _listen_wled(self, obj, signal: str, handler, bucket=None) -> None:
+        match = obj.connect_to_signal(signal, handler)
+        self.wled_matches.append(match)
+        if bucket is not None:
+            bucket.append(match)
+
+    def _drop_wled_resolver_signals(self, key) -> None:
+        matches = self.wled_resolver_signals.pop(key, [])
+        if not matches:
+            return
+        match_ids = {id(match) for match in matches}
+        self._drop_signals(matches)
+        self.wled_matches[:] = [match for match in self.wled_matches if id(match) not in match_ids]
+
+    def _release_wled_resolver(self, key, keep_slot: bool = False) -> None:
+        self._drop_wled_resolver_signals(key)
+        path = self.wled_resolvers.pop(key, "")
+        if path:
+            self._free(path, "ServiceResolver")
+        if keep_slot:
+            self.wled_resolvers[key] = ""
 
     def _on_wled_new(self, gen, interface, protocol, name, stype, domain, _flags) -> None:
         if gen != self.wled_generation:
@@ -1559,6 +1597,9 @@ class AvahiBrowser:
         except Exception:
             return
         path = str(path)
+        self.wled_resolvers[key] = path
+        bucket = []
+        self.wled_resolver_signals[key] = bucket
         try:
             resolver = self._dbus.Interface(
                 self.bus.get_object("org.freedesktop.Avahi", path),
@@ -1568,16 +1609,16 @@ class AvahiBrowser:
                 resolver,
                 "Found",
                 lambda *args, generation=gen, ident=key: self._on_wled_found(generation, ident, *args),
+                bucket,
             )
-            self.wled_resolvers[key] = path
         except Exception:
-            self._free(path, "ServiceResolver")
+            self._release_wled_resolver(key)
 
     def _on_wled_remove(self, gen, _interface, _protocol, name, stype, _domain, _flags) -> None:
         if gen != self.wled_generation:
             return
         key = (int(_interface), str(name), str(stype))
-        self.wled_resolvers.pop(key, None)
+        self._release_wled_resolver(key)
         with _lock:
             for row in _wled_rows.values():
                 if row.get("service") == key:
@@ -1586,22 +1627,25 @@ class AvahiBrowser:
     def _on_wled_found(self, gen, key, _interface, _protocol, name, _stype, _domain, _host, _aprotocol, address, _port, _txt, _flags) -> None:
         if gen != self.wled_generation:
             return
-        text = _ipv4_text(address)
-        if not text or not address_on_network(text, self.wled_network):
-            return
-        with _lock:
-            row = _wled_rows.get(text)
-            if row is None:
-                _wled_rows[text] = {
-                    "address": text,
-                    "name": str(name),
-                    "online": True,
-                    "service": key,
-                }
-            else:
-                row["name"] = str(name) or row.get("name") or ""
-                row["online"] = True
-                row["service"] = key
+        try:
+            text = _ipv4_text(address)
+            if not text or not address_on_network(text, self.wled_network):
+                return
+            with _lock:
+                row = _wled_rows.get(text)
+                if row is None:
+                    _wled_rows[text] = {
+                        "address": text,
+                        "name": str(name),
+                        "online": True,
+                        "service": key,
+                    }
+                else:
+                    row["name"] = str(name) or row.get("name") or ""
+                    row["online"] = True
+                    row["service"] = key
+        finally:
+            self._release_wled_resolver(key, keep_slot=True)
 
     def _publish_live(self) -> None:
         _store_live(self.records)
