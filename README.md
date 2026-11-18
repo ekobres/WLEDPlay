@@ -25,7 +25,7 @@ WLEDPLAY_MULTICAST_INTERFACE=eth2 \
 docker compose up -d --build
 ```
 
-`192.0.2.10` is a documentation address. Substitute your WLED controller. Leave a NIC variable unset when you do not need to pin that traffic. Compose builds the image on this machine and tags it `ghcr.io/wledplay/wledplay`. That name is not a published registry image; do not `docker pull` it.
+`192.0.2.10` is a documentation address. Substitute your WLED controller. Leave a NIC variable unset when you do not need to pin that traffic. Compose builds this repo and tags it as `${WLEDPLAY_IMAGE}` (default `ghcr.io/ekobres/wledplay:latest`).
 
 Without Docker, on a Linux host:
 
@@ -134,6 +134,23 @@ The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are the
 Compose grants `SYS_NICE` so Shairport can set realtime scheduling on its audio thread. An `rtprio` limit is not set: the container runtime rejects it and refuses to start. The entrypoint waits for the Auto Join sidecar port, retrying for about five seconds, before starting WLEDPlay. If `/dev/shm/nqptp` is not ready within 5 seconds, startup continues and a later line reports when the clock file appears. A playing session also warns when that file is still missing. Track title and artist are logged once, when a metadata bundle completes. Cover art is replaced when the track changes, and `GET /status` includes `metadata.artwork_rev` so the UI reloads `/artwork`. The same snapshot includes a once-per-second CPU, memory, send lateness, and jitter sample, plus the delay-queue drop count.
 
 No `/dev/snd` required.
+
+### Published container images (GHCR)
+
+GitHub Actions publishes multi-arch images to `ghcr.io/<repo-owner>/wledplay` from `.github/workflows/docker-publish.yml`.
+
+- Release tags like `v0.3.0` publish images (release-only; no publish on plain branch pushes).
+- A stable release tag publishes `0.3.0`, `0.3`, `0`, and `latest`.
+- Pre-release tags (for example `v0.4.0-rc.1`) publish semver/SHA tags but skip `latest`.
+- Published images target `linux/amd64` and `linux/arm64`.
+
+To run from a published image instead of local build, set `WLEDPLAY_IMAGE` (useful for forks) and skip build:
+
+```bash
+WLEDPLAY_IMAGE=ghcr.io/ekobres/wledplay:latest
+docker compose pull
+docker compose up -d
+```
 
 ## Documentation
 

@@ -5,7 +5,7 @@ services:
       args:
         WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-1}
         WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-1}
-    image: ghcr.io/wledplay/wledplay:latest
+    image: "${WLEDPLAY_IMAGE:-ghcr.io/ekobres/wledplay:latest}"
     container_name: wledplay
     network_mode: host
     restart: unless-stopped
