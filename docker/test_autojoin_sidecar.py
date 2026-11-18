@@ -99,5 +99,41 @@ class AvahiBrowserTests(unittest.TestCase):
         autojoin_sidecar._wled_rows.pop("192.0.2.10", None)
 
 
+class DiscoveryHelperTests(unittest.TestCase):
+    def test_alias_target_matches_device_id(self):
+        config = object()
+        found = autojoin_sidecar.ScanIndex(
+            devices=[],
+            self_id="",
+            self_deviceid="",
+            by_id={"speaker-id": config},
+            props_by_id={"speaker-id": {"deviceid": "AA:BB:CC:DD:EE:FF"}},
+            names={"speaker-id": "Speaker"},
+            meta={},
+        )
+
+        autojoin_sidecar.alias_target(found, "aabbccddeeff", "")
+
+        self.assertIs(found.by_id["aabbccddeeff"], config)
+        self.assertEqual(found.names["aabbccddeeff"], "Speaker")
+
+    def test_raop_refresh_preserves_airplay_name_and_properties(self):
+        record = autojoin_sidecar._new_record(
+            "Speaker", "192.0.2.1", {"model": "Model", "deviceid": "id"}, False
+        )
+
+        autojoin_sidecar._refresh_record(
+            record, "AA:BB@Speaker", "192.0.2.2", {"raop_only": "value"}, True
+        )
+
+        self.assertEqual(record["name"], "Speaker")
+        self.assertEqual(record["address"], "192.0.2.2")
+        self.assertEqual(record["model"], "Model")
+        self.assertEqual(
+            record["props"],
+            {"raop_only": "value", "model": "Model", "deviceid": "id"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
