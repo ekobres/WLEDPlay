@@ -22,7 +22,7 @@ The image builds unmodified upstream tags by default. Both local patches remain 
 | `WLEDPLAY_SHAIRPORT_PATCH` | Stock 5.6.3 | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata |
 | `WLEDPLAY_NQPTP_PATCH` | Stock 1.2.9, which keeps the first address and drops the rest | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command |
 
-`scripts/build-airplay.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
+`scripts/build-airplay-deps.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
 
 Build the patched image by opting in:
 
@@ -44,8 +44,8 @@ Auto Join does not depend on either patch. It still succeeds only when PCM arriv
 Native Linux:
 
 ```bash
-./scripts/build-airplay.sh
-./scripts/run-airplay.sh
+./scripts/build-wledplay.sh
+./scripts/run-wledplay.sh
 ```
 
 Config: copy [`config/shairport-sync-example.conf`](../config/shairport-sync-example.conf) to gitignored `config/shairport-sync.conf` (`./scripts/ensure-config.sh`). Native Linux and Docker share that file (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker Compose mounts `./config` and falls back to the example if the local file is missing.

@@ -14,7 +14,7 @@ This requires AirPlay 2 so WLEDPlay can join a group with HomePods, Apple TVs, a
 
 ## Quick start
 
-WLEDPlay runs on a Linux host (Pi, NUC, LXC, or Docker). NQPTP needs UDP 319 and 320, which macOS already uses, so the receiver cannot run on a Mac. Docker Desktop for Mac cannot advertise AirPlay on the LAN because `network_mode: host` is a Linux feature.
+WLEDPlay runs on a Linux host or Linux container using host networking. NQPTP needs UDP 319 and 320, which macOS already uses, so the receiver stack cannot run on macOS. Docker Desktop does not provide the required LAN host networking for AirPlay discovery.
 
 ```bash
 ./scripts/ensure-config.sh
@@ -25,13 +25,13 @@ WLEDPLAY_MULTICAST_INTERFACE=eth2 \
 docker compose up -d --build
 ```
 
-`192.0.2.10` is a documentation address. Substitute your WLED controller. Leave a NIC variable unset when you do not need to pin that traffic. Compose builds this repo and tags it as `${WLEDPLAY_IMAGE}` (default `ghcr.io/ekobres/wledplay:latest`).
+`192.0.2.10` is a documentation address. Substitute a WLED controller address. Leave a NIC variable unset when that traffic does not need interface pinning. Compose builds this checkout and tags the local image as `wledplay:local` by default.
 
 Without Docker, on a Linux host:
 
 ```bash
-./scripts/build-airplay.sh
-./scripts/run-airplay.sh
+./scripts/build-wledplay.sh
+./scripts/run-wledplay.sh
 ```
 
 ### WLED
@@ -147,12 +147,37 @@ GitHub Actions publishes multi-arch images to `ghcr.io/<repo-owner>/wledplay` fr
 - Pre-release tags (for example `v0.4.0-rc.1`) publish semver/SHA tags but skip `latest`.
 - Published images target `linux/amd64` and `linux/arm64`.
 
-To run from a published image instead of local build, set `WLEDPLAY_IMAGE` (useful for forks) and skip build:
+To run from a published image instead of a local build, set `WLEDPLAY_IMAGE` to `ghcr.io/<repository-owner>/wledplay:<tag>` and skip building:
 
 ```bash
-WLEDPLAY_IMAGE=ghcr.io/ekobres/wledplay:latest
+export WLEDPLAY_IMAGE=ghcr.io/OWNER/wledplay:latest
 docker compose pull
-docker compose up -d
+docker compose up -d --no-build
+```
+
+### Development images
+
+To build a multi-platform development image locally for remote Linux test hosts, first commit and push the source to `dev`, then authenticate to GHCR once:
+
+```bash
+git switch dev
+git add -p
+git commit -m "Describe the change"
+git push
+docker login ghcr.io
+./scripts/build-dev.sh
+```
+
+`build-dev.sh` requires a clean worktree whose `HEAD` matches `origin/dev`. It derives the GHCR owner from the `origin` remote; set `WLEDPLAY_DEV_IMAGE=ghcr.io/OWNER/wledplay` to override it. The script publishes both `dev` and `dev-<commit>` tags for `linux/amd64` and `linux/arm64`; use the printed commit-specific tag on test hosts. The authenticated account needs package write access, and the package must be public for anonymous pulls.
+
+On each test host, update the source branch and run the matching image without a local build:
+
+```bash
+git switch dev
+git pull --ff-only
+export WLEDPLAY_IMAGE=ghcr.io/OWNER/wledplay:dev-COMMIT
+docker compose pull
+docker compose up -d --no-build --pull never
 ```
 
 ## Documentation

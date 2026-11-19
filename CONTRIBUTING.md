@@ -44,9 +44,9 @@ Container image publishing is release-only and tag-driven through `.github/workf
 1. Confirm CI is green on `main` (`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`).
 2. Pick the next semver version and create an annotated tag in `vX.Y.Z` format (example: `v0.3.1`).
 3. Push the tag to GitHub; this triggers the GHCR publish workflow.
-4. Verify publish output includes `ghcr.io/ekobres/wledplay` tags for `X.Y.Z`, `X.Y`, `X`, and `latest` (stable tags only).
+4. Verify publish output includes `ghcr.io/<repository-owner>/wledplay` tags for `X.Y.Z`, `X.Y`, `X`, and `latest` (stable tags only).
 5. Verify GHCR package visibility is **Public** for anonymous pull access.
-6. Smoke-test pull on a clean host (for example a Pi) using `WLEDPLAY_IMAGE=ghcr.io/ekobres/wledplay:latest`.
+6. Smoke-test pulling and running the image on a clean Linux host using the published stable tag.
 
 The operator UI is [`src/web/index.html`](src/web/index.html), compiled into the binary with `include_str!`. A UI change needs a rebuild before a running player shows it.
 

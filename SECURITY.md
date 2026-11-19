@@ -31,4 +31,4 @@ This release does not add a token or change the default bind. Treat the host as 
 
 ## Reporting
 
-Report a vulnerability with a [private security advisory](https://github.com/ekobres/WLEDPlay/security/advisories/new) on `ekobres/WLEDPlay`. Do not open a public issue for an unfixed vulnerability.
+Report a vulnerability privately through this repository's Security tab. Do not open a public issue for an unfixed vulnerability.

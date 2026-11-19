@@ -7,17 +7,9 @@ This repo now uses two workflow lanes:
   - pushes to `main` and `release/**`
 - `Publish container image` (`.github/workflows/docker-publish.yml`) runs only on version tags `v*`.
 
-## Sync files to a remote dev box without noisy CI
+## Development branch and CI
 
-If you push mainly to transfer work to another machine, avoid pushing those commits to `main`.
-
-Recommended pattern:
-
-1. Create a sync branch (once): `sync/<your-name>` or `dev/<topic>`.
-2. Push WIP commits to that branch.
-3. Pull the same branch on the remote dev box.
-
-Because CI push triggers are limited to `main` and `release/**`, these sync branches will not run CI on every push.
+Use `dev` for iterative work that should not run push-triggered CI. The CI workflow only runs for pushes to `main` and `release/**`, plus pull requests. The GHCR publish workflow is tag-triggered only. For multi-platform container testing, use `scripts/build-dev.sh` after committing and pushing a clean `dev` commit.
 
 ## Optional one-off CI skip on tracked push branches
 
@@ -26,7 +18,7 @@ Because CI push triggers are limited to `main` and `release/**`, these sync bran
 - `[skip ci]`
 - `[ci skip]`
 
-Use this only for non-code or transfer-only commits on `main`/`release/**`.
+Use this only for non-code commits on `main` or `release/**` when a push run should be skipped.
 
 ## Release-candidate and release flow
 

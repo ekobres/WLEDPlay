@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security report
-    url: https://github.com/ekobres/WLEDPlay/security/advisories/new
-    about: Report a vulnerability in private. Do not open a public issue.
+    url: https://docs.github.com/en/code-security/security-advisories/repository-security-advisories/creating-a-repository-security-advisory
+    about: Use this repository's Security tab to report a vulnerability privately; do not open a public issue.

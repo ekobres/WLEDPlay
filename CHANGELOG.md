@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Public setup and release guidance now uses generic repository-owner placeholders and deployment-neutral examples; Compose builds use a local image tag by default.
 - Docker and native upstream builds now default to unpatched Shairport Sync and NQPTP; local patches remain opt-in with build args.
 - Docker Compose now detects host Avahi inside the container and reuses it when present; `WLEDPLAY_AVAHI_MODE` can force host or container mode.
 - Auto Join releases Avahi resolver signal matches and resolver objects after discovery completes or a service is removed, preventing DBus match-rule accumulation.
