@@ -3,8 +3,8 @@ services:
     build:
       context: .
       args:
-        WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-1}
-        WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-1}
+        WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-0}
+        WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-0}
     image: "${WLEDPLAY_IMAGE:-ghcr.io/ekobres/wledplay:latest}"
     container_name: wledplay
     network_mode: host

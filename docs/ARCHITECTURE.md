@@ -34,7 +34,7 @@ flowchart LR
 These are intentional. Do not remove them as cleanup.
 
 - AirPlay 1 is unsupported. Grouping with HomePods and Apple TVs needs AirPlay 2 and NQPTP.
-- [`docker/shairport-mixed-stack.patch`](../docker/shairport-mixed-stack.patch) and [`docker/nqptp-timing-peers.patch`](../docker/nqptp-timing-peers.patch) default on. `WLEDPLAY_SHAIRPORT_PATCH=0` and `WLEDPLAY_NQPTP_PATCH=0` build stock tags. Leave both switches in place.
+- [`docker/shairport-mixed-stack.patch`](../docker/shairport-mixed-stack.patch) and [`docker/nqptp-timing-peers.patch`](../docker/nqptp-timing-peers.patch) are opt-in. Build args default to `0` (stock upstream tags); set either to `1` to apply its patch. Leave both switches in place while stock behavior is evaluated.
 - A paused group stays joined. Auto Join holds the membership instead of leaving on pause.
 - Operator-facing Auto Join text must not say "phone". Internal identifiers such as `phone_owned` stay internal.
 - The operator UI has no authentication. See [`SECURITY.md`](../SECURITY.md).

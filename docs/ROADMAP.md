@@ -49,7 +49,7 @@ These are named and explicitly postponed:
 
 Ship upstream Shairport Sync and NQPTP with no local patches. Remove the patch files, the `WLEDPLAY_SHAIRPORT_PATCH` and `WLEDPLAY_NQPTP_PATCH` build args, and the Dockerfile branches that apply them. Update `docker/NOTICE`, `docs/LICENSING.md`, `docs/SHAIRPORT_INTEGRATION.md`, `docs/ARCHITECTURE.md`, and the README so they stop describing patches that are no longer built.
 
-This matches the requirement to use an upstream Shairport Sync release. Do it once stock AirPlay 2 grouping is the path we support. The patches default on today.
+This matches the requirement to use an upstream Shairport Sync release. Do it once stock AirPlay 2 grouping is the path we support. Patch toggles now default off while stock behavior is evaluated.
 
 ### Debian stable slim
 

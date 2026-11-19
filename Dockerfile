@@ -13,7 +13,7 @@ RUN cargo build --release
 
 FROM debian:bookworm-slim AS shairport-build
 ARG SHAIRPORT_VERSION
-ARG WLEDPLAY_SHAIRPORT_PATCH=1
+ARG WLEDPLAY_SHAIRPORT_PATCH=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool pkg-config \
@@ -23,11 +23,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
-# Upstream 5.6.3. WLEDPLAY_SHAIRPORT_PATCH=1 (the default) tells NQPTP which
+# Upstream 5.6.3. WLEDPLAY_SHAIRPORT_PATCH=1 opts into the local patch, which tells NQPTP which
 # clocks to watch at the initial SETUP, limits advertised addresses to the
 # AirPlay interface, lets stdout play before a PTP lock exists, and reports
 # each block's presentation lead. B stays on the audio SETUP. Set the arg to
-# 0 for an unpatched tag build.
+# 0 (the default) for an unpatched tag build.
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
@@ -39,16 +39,16 @@ RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
 
 FROM debian:bookworm-slim AS nqptp-build
 ARG NQPTP_VERSION
-ARG WLEDPLAY_NQPTP_PATCH=1
+ARG WLEDPLAY_NQPTP_PATCH=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/nqptp-timing-peers.patch /tmp/nqptp-timing-peers.patch
-# Upstream 1.2.9. WLEDPLAY_NQPTP_PATCH=1 (the default) watches every address
+# Upstream 1.2.9. WLEDPLAY_NQPTP_PATCH=1 opts into the local patch, which watches every address
 # in a T command. Stock keeps the first and drops the rest. Set the arg to 0
-# for an unpatched tag build.
+# 0 (the default) for an unpatched tag build.
 RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
       https://github.com/mikebrady/nqptp.git && \
     cd nqptp && \

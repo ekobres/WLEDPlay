@@ -7,11 +7,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 "$ROOT/scripts/ensure-config.sh"
 PREFIX="${WLEDPLAY_PREFIX:-$ROOT/vendor}"
 # Upstream releases. The Docker image uses the same two switches.
-# 1 (default) applies the local patch. 0 builds the tagged release as published.
+# 0 (default) builds the tagged release as published. 1 opts into the local patch.
 SHAIRPORT_VERSION="${SHAIRPORT_VERSION:-5.6.3}"
 NQPTP_VERSION="${NQPTP_VERSION:-1.2.9}"
-WLEDPLAY_SHAIRPORT_PATCH="${WLEDPLAY_SHAIRPORT_PATCH:-1}"
-WLEDPLAY_NQPTP_PATCH="${WLEDPLAY_NQPTP_PATCH:-1}"
+WLEDPLAY_SHAIRPORT_PATCH="${WLEDPLAY_SHAIRPORT_PATCH:-0}"
+WLEDPLAY_NQPTP_PATCH="${WLEDPLAY_NQPTP_PATCH:-0}"
 SRC="$PREFIX/src"
 mkdir -p "$PREFIX/bin" "$SRC"
 

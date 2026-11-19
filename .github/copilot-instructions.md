@@ -8,7 +8,7 @@
 
 ## Non-negotiable project invariants
 - AirPlay 1 stays unsupported; AirPlay 2 + NQPTP is required.
-- Keep optional upstream patch toggles intact and default-on: `WLEDPLAY_SHAIRPORT_PATCH=1`, `WLEDPLAY_NQPTP_PATCH=1` (`Dockerfile`, `docker-compose.yml`).
+- Keep optional upstream patch toggles intact and default-off: `WLEDPLAY_SHAIRPORT_PATCH=0`, `WLEDPLAY_NQPTP_PATCH=0` (`Dockerfile`, `docker-compose.yml`).
 - A paused AirPlay group stays joined (do not change Auto Join semantics).
 - Operator-facing Auto Join text must not say “phone” (internal identifiers may still use phone-owned naming).
 

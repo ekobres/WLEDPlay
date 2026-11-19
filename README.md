@@ -118,8 +118,8 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 | `WLEDPLAY_AVAHI_MODE` | `auto` (default) reuses host Avahi when detected, otherwise starts it in the container; force with `host` or `container` |
 | `ENABLE_AVAHI` | Legacy override: `0` uses host Avahi; `1` starts D-Bus + Avahi in the container |
 | `WLEDPLAY_IPV4_ONLY` | In container Avahi mode, `1` sets `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
-| `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `1` (default) applies `docker/shairport-mixed-stack.patch`; `0` builds stock 5.6.3 |
-| `WLEDPLAY_NQPTP_PATCH` | Build arg. `1` (default) applies `docker/nqptp-timing-peers.patch`; `0` builds stock 1.2.9 |
+| `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `0` (default) builds stock 5.6.3; `1` applies `docker/shairport-mixed-stack.patch` |
+| `WLEDPLAY_NQPTP_PATCH` | Build arg. `0` (default) builds stock 1.2.9; `1` applies `docker/nqptp-timing-peers.patch` |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Live send delay in milliseconds (`audio.sync_offset_ms`). Negative values clamp to `0` |
 | `WLEDPLAY_LOG_LEVEL` | Log level at startup (`logging.level`). The Logs card can change the running level |
 | `WLEDPLAY_LOG_DIR` | Directory of `wledplay.log`, `shairport.log`, `nqptp.log`, and `console.log` (default `/var/log/wledplay`) |

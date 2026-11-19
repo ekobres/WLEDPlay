@@ -60,6 +60,6 @@ The operator UI is [`src/web/index.html`](src/web/index.html), compiled into the
 ## Invariants
 
 - AirPlay 1 stays unsupported.
-- The Shairport and NQPTP patches stay optional and default on.
+- The Shairport and NQPTP patches stay optional and default off; set the corresponding build arg to `1` to opt in.
 - A paused AirPlay group stays joined.
 - Operator-facing Auto Join text must not say "phone".

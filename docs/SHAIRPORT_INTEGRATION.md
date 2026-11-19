@@ -15,19 +15,19 @@ WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceab
 
 The Dockerfile clones those tags with `git clone --depth 1 --branch`. That pins the tag name, not a commit SHA. A moved tag would change the build. Commit pins are a follow-up for the next version bump.
 
-The image applies two local patches by default. Both are build args, and both default to `1`, so a normal `docker compose build` matches the patched image.
+The image builds unmodified upstream tags by default. Both local patches remain available as opt-in build args; set a switch to `1` to apply that patch.
 
-| Arg | `1` (default) | `0` |
-|-----|----------------|-----|
-| `WLEDPLAY_SHAIRPORT_PATCH` | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata | Stock 5.6.3 |
-| `WLEDPLAY_NQPTP_PATCH` | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command | Stock 1.2.9, which keeps the first address and drops the rest |
+| Arg | `0` (default) | `1` |
+|-----|---------------|-----|
+| `WLEDPLAY_SHAIRPORT_PATCH` | Stock 5.6.3 | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata |
+| `WLEDPLAY_NQPTP_PATCH` | Stock 1.2.9, which keeps the first address and drops the rest | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command |
 
 `scripts/build-airplay.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
 
-Build a stock image without replacing the working one by tagging it yourself:
+Build the patched image by opting in:
 
 ```bash
-WLEDPLAY_SHAIRPORT_PATCH=0 WLEDPLAY_NQPTP_PATCH=0 docker compose build
+WLEDPLAY_SHAIRPORT_PATCH=1 WLEDPLAY_NQPTP_PATCH=1 docker compose build
 ```
 
 Auto Join does not depend on either patch. It still succeeds only when PCM arrives. Stock Shairport holds stdout until a PTP lock exists, so a group add that delivers audio before the clock locks produces no samples. The NQPTP patch does nothing useful unless the Shairport patch is also on, because stock Shairport sends a single address. Shairport patched with NQPTP stock sends several addresses and NQPTP keeps only the first.
