@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docker Compose now detects host Avahi inside the container and reuses it when present; `WLEDPLAY_AVAHI_MODE` can force host or container mode.
 - Auto Join releases Avahi resolver signal matches and resolver objects after discovery completes or a service is removed, preventing DBus match-rule accumulation.
 - The Visualizer switch in the card header has no extra label.
 - The Statistics card shows CPU, memory, send lateness, jitter, and the protocol counters, each with a description. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.

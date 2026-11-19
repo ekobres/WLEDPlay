@@ -30,8 +30,8 @@ Use this only for non-code or transfer-only commits on `main`/`release/**`.
 
 ## Release-candidate and release flow
 
-1. Prepare changes on a release branch (for example `release/0.3.1-rc.2`).
+1. Prepare changes on a release branch (for example `release/0.3.1-rc.1`).
 2. Bump `Cargo.toml` and `Cargo.lock` version.
-3. Tag with `vX.Y.Z` or prerelease tag like `v0.3.1-rc.2`.
+3. Tag with `vX.Y.Z` or prerelease tag like `v0.3.1-rc.1`.
 4. Push branch and tag.
 5. Verify GHCR publish workflow and package visibility.

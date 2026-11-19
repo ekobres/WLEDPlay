@@ -17,6 +17,9 @@ services:
       - ./config:/host-config
       # Host zone file, so WLEDPlay log timestamps match local time.
       - /etc/localtime:/etc/localtime:ro
+      # Read-only host service sockets; entrypoint uses these only in host Avahi mode.
+      - /run/dbus:/host/run/dbus:ro
+      - /run/avahi-daemon:/host/run/avahi-daemon:ro
     environment:
       WLEDPLAY_AIRPLAY_NAME: "${WLEDPLAY_AIRPLAY_NAME:-}"
       WLEDPLAY_MULTICAST_ADDRESS: "${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
@@ -32,5 +35,6 @@ services:
       WLEDPLAY_METADATA_PIPE: "${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
       WLEDPLAY_SHAIRPORT_LATENCY_OFFSET: "${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
       WLEDPLAY_PCM_RATE: "48000"
-      ENABLE_AVAHI: "${ENABLE_AVAHI:-1}"
+      WLEDPLAY_AVAHI_MODE: "${WLEDPLAY_AVAHI_MODE:-auto}"
+      ENABLE_AVAHI: "${ENABLE_AVAHI:-}"
       WLEDPLAY_IPV4_ONLY: "${WLEDPLAY_IPV4_ONLY:-0}"

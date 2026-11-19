@@ -98,22 +98,7 @@ Copy the examples to gitignored local files and edit. Pulls update the examples 
 
 That copies [`config/config-example.yaml`](config/config-example.yaml) to `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) to `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, NIC pins, and Shairport lead are patched at start from yaml or env. Docker always creates the metadata FIFO at `WLEDPLAY_METADATA_PIPE` (default `/run/wledplay.meta`) and passes it to Shairport and `wledplay`. An empty `metadata.pipe` in yaml does not turn metadata off inside the container.
 
-On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus and Avahi. If the host already owns UDP 5353, use the host Avahi overlay below or stop the host daemon if it is not needed.
-
-On Raspberry Pi OS, check whether host Avahi is active and owns UDP 5353:
-
-```bash
-sudo systemctl is-active avahi-daemon
-sudo ss -lunp | grep ':5353'
-```
-
-If so, use the host D-Bus/Avahi Compose overlay rather than starting a second daemon:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.host-avahi.yml up -d
-```
-
-The overlay mounts `/run/dbus` and sets `ENABLE_AVAHI=0`. With a published image, set `WLEDPLAY_IMAGE` to the desired GHCR tag and use both `-f` options for `docker compose pull` and `docker compose up`.
+On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The entrypoint detects an existing host Avahi socket and reuses host Avahi; otherwise it starts D-Bus and Avahi in the container. `WLEDPLAY_AVAHI_MODE=auto|host|container` selects automatic detection or forces a mode. Host mode requires host D-Bus and Avahi sockets, which Compose mounts read-only; see [`SECURITY.md`](SECURITY.md) for the trust implications. Legacy `ENABLE_AVAHI=0|1` remains supported (`0` = host, `1` = container).
 
 | Variable | Purpose |
 |----------|---------|
@@ -130,8 +115,9 @@ The overlay mounts `/run/dbus` and sets `ENABLE_AVAHI=0`. With a published image
 | `WLEDPLAY_METADATA_PIPE` | Shairport metadata FIFO (Docker: `/run/wledplay.meta`) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
 | `WLEDPLAY_MULTICAST_ENABLED` | `false` / `0` disables multicast send (unicast still works) |
-| `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
-| `WLEDPLAY_IPV4_ONLY` | `1` sets Avahi `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
+| `WLEDPLAY_AVAHI_MODE` | `auto` (default) reuses host Avahi when detected, otherwise starts it in the container; force with `host` or `container` |
+| `ENABLE_AVAHI` | Legacy override: `0` uses host Avahi; `1` starts D-Bus + Avahi in the container |
+| `WLEDPLAY_IPV4_ONLY` | In container Avahi mode, `1` sets `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
 | `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `1` (default) applies `docker/shairport-mixed-stack.patch`; `0` builds stock 5.6.3 |
 | `WLEDPLAY_NQPTP_PATCH` | Build arg. `1` (default) applies `docker/nqptp-timing-peers.patch`; `0` builds stock 1.2.9 |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Live send delay in milliseconds (`audio.sync_offset_ms`). Negative values clamp to `0` |
@@ -142,7 +128,9 @@ The overlay mounts `/run/dbus` and sets `ENABLE_AVAHI=0`. With a published image
 
 Requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
 
-Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
+The entrypoint selects Avahi mode inside the container: it reuses host D-Bus/Avahi when the host Avahi socket is mounted, otherwise it starts container D-Bus and Avahi. `WLEDPLAY_AVAHI_MODE=host` or `container` can force either mode. In host mode, the root-run container connects to the host system bus; review the trust implications in [`SECURITY.md`](SECURITY.md).
+
+Stack after mDNS setup: `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
 
 The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are their own output, Shairport's log is stderr (stdout stays the PCM FIFO), and `console.log` is the combined container output. Each file keeps its last 2 MB after it grows past 8 MB. The Logs card reads those files. WLEDPlay lines are stamped in the container's local time with a numeric offset such as `-05:00` or `+00:00`. Compose mounts `/etc/localtime` so that clock matches the host, and the image includes `tzdata` so an explicit `TZ` works when the mount is absent. Debug and trace add one analysis line per second while audio is playing (RMS, a peak latched across that second, frequency, FFT bands, UDP sends, audio frames, delay-queue drops, and the timing offset), and another line when one of those counters changes while idle.
 
