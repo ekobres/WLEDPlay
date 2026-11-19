@@ -168,7 +168,7 @@ docker login ghcr.io
 ./scripts/build-dev.sh
 ```
 
-`build-dev.sh` requires a clean worktree whose `HEAD` matches `origin/dev`. It derives the GHCR owner from the `origin` remote; set `WLEDPLAY_DEV_IMAGE=ghcr.io/OWNER/wledplay` to override it. The script publishes both `dev` and `dev-<commit>` tags for `linux/amd64` and `linux/arm64`; use the printed commit-specific tag on test hosts. The authenticated account needs package write access, and the package must be public for anonymous pulls.
+`build-dev.sh` requires a clean worktree whose `HEAD` matches `origin/dev`. It derives the GHCR owner from the `origin` remote; set `WLEDPLAY_DEV_IMAGE=ghcr.io/OWNER/wledplay` to override it. The script publishes both `dev` and `dev-<commit>` tags for `linux/amd64` and `linux/arm64`; use the printed commit-specific tag on test hosts. The app displays Cargo's package version plus `+dev.<commit>`, keeping `Cargo.toml` as the sole release-version source. The authenticated account needs package write access, and the package must be public for anonymous pulls.
 
 On each test host, update the source branch and run the matching image without a local build:
 

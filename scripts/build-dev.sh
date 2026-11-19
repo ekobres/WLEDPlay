@@ -46,12 +46,15 @@ sha="${commit:0:12}"
 platforms="${WLEDPLAY_DEV_PLATFORMS:-linux/amd64,linux/arm64}"
 shairport_patch="${WLEDPLAY_SHAIRPORT_PATCH:-0}"
 nqptp_patch="${WLEDPLAY_NQPTP_PATCH:-0}"
+build_metadata="dev.${sha}"
 
 echo "Building ${platforms} from dev commit ${sha}"
+echo "Application version metadata: +${build_metadata}"
 echo "Patch args: Shairport=${shairport_patch}, NQPTP=${nqptp_patch}"
 docker buildx build \
   --builder "$builder" \
   --platform "$platforms" \
+  --build-arg "WLEDPLAY_BUILD_METADATA=${build_metadata}" \
   --build-arg "WLEDPLAY_SHAIRPORT_PATCH=${shairport_patch}" \
   --build-arg "WLEDPLAY_NQPTP_PATCH=${nqptp_patch}" \
   --tag "${image}:dev" \

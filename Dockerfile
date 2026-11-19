@@ -6,10 +6,12 @@ ARG SHAIRPORT_VERSION=5.6.3
 ARG NQPTP_VERSION=1.2.9
 
 FROM rust:1.89-bookworm AS wledplay-build
+ARG WLEDPLAY_BUILD_METADATA=
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./build.rs
 COPY src ./src
-RUN cargo build --release
+RUN WLEDPLAY_BUILD_METADATA="$WLEDPLAY_BUILD_METADATA" cargo build --release
 
 FROM debian:bookworm-slim AS shairport-build
 ARG SHAIRPORT_VERSION

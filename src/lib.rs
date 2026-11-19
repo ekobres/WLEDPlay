@@ -14,3 +14,5 @@ pub mod runtime;
 pub mod timing;
 pub mod web;
 pub mod wled;
+
+pub const APP_VERSION: &str = env!("WLEDPLAY_BUILD_VERSION");

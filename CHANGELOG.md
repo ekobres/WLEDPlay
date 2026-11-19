@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The app uses `Cargo.toml` as its version source; development images append `+dev.<commit>` metadata to CLI, log, and status versions.
 - Public setup and release guidance now uses generic repository-owner placeholders and deployment-neutral examples; Compose builds use a local image tag by default.
 - Docker and native upstream builds now default to unpatched Shairport Sync and NQPTP; local patches remain opt-in with build args.
 - Docker Compose now detects host Avahi inside the container and reuses it when present; `WLEDPLAY_AVAHI_MODE` can force host or container mode.

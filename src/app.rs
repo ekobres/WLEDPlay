@@ -12,6 +12,7 @@ use crate::runtime::{
 };
 use crate::web::{self, AirplayStatus, AppState, RuntimeStatus, SharedStatus};
 use crate::wled::WledSender;
+use crate::APP_VERSION;
 use clap::Parser;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read};
@@ -21,12 +22,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 #[derive(Parser, Debug)]
 #[command(
     name = "wledplay",
-    version,
+    version = APP_VERSION,
     about = "AirPlay-to-WLED audio-reactive bridge"
 )]
 pub struct Cli {
@@ -192,7 +191,7 @@ pub async fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error + Se
     let multicast_bind = resolve_optional_nic("WLED multicast", &cfg.network.multicast)?;
 
     let status: SharedStatus = Arc::new(Mutex::new(RuntimeStatus {
-        version: VERSION.into(),
+        version: APP_VERSION.into(),
         airplay: AirplayStatus {
             connected: false,
             receiver_name: cfg.airplay.name.clone(),
@@ -393,7 +392,7 @@ pub fn event_loop_tick(
 }
 
 fn log_startup(cfg: &Config, pace_realtime: bool) {
-    tracing::info!("WLEDPlay {}", VERSION);
+    tracing::info!("WLEDPlay {}", APP_VERSION);
     tracing::info!("AirPlay receiver: {}", cfg.airplay.name);
     let layout = if cfg.pcm.channels == 1 {
         "mono"

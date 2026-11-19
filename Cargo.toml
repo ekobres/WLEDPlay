@@ -1,6 +1,6 @@
 [package]
 name = "wledplay"
-version = "0.3.1-rc.1"
+version = "0.3.2"
 edition = "2021"
 description = "AirPlay-to-WLED audio-reactive bridge"
 license = "MIT"
