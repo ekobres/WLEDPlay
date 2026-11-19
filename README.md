@@ -98,7 +98,22 @@ Copy the examples to gitignored local files and edit. Pulls update the examples 
 
 That copies [`config/config-example.yaml`](config/config-example.yaml) to `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) to `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, NIC pins, and Shairport lead are patched at start from yaml or env. Docker always creates the metadata FIFO at `WLEDPLAY_METADATA_PIPE` (default `/run/wledplay.meta`) and passes it to Shairport and `wledplay`. An empty `metadata.pipe` in yaml does not turn metadata off inside the container.
 
-On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus and Avahi. If the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
+On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus and Avahi. If the host already owns UDP 5353, use the host Avahi overlay below or stop the host daemon if it is not needed.
+
+On Raspberry Pi OS, check whether host Avahi is active and owns UDP 5353:
+
+```bash
+sudo systemctl is-active avahi-daemon
+sudo ss -lunp | grep ':5353'
+```
+
+If so, use the host D-Bus/Avahi Compose overlay rather than starting a second daemon:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host-avahi.yml up -d
+```
+
+The overlay mounts `/run/dbus` and sets `ENABLE_AVAHI=0`. With a published image, set `WLEDPLAY_IMAGE` to the desired GHCR tag and use both `-f` options for `docker compose pull` and `docker compose up`.
 
 | Variable | Purpose |
 |----------|---------|

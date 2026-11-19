@@ -1,0 +1,8 @@
+# Use the host's D-Bus/Avahi when its avahi-daemon already owns UDP 5353.
+# Run with: docker compose -f docker-compose.yml -f docker-compose.host-avahi.yml up -d
+services:
+  wledplay:
+    environment:
+      ENABLE_AVAHI: "0"
+    volumes:
+      - /run/dbus:/run/dbus
