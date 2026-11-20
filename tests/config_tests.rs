@@ -3,6 +3,14 @@ use tempfile::NamedTempFile;
 use wledplay::config::Config;
 
 #[test]
+fn example_config_loads_empty_destinations_and_audio_settings() {
+    let cfg: Config = serde_yaml::from_str(include_str!("../config/config-example.yaml")).unwrap();
+    assert!(cfg.wled.destinations.is_empty());
+    assert_eq!(cfg.audio.sync_offset_ms, 1200);
+    assert!((cfg.audio.shairport_latency_offset_s - -1.2).abs() < 1e-9);
+}
+
+#[test]
 fn loads_yaml_from_file_and_applies_defaults() {
     let mut file = NamedTempFile::new().unwrap();
     write!(

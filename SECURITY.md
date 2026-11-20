@@ -25,7 +25,7 @@ Or firewall TCP 8080 so only your management hosts can reach it. Do not publish 
 
 Docker Compose uses `network_mode: host`, so the container shares the host's addresses. Besides the UI, that exposes mDNS (UDP 5353) and AirPlay 2 timing (UDP 319 and 320) on the NICs Shairport and Avahi use.
 
-`WLEDPLAY_AVAHI_MODE=auto` (the default) detects a host Avahi socket and uses host D-Bus/Avahi when available. Compose mounts `/run/dbus` and `/run/avahi-daemon` into the container read-only, but read-only mounts do not restrict calls made over the D-Bus socket. In host mode, the root-run container can make any system-bus calls permitted to its peer by the host D-Bus policy. Use this mode only on a host and network you trust. Set `WLEDPLAY_AVAHI_MODE=container` to force the isolated container daemons; if host Avahi owns UDP 5353, resolve that host-level conflict before forcing container mode.
+`WLEDPLAY_AVAHI_MODE=auto` (the default) detects a host Avahi socket and uses host D-Bus/Avahi when available. Compose mounts `/run/dbus` and `/run/avahi-daemon` into the container read-only, but read-only mounts do not restrict calls made over the D-Bus socket. The same risk applies to the legacy direct `/run/dbus:/run/dbus` mount with `ENABLE_AVAHI=0`. In host mode, the root-run container can make any system-bus calls permitted to its peer by the host D-Bus policy. Use this mode only on a host and network you trust. Set `WLEDPLAY_AVAHI_MODE=container` to force the isolated container daemons; if host Avahi owns UDP 5353, resolve that host-level conflict before forcing container mode.
 
 This release does not add a token or change the default bind. Treat the host as inside a network you control.
 

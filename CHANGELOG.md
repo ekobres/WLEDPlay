@@ -8,7 +8,7 @@
 - Added WLED controller discovery and per-controller delay measurement and tuning.
 - Added operator logs and expanded runtime statistics.
 - Improved track metadata updates and audio packet scheduling.
-- Updated the container runtime to Debian 13 and made upstream patches opt-in.
+- Updated the container runtime to Debian 13, made upstream patches opt-in, and retained legacy host Avahi support.
 
 ## 0.3.0
 

@@ -201,6 +201,12 @@ start_mdns() {
   esac
 
   if [ "$WLEDPLAY_AVAHI_MODE" = "host" ]; then
+    if [ "$ENABLE_AVAHI" = "0" ] && [ -S /run/dbus/system_bus_socket ]; then
+      DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+      export DBUS_SYSTEM_BUS_ADDRESS
+      echo "Using host D-Bus and Avahi (ENABLE_AVAHI=0)"
+      return 0
+    fi
     if [ ! -S /host/run/dbus/system_bus_socket ] || [ ! -S /host/run/avahi-daemon/socket ]; then
       echo "fatal: host Avahi mode requires host D-Bus and Avahi sockets" >&2
       echo "expected /run/dbus/system_bus_socket and /run/avahi-daemon/socket on the host" >&2

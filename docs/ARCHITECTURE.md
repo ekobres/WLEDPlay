@@ -29,6 +29,7 @@ The Docker build and runtime stages use Debian 13 Trixie slim; the Rust build st
 - [`src/web/mod.rs`](../src/web/mod.rs) is the HTTP API. [`src/web/index.html`](../src/web/index.html) is the operator UI, compiled in with `include_str!`. A UI change is not visible until the binary is rebuilt.
 - [`src/config.rs`](../src/config.rs) and [`src/control.rs`](../src/control.rs) load YAML and apply live patches.
 - [`src/metadata/`](../src/metadata) parses the Shairport metadata pipe.
+- Legacy `ENABLE_AVAHI=0` deployments may use a directly mounted host D-Bus socket; newer host mode uses the read-only host socket mounts supplied by Compose.
 - Shairport's explicit `ssnc/paus` and `ssnc/pres` receiver metadata controls the UI pause state and freezes track progress. For a current Auto Join attempt, a pause observed after its request suspends the PCM deadline until resume; PCM is still required to confirm a pending join. A new receiver connection or player end clears the pause state. A PCM gap alone does not confirm pause, and an active-session TXT flag does not necessarily mean audio is playing.
 - [`src/clock.rs`](../src/clock.rs) and [`src/timing/`](../src/timing) track presentation timing. [`src/netif.rs`](../src/netif.rs) resolves NIC pins.
 

@@ -1272,6 +1272,35 @@ mod tests {
     }
 
     #[test]
+    fn metadata_pause_keeps_track_progress_across_other_items() {
+        let status = status();
+        status.lock().unwrap().airplay.connected = true;
+        let artwork = Arc::new(Mutex::new(None));
+        let mut meta = TrackMetadata {
+            title: Some("Song".into()),
+            rtp_start: Some(0),
+            rtp_current: Some(44_100),
+            rtp_end: Some(4_410_000),
+            progress_unix_ms: Some(metadata::unix_ms_now().saturating_sub(5_000)),
+            ..TrackMetadata::default()
+        };
+        let mut raw = String::new();
+        let mut fold = MetadataFold::default();
+        let item = "<item><type>73736e63</type><code>6d64656e</code></item>\n";
+        let pause = "<item><type>73736e63</type><code>70617573</code></item>\n";
+        let resume = "<item><type>73736e63</type><code>70726573</code></item>\n";
+
+        apply_metadata_line(&mut raw, item, &mut meta, &artwork, &status, &mut fold);
+        apply_metadata_line(&mut raw, pause, &mut meta, &artwork, &status, &mut fold);
+        let frozen = status.lock().unwrap().metadata.position_s.unwrap();
+        assert!(frozen >= 5.9);
+        apply_metadata_line(&mut raw, item, &mut meta, &artwork, &status, &mut fold);
+        assert_eq!(status.lock().unwrap().metadata.position_s, Some(frozen));
+        apply_metadata_line(&mut raw, resume, &mut meta, &artwork, &status, &mut fold);
+        assert!((status.lock().unwrap().metadata.position_s.unwrap() - frozen).abs() < 0.1);
+    }
+
+    #[test]
     fn metadata_tracks_airplay_pause_and_resume() {
         let status = status();
         let artwork = Arc::new(Mutex::new(None));

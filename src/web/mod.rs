@@ -145,6 +145,8 @@ pub struct TrackMetadataStatus {
     pub position_base_s: Option<f32>,
     #[serde(skip)]
     pub progress_unix_ms: Option<u64>,
+    #[serde(skip)]
+    pub progress_sample: Option<(f32, Option<u64>)>,
 }
 
 impl TrackMetadataStatus {
@@ -163,14 +165,18 @@ impl TrackMetadataStatus {
         // AirPlay 2 puts elapsed time in the now-playing plist and does not
         // write it to the metadata pipe. A later item (lead, artwork) must
         // not wipe a clock that is already running for this track.
-        if let Some(pos) = meta.position_s() {
+        let progress_sample = meta.position_s().map(|pos| (pos, meta.progress_unix_ms));
+        if let Some((pos, sampled_at)) =
+            progress_sample.filter(|_| self.progress_sample != progress_sample)
+        {
             self.position_base_s = Some(pos);
-            self.progress_unix_ms = meta.progress_unix_ms;
-        } else if !same_track {
+            self.progress_unix_ms = sampled_at;
+        } else if progress_sample.is_none() && !same_track {
             self.position_s = None;
             self.position_base_s = None;
             self.progress_unix_ms = None;
         }
+        self.progress_sample = progress_sample;
     }
 
     pub fn refresh_position(&mut self, playing: bool) {
@@ -765,6 +771,44 @@ mod tests {
 
         md.refresh_position(true);
         assert!(md.position_s.is_none());
+    }
+
+    #[test]
+    fn track_progress_keeps_paused_anchor_between_metadata_events() {
+        let mut status = TrackMetadataStatus::default();
+        let mut track = TrackMetadata {
+            title: Some("Song".into()),
+            rtp_start: Some(0),
+            rtp_current: Some(44_100),
+            rtp_end: Some(4_410_000),
+            progress_unix_ms: Some(unix_ms_now().saturating_sub(5_000)),
+            ..TrackMetadata::default()
+        };
+        status.set_from_track(&track);
+        status.refresh_position(false);
+        let frozen = status.position_s.unwrap();
+        assert!(frozen >= 5.9);
+
+        status.set_from_track(&track);
+        status.refresh_position(false);
+        assert_eq!(status.position_s, Some(frozen));
+        assert!(status.progress_unix_ms.is_none());
+
+        status.set_from_track(&track);
+        status.refresh_position(true);
+        assert!((status.position_s.unwrap() - frozen).abs() < 0.1);
+
+        track.rtp_current = Some(882_000);
+        track.progress_unix_ms = Some(unix_ms_now());
+        status.set_from_track(&track);
+        status.refresh_position(true);
+        assert!((status.position_s.unwrap() - 20.0).abs() < 0.1);
+
+        track.title = Some("Next song".into());
+        status.set_from_track(&track);
+        assert_eq!(status.position_base_s, Some(20.0));
+        status.set_from_track(&track);
+        assert_eq!(status.position_base_s, Some(20.0));
     }
 
     #[test]
