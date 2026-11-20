@@ -70,7 +70,8 @@ WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
 if [ -z "$WLEDPLAY_SHAIRPORT_LATENCY_OFFSET" ]; then
   WLEDPLAY_SHAIRPORT_LATENCY_OFFSET="$(sed -n 's/^[[:space:]]*shairport_latency_offset_s:[[:space:]]*//p' "$CFG_YAML" 2>/dev/null | head -1)"
 fi
-ENABLE_AVAHI="${ENABLE_AVAHI:-1}"
+WLEDPLAY_AVAHI_MODE="${WLEDPLAY_AVAHI_MODE:-auto}"
+ENABLE_AVAHI="${ENABLE_AVAHI:-}"
 WLEDPLAY_IPV4_ONLY="${WLEDPLAY_IPV4_ONLY:-0}"
 PCM_FIFO="/run/wledplay.pcm"
 META_FIFO="${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
@@ -170,13 +171,57 @@ rotate_logs() {
 }
 
 start_mdns() {
-  if [ "$ENABLE_AVAHI" != "1" ]; then
-    echo "ENABLE_AVAHI=0: expecting host D-Bus/Avahi (mount /run/dbus)"
+  mkdir -p /run/dbus /run/avahi-daemon
+
+  # ENABLE_AVAHI remains a compatibility override: 1=container, 0=host.
+  if [ -n "$ENABLE_AVAHI" ]; then
+    case "$ENABLE_AVAHI" in
+      1) WLEDPLAY_AVAHI_MODE=container ;;
+      0) WLEDPLAY_AVAHI_MODE=host ;;
+      *)
+        echo "fatal: ENABLE_AVAHI must be 0 or 1" >&2
+        exit 1
+        ;;
+    esac
+  fi
+
+  case "$WLEDPLAY_AVAHI_MODE" in
+    auto)
+      if [ -S /host/run/avahi-daemon/socket ]; then
+        WLEDPLAY_AVAHI_MODE=host
+      else
+        WLEDPLAY_AVAHI_MODE=container
+      fi
+      ;;
+    host|container) ;;
+    *)
+      echo "fatal: WLEDPLAY_AVAHI_MODE must be auto, host, or container" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ "$WLEDPLAY_AVAHI_MODE" = "host" ]; then
+    if [ "$ENABLE_AVAHI" = "0" ] && [ -S /run/dbus/system_bus_socket ]; then
+      DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+      export DBUS_SYSTEM_BUS_ADDRESS
+      echo "Using host D-Bus and Avahi (ENABLE_AVAHI=0)"
+      return 0
+    fi
+    if [ ! -S /host/run/dbus/system_bus_socket ] || [ ! -S /host/run/avahi-daemon/socket ]; then
+      echo "fatal: host Avahi mode requires host D-Bus and Avahi sockets" >&2
+      echo "expected /run/dbus/system_bus_socket and /run/avahi-daemon/socket on the host" >&2
+      exit 1
+    fi
+    rm -f /run/dbus/system_bus_socket /run/avahi-daemon/socket
+    ln -s /host/run/dbus/system_bus_socket /run/dbus/system_bus_socket
+    ln -s /host/run/avahi-daemon/socket /run/avahi-daemon/socket
+    DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+    export DBUS_SYSTEM_BUS_ADDRESS
+    echo "Using host D-Bus and Avahi (WLEDPLAY_AVAHI_MODE=host)"
     return 0
   fi
 
-  mkdir -p /run/dbus /run/avahi-daemon
-  rm -f /run/dbus/pid /run/dbus/dbus.pid /run/avahi-daemon/pid
+  rm -f /run/dbus/pid /run/dbus/dbus.pid /run/dbus/system_bus_socket /run/avahi-daemon/pid /run/avahi-daemon/socket
 
   echo "Starting dbus..."
   dbus-uuidgen --ensure
@@ -216,11 +261,11 @@ start_mdns() {
   avahi-daemon --daemonize --no-chroot --file="$avahi_conf"
   if ! wait_for /run/avahi-daemon/pid 50; then
     echo "fatal: avahi-daemon did not start."
-    echo "With network_mode: host, a host avahi-daemon already bound to UDP 5353 will block this."
-    echo "Stop the host daemon, or set ENABLE_AVAHI=0 and mount /run/dbus:/run/dbus"
+    echo "If the host already runs Avahi, use WLEDPLAY_AVAHI_MODE=host (the host service sockets must be mounted)."
+    echo "To force container Avahi, set WLEDPLAY_AVAHI_MODE=container."
     exit 1
   fi
-  echo "Avahi is running (pid $(cat /run/avahi-daemon/pid))"
+  echo "Avahi is running in the container (pid $(cat /run/avahi-daemon/pid))"
 }
 
 start_autojoin() {

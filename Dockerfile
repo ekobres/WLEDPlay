@@ -5,15 +5,17 @@
 ARG SHAIRPORT_VERSION=5.6.3
 ARG NQPTP_VERSION=1.2.9
 
-FROM rust:1.89-bookworm AS wledplay-build
+FROM rust:1.100.0-slim-trixie AS wledplay-build
+ARG WLEDPLAY_BUILD_METADATA=
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./build.rs
 COPY src ./src
-RUN cargo build --release
+RUN WLEDPLAY_BUILD_METADATA="$WLEDPLAY_BUILD_METADATA" cargo build --release
 
-FROM debian:bookworm-slim AS shairport-build
+FROM debian:trixie-slim AS shairport-build
 ARG SHAIRPORT_VERSION
-ARG WLEDPLAY_SHAIRPORT_PATCH=1
+ARG WLEDPLAY_SHAIRPORT_PATCH=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool pkg-config \
@@ -23,11 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/shairport-mixed-stack.patch /tmp/shairport-mixed-stack.patch
-# Upstream 5.6.3. WLEDPLAY_SHAIRPORT_PATCH=1 (the default) tells NQPTP which
+# Upstream 5.6.3. WLEDPLAY_SHAIRPORT_PATCH=1 opts into the local patch, which tells NQPTP which
 # clocks to watch at the initial SETUP, limits advertised addresses to the
 # AirPlay interface, lets stdout play before a PTP lock exists, and reports
 # each block's presentation lead. B stays on the audio SETUP. Set the arg to
-# 0 for an unpatched tag build.
+# 0 (the default) for an unpatched tag build.
 RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
       https://github.com/mikebrady/shairport-sync.git && \
     cd shairport-sync && \
@@ -37,18 +39,18 @@ RUN git clone --depth 1 --branch "${SHAIRPORT_VERSION}" \
     make -j"$(nproc)" && \
     make install
 
-FROM debian:bookworm-slim AS nqptp-build
+FROM debian:trixie-slim AS nqptp-build
 ARG NQPTP_VERSION
-ARG WLEDPLAY_NQPTP_PATCH=1
+ARG WLEDPLAY_NQPTP_PATCH=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential git autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY docker/nqptp-timing-peers.patch /tmp/nqptp-timing-peers.patch
-# Upstream 1.2.9. WLEDPLAY_NQPTP_PATCH=1 (the default) watches every address
-# in a T command. Stock keeps the first and drops the rest. Set the arg to 0
-# for an unpatched tag build.
+# Upstream 1.2.9. WLEDPLAY_NQPTP_PATCH=1 opts into the local patch, which watches every address
+# in a T command. Stock keeps the first and drops the rest. Set the arg to
+# 0 (the default) for an unpatched tag build.
 RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
       https://github.com/mikebrady/nqptp.git && \
     cd nqptp && \
@@ -58,14 +60,13 @@ RUN git clone --depth 1 --branch "${NQPTP_VERSION}" \
     make -j"$(nproc)" && \
     make install
 
-FROM debian:bookworm-slim
-# Runtime package names are Debian 12 (bookworm), not Trixie.
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates avahi-daemon dbus dbus-bin \
-    libssl3 libsoxr0 libconfig9 libgcrypt20 \
-    libplist3 libuuid1 libpopt0 libsodium23 \
+    libssl3t64 libsoxr0 libconfig11 libgcrypt20 \
+    libplist-2.0-4 libuuid1 libpopt0 libsodium23 \
     libavahi-client3 libavahi-common3 \
-    libavcodec59 libavformat59 libavutil57 libswresample4 \
+    libavcodec61 libavformat61 libavutil59 libswresample5 \
     python3 python3-pip python3-dbus python3-gi gir1.2-glib-2.0 iproute2 tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages 'pyatv==0.16.1' 'srptools==1.0.1'
@@ -100,7 +101,7 @@ ENV WLEDPLAY_AIRPLAY_NAME=WLEDPlay \
     WLEDPLAY_METADATA_PIPE=/run/wledplay.meta \
     WLEDPLAY_AUTOJOIN_URL=http://127.0.0.1:8091 \
     PYATV_STORAGE=/host-config/pyatv \
-    ENABLE_AVAHI=1 \
+    WLEDPLAY_AVAHI_MODE=auto \
     WLEDPLAY_IPV4_ONLY=0
 
 EXPOSE 8080

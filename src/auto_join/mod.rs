@@ -82,6 +82,8 @@ impl Phase {
 pub struct TickInput<'a> {
     pub now_ms: u64,
     pub raw_busy: bool,
+    pub receiver_paused: bool,
+    pub receiver_pause_sequence: u64,
     pub enabled: bool,
     pub target_id: &'a str,
     pub target_name: &'a str,
@@ -117,6 +119,9 @@ pub struct AutoJoinService {
     outstanding_deadline: u64,
     awaiting_pcm: bool,
     pcm_deadline: u64,
+    receiver_pause_waiting: bool,
+    join_pause_sequence: u64,
+    join_target: String,
     last_error: String,
     last_log: String,
     target_was_available: bool,
@@ -150,6 +155,9 @@ impl AutoJoinService {
             outstanding_deadline: 0,
             awaiting_pcm: false,
             pcm_deadline: 0,
+            receiver_pause_waiting: false,
+            join_pause_sequence: 0,
+            join_target: String::new(),
             last_error: String::new(),
             last_log: String::new(),
             target_was_available: false,
@@ -176,6 +184,7 @@ impl AutoJoinService {
         self.update_idle(input.now_ms, input.raw_busy);
         if !input.raw_busy {
             self.apply_results(&input, &mut logs);
+            self.update_receiver_pause(&input);
             self.arm_timeouts(input.now_ms, target_paused(&input), &mut logs);
         } else {
             self.clear_finished_requests(&input);
@@ -208,11 +217,15 @@ impl AutoJoinService {
             self.last_error.clear();
             return self.finish(&input, None, logs);
         }
+        if self.phase == Phase::Joined && self.join_target != input.target_id {
+            self.phase = Phase::IdleWaiting;
+        }
 
         let device = find_target(input.devices, input.target_id);
         let available = device.is_some_and(|d| d.available);
-        let playing = device.is_some_and(|d| d.playing && d.available);
-        let paused = device.is_some_and(|d| d.paused && d.available);
+        let receiver_paused = self.receiver_paused_for_target(&input);
+        let playing = device.is_some_and(|d| d.playing && d.available) && !receiver_paused;
+        let paused = device.is_some_and(|d| d.available && (d.paused || receiver_paused));
         if !available {
             self.cancel_join();
             self.phase = Phase::TargetUnavailable;
@@ -236,6 +249,9 @@ impl AutoJoinService {
             };
             self.log(&mut logs, notice);
             self.was_playing = true;
+        }
+        if receiver_paused {
+            return self.finish(&input, None, logs);
         }
         if device.is_some_and(|d| d.phone_owned) {
             self.cancel_join();
@@ -288,6 +304,8 @@ impl AutoJoinService {
 
         self.generation = self.generation.wrapping_add(1);
         self.outstanding = true;
+        self.join_pause_sequence = input.receiver_pause_sequence;
+        self.join_target = input.target_id.to_string();
         self.outstanding_deadline = input.now_ms.saturating_add(REQUEST_TIMEOUT_MS);
         self.phase = Phase::Joining;
         let name = display_target(&self.seen_name, input.target_id);
@@ -477,8 +495,30 @@ impl AutoJoinService {
         }
     }
 
+    fn update_receiver_pause(&mut self, input: &TickInput<'_>) {
+        if !self.awaiting_pcm {
+            self.receiver_pause_waiting = false;
+            return;
+        }
+        let paused = self.receiver_paused_for_target(input);
+        if paused || self.receiver_pause_waiting {
+            self.pcm_deadline = input.now_ms.saturating_add(JOIN_TIMEOUT_MS);
+        }
+        self.receiver_pause_waiting = paused;
+    }
+
+    fn receiver_paused_for_target(&self, input: &TickInput<'_>) -> bool {
+        input.enabled
+            && !input.target_id.is_empty()
+            && self.join_target == input.target_id
+            && input.receiver_paused
+            && input.receiver_pause_sequence != self.join_pause_sequence
+            && (self.awaiting_pcm || self.phase == Phase::Joined)
+    }
+
     fn fail(&mut self, now: u64, err: &str, logs: &mut Vec<String>) {
         self.awaiting_pcm = false;
+        self.receiver_pause_waiting = false;
         self.outstanding = false;
         self.last_error = err.to_string();
         self.attempt = self.attempt.saturating_add(1);
@@ -503,6 +543,7 @@ impl AutoJoinService {
         self.phase = Phase::Joined;
         self.attempt = 0;
         self.awaiting_pcm = false;
+        self.receiver_pause_waiting = false;
         self.outstanding = false;
         self.last_error.clear();
         self.log(logs, "Auto Join successful".into());
@@ -519,6 +560,7 @@ impl AutoJoinService {
     fn cancel_join(&mut self) {
         self.outstanding = false;
         self.awaiting_pcm = false;
+        self.receiver_pause_waiting = false;
     }
 
     fn log(&mut self, logs: &mut Vec<String>, msg: String) {
@@ -538,8 +580,9 @@ impl AutoJoinService {
     ) -> TickOutput {
         let device = find_target(input.devices, input.target_id);
         let target_available = device.is_some_and(|d| d.available);
-        let target_playing = device.is_some_and(|d| d.playing && d.available);
-        let target_paused = device.is_some_and(|d| d.paused && d.available);
+        let receiver_paused = self.receiver_paused_for_target(input);
+        let target_playing = device.is_some_and(|d| d.playing && d.available) && !receiver_paused;
+        let target_paused = device.is_some_and(|d| d.available && (d.paused || receiver_paused));
         let target_status = if input.target_id.is_empty() {
             String::new()
         } else if !target_available {
@@ -564,7 +607,13 @@ impl AutoJoinService {
                     "Target playing".to_string()
                 }
             }
-            Phase::Joining => "Joining group".to_string(),
+            Phase::Joining => {
+                if receiver_paused {
+                    "Joining, playback paused".to_string()
+                } else {
+                    "Joining group".to_string()
+                }
+            }
             Phase::Joined => {
                 if target_paused {
                     "Joined, playback paused".to_string()
@@ -752,6 +801,31 @@ mod tests {
         device
     }
 
+    fn receiver_tick(
+        svc: &mut AutoJoinService,
+        now_ms: u64,
+        raw_busy: bool,
+        receiver_paused: bool,
+        devices: &[AirPlayDevice],
+        join_results: &[JoinResult],
+    ) -> TickOutput {
+        svc.tick(TickInput {
+            now_ms,
+            raw_busy,
+            receiver_paused,
+            receiver_pause_sequence: u64::from(receiver_paused),
+            enabled: true,
+            target_id: "aa",
+            target_name: "Kitchen",
+            self_id: "self",
+            devices,
+            discovery_active: true,
+            discovery_error: "",
+            can_join: true,
+            join_results,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn tick(
         svc: &mut AutoJoinService,
@@ -768,6 +842,8 @@ mod tests {
         svc.tick(TickInput {
             now_ms: now,
             raw_busy: busy,
+            receiver_paused: false,
+            receiver_pause_sequence: 0,
             enabled,
             target_id: target,
             target_name: name,
@@ -1425,6 +1501,156 @@ mod tests {
     }
 
     #[test]
+    fn receiver_pause_suspends_pending_join_until_pcm() {
+        let mut svc = AutoJoinService::new();
+        let playing = [dev("aa", "Kitchen", true)];
+        let request = receiver_tick(&mut svc, 0, false, false, &playing, &[])
+            .join
+            .unwrap();
+        let accepted = [JoinResult {
+            revision: request.revision,
+            generation: request.generation,
+            ok: true,
+            error: String::new(),
+        }];
+        let paused = receiver_tick(&mut svc, 5, false, true, &playing, &accepted);
+        assert_eq!(paused.view.state, "joining");
+        assert_eq!(paused.view.target_status, "Paused");
+        assert_eq!(paused.view.label, "Joining, playback paused");
+        assert!(!paused.view.target_playing);
+        assert!(paused.view.last_error.is_empty());
+
+        let held = receiver_tick(&mut svc, JOIN_TIMEOUT_MS * 3, false, true, &playing, &[]);
+        assert_eq!(held.view.state, "joining");
+        assert!(held.view.last_error.is_empty());
+        assert!(held.join.is_none());
+
+        let resume_at = JOIN_TIMEOUT_MS * 8;
+        let resumed = receiver_tick(&mut svc, resume_at, false, false, &playing, &[]);
+        assert_eq!(resumed.view.state, "joining");
+        assert_eq!(resumed.view.target_status, "Playing");
+        assert!(resumed.view.last_error.is_empty());
+        let waiting = receiver_tick(
+            &mut svc,
+            resume_at + JOIN_TIMEOUT_MS - 1,
+            false,
+            false,
+            &playing,
+            &[],
+        );
+        assert_eq!(waiting.view.state, "joining");
+        let joined = receiver_tick(
+            &mut svc,
+            resume_at + JOIN_TIMEOUT_MS,
+            true,
+            false,
+            &playing,
+            &[],
+        );
+        assert_eq!(joined.view.state, "joined");
+
+        let pause_at = resume_at + JOIN_TIMEOUT_MS + 1;
+        let _ = receiver_tick(&mut svc, pause_at, false, true, &playing, &[]);
+        let established = receiver_tick(
+            &mut svc,
+            pause_at + IDLE_DEBOUNCE_MS + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            &playing,
+            &[],
+        );
+        assert_eq!(established.view.state, "joined");
+        assert_eq!(established.view.target_status, "Paused");
+        assert_eq!(established.view.label, "Joined, playback paused");
+        assert!(established.view.last_error.is_empty());
+        assert!(established.join.is_none());
+    }
+
+    #[test]
+    fn unrelated_receiver_pause_does_not_override_target() {
+        let mut svc = AutoJoinService::new();
+        let playing = [dev("aa", "Kitchen", true)];
+        let output = receiver_tick(&mut svc, 0, true, true, &playing, &[]);
+        assert_eq!(output.view.state, "busy");
+        assert_eq!(output.view.target_status, "Playing");
+        assert!(output.join.is_none());
+    }
+
+    #[test]
+    fn stale_receiver_pause_does_not_suppress_join_timeout() {
+        let mut svc = AutoJoinService::new();
+        let playing = [dev("aa", "Kitchen", true)];
+        let request = receiver_tick(&mut svc, 0, false, true, &playing, &[])
+            .join
+            .unwrap();
+        let accepted = [JoinResult {
+            revision: request.revision,
+            generation: request.generation,
+            ok: true,
+            error: String::new(),
+        }];
+        let pending = receiver_tick(&mut svc, 5, false, true, &playing, &accepted);
+        assert_eq!(pending.view.state, "joining");
+        assert_eq!(pending.view.target_status, "Playing");
+        let expired = receiver_tick(&mut svc, 5 + JOIN_TIMEOUT_MS, false, true, &playing, &[]);
+        assert_eq!(expired.view.state, "error");
+        assert_eq!(
+            expired.view.last_error,
+            "timed out waiting for inbound AirPlay session"
+        );
+    }
+
+    #[test]
+    fn receiver_pause_is_not_attributed_to_a_new_target() {
+        let mut svc = AutoJoinService::new();
+        let devices = [dev("aa", "Kitchen", true), dev("bb", "Office", true)];
+        receiver_tick(&mut svc, 0, false, false, &devices, &[]);
+        receiver_tick(&mut svc, 1, true, false, &devices, &[]);
+        receiver_tick(&mut svc, 2, false, true, &devices, &[]);
+        let output = svc.tick(TickInput {
+            now_ms: IDLE_DEBOUNCE_MS + 2,
+            raw_busy: false,
+            receiver_paused: true,
+            receiver_pause_sequence: 1,
+            enabled: true,
+            target_id: "bb",
+            target_name: "Office",
+            self_id: "self",
+            devices: &devices,
+            discovery_active: true,
+            discovery_error: "",
+            can_join: true,
+            join_results: &[],
+        });
+        assert_eq!(output.view.target_status, "Playing");
+        assert_eq!(output.view.state, "joining");
+        assert_eq!(output.join.unwrap().target_id, "bb");
+    }
+
+    #[test]
+    fn resumed_join_still_times_out_without_pcm() {
+        let mut svc = AutoJoinService::new();
+        let playing = [dev("aa", "Kitchen", true)];
+        let request = receiver_tick(&mut svc, 0, false, false, &playing, &[])
+            .join
+            .unwrap();
+        let accepted = [JoinResult {
+            revision: request.revision,
+            generation: request.generation,
+            ok: true,
+            error: String::new(),
+        }];
+        receiver_tick(&mut svc, 5, false, true, &playing, &accepted);
+        receiver_tick(&mut svc, JOIN_TIMEOUT_MS, false, false, &playing, &[]);
+        let expired = receiver_tick(&mut svc, JOIN_TIMEOUT_MS * 2, false, false, &playing, &[]);
+        assert_eq!(expired.view.state, "error");
+        assert_eq!(
+            expired.view.last_error,
+            "timed out waiting for inbound AirPlay session"
+        );
+    }
+
+    #[test]
     fn paused_group_stays_joined_without_pcm() {
         let mut svc = AutoJoinService::new();
         let paused = [paused_dev("aa", "Kitchen")];
@@ -1550,6 +1776,37 @@ mod tests {
             &[],
         );
         assert_eq!(live.view.state, "joined");
+
+        let paused_after_playback = tick(
+            &mut held_svc,
+            20 + IDLE_DEBOUNCE_MS + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(paused_after_playback.view.state, "joined");
+        assert_eq!(paused_after_playback.view.target_status, "Paused");
+        assert!(paused_after_playback.view.last_error.is_empty());
+        assert!(paused_after_playback.join.is_none());
+        let paused_after_debounce = tick(
+            &mut held_svc,
+            20 + 2 * IDLE_DEBOUNCE_MS + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(paused_after_debounce.view.label, "Joined, playback paused");
+        assert!(paused_after_debounce.join.is_none());
 
         let mut mid = AutoJoinService::new();
         let playing_now = [dev("aa", "Kitchen", true)];

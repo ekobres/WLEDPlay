@@ -36,6 +36,10 @@ RECEIVER_NAME = os.environ.get("WLEDPLAY_AIRPLAY_NAME", "WLEDPlay")
 AIRPLAY_IFACE = os.environ.get("WLEDPLAY_AIRPLAY_INTERFACE", "").strip()
 UNICAST_IFACE = os.environ.get("WLEDPLAY_UNICAST_INTERFACE", "").strip()
 GROUP_UNSUPPORTED = "group modification not supported"
+AVAHI_SERVICE = "org.freedesktop.Avahi"
+AIRPLAY_SERVICE_TYPE = "_airplay._tcp"
+RAOP_SERVICE_TYPE = "_raop._tcp"
+AIRPLAY_SERVICE_TYPES = (AIRPLAY_SERVICE_TYPE, RAOP_SERVICE_TYPE)
 
 _lock = threading.Lock()
 _records: dict = {}
@@ -832,21 +836,29 @@ def alias_target(found: ScanIndex, target_id: str, address: str) -> None:
     """Point the mDNS target id at the pyatv config for that speaker."""
     if not target_id or target_id in found.by_id:
         return
-    match = ""
-    for ident, props in found.props_by_id.items():
-        if ids_match(ident, target_id) or ids_match(props.get("deviceid") or "", target_id):
-            match = ident
-            break
-    if not match and address:
-        for ident, meta in found.meta.items():
-            if (meta.get("address") or "") == address:
-                match = ident
-                break
+
+    match = _matching_device_id(found, target_id) or _matching_address(found, address)
     if not match or match not in found.by_id:
         return
     found.by_id[target_id] = found.by_id[match]
     found.props_by_id[target_id] = found.props_by_id.get(match) or {}
     found.names[target_id] = found.names.get(match, "")
+
+
+def _matching_device_id(found: ScanIndex, target_id: str) -> str:
+    for ident, props in found.props_by_id.items():
+        if ids_match(ident, target_id) or ids_match(props.get("deviceid") or "", target_id):
+            return ident
+    return ""
+
+
+def _matching_address(found: ScanIndex, address: str) -> str:
+    if not address:
+        return ""
+    for ident, meta in found.meta.items():
+        if (meta.get("address") or "") == address:
+            return ident
+    return ""
 
 
 async def _scan_for_target(storage, target_id: str, receiver_name: str, network, index: dict):
@@ -1083,7 +1095,7 @@ def scan_payload() -> dict:
 
 def decode_txt(txt) -> dict:
     props = {}
-    for entry in list(txt or []):
+    for entry in txt or []:
         raw = bytes(int(part) & 0xFF for part in entry)
         text = raw.decode("utf-8", "replace")
         if "=" not in text:
@@ -1122,6 +1134,32 @@ def stable_id(props: dict, service_name: str) -> str:
     return service_name
 
 
+def _new_record(label: str, address: str, props: dict, is_raop: bool) -> dict:
+    return {
+        "name": label,
+        "address": address,
+        "model": props.get("model") or "",
+        "present": True,
+        "props": props,
+        "named_by_airplay": not is_raop,
+    }
+
+
+def _refresh_record(rec: dict, label: str, address: str, props: dict, is_raop: bool) -> None:
+    rec["present"] = True
+    rec["address"] = address or rec.get("address") or ""
+    if is_raop and rec.get("named_by_airplay"):
+        merged = dict(props)
+        merged.update(rec.get("props") or {})
+        rec["props"] = merged
+    else:
+        rec["props"] = props
+    rec["model"] = props.get("model") or rec.get("model") or ""
+    if not is_raop or not rec.get("named_by_airplay"):
+        rec["name"] = label
+        rec["named_by_airplay"] = not is_raop
+
+
 class AvahiBrowser:
     """One browser for the life of the sidecar. Rescan starts a new pass."""
 
@@ -1144,6 +1182,7 @@ class AvahiBrowser:
         self.wled_browsers = []
         self.wled_matches = []
         self.wled_resolvers = {}
+        self.wled_resolver_signals = {}
         self.wled_generation = 0
         self.wled_network = None
         self.receiver_watch = False
@@ -1180,8 +1219,8 @@ class AvahiBrowser:
             self._dbus = dbus
             self.bus = dbus.SystemBus()
             self.server = dbus.Interface(
-                self.bus.get_object("org.freedesktop.Avahi", "/"),
-                "org.freedesktop.Avahi.Server",
+                self.bus.get_object(AVAHI_SERVICE, "/"),
+                AVAHI_SERVICE + ".Server",
             )
             self._open_browsers()
             self._open_wled()
@@ -1228,7 +1267,7 @@ class AvahiBrowser:
         # sees that name on the unicast NIC, and one resolver slot would keep
         # the TXT record from the NIC that answered first.
         iface = self._dbus.Int32(self._interface_index(AIRPLAY_IFACE))
-        for stype in ("_airplay._tcp", "_raop._tcp"):
+        for stype in AIRPLAY_SERVICE_TYPES:
             try:
                 path = self.server.ServiceBrowserNew(
                     iface,
@@ -1238,8 +1277,8 @@ class AvahiBrowser:
                     self._dbus.UInt32(0),
                 )
                 browser = self._dbus.Interface(
-                    self.bus.get_object("org.freedesktop.Avahi", path),
-                    "org.freedesktop.Avahi.ServiceBrowser",
+                    self.bus.get_object(AVAHI_SERVICE, path),
+                    AVAHI_SERVICE + ".ServiceBrowser",
                 )
                 self._listen(
                     browser,
@@ -1289,12 +1328,14 @@ class AvahiBrowser:
     def _drop_clients(self) -> None:
         self._drop_signals(self.matches)
         self._drop_signals(self.receiver_signals)
-        for key in list(self.resolver_signals):
+        while self.resolver_signals:
+            key = next(iter(self.resolver_signals))
             self._drop_resolver_signals(key)
         for path, _browser_obj in self.browsers:
             self._free(path, "ServiceBrowser")
-        for path in list(self.resolvers.values()):
-            self._free(path, "ServiceResolver")
+        for path in self.resolvers.values():
+            if path:
+                self._free(path, "ServiceResolver")
         self.browsers.clear()
         self.resolvers.clear()
         self.resolve_attempt.clear()
@@ -1302,10 +1343,18 @@ class AvahiBrowser:
     def _drop_resolver_signals(self, key) -> None:
         self._drop_signals(self.resolver_signals.pop(key, []))
 
+    def _release_resolver(self, key, keep_slot: bool = False) -> None:
+        self._drop_resolver_signals(key)
+        path = self.resolvers.pop(key, "")
+        if path:
+            self._free(path, "ServiceResolver")
+        if keep_slot:
+            self.resolvers[key] = ""
+
     def _free(self, path: str, kind: str) -> None:
         try:
-            obj = self.bus.get_object("org.freedesktop.Avahi", path)
-            self._dbus.Interface(obj, "org.freedesktop.Avahi." + kind).Free()
+            obj = self.bus.get_object(AVAHI_SERVICE, path)
+            self._dbus.Interface(obj, AVAHI_SERVICE + "." + kind).Free()
         except Exception:
             return
 
@@ -1320,16 +1369,17 @@ class AvahiBrowser:
         if gen != self.generation:
             return
         key = (int(_interface), str(name), str(stype))
+        self._release_resolver(key)
+        if key in self.resolve_attempt:
+            self.resolve_attempt[key] += 1
         ident = self.services.pop(key, "")
-        if not ident:
-            return
-        if any(other == ident for other in self.services.values()):
+        if ident and not any(other == ident for other in self.services.values()):
+            rec = self.records.get(ident)
+            if rec is not None:
+                rec["present"] = False
+        if ident:
             self._publish_live()
-            return
-        rec = self.records.get(ident)
-        if rec is not None:
-            rec["present"] = False
-        self._publish_live()
+        self._note_resolved(key)
 
     def _resolve(
         self,
@@ -1372,8 +1422,8 @@ class AvahiBrowser:
             self.unresolved.add(key)
         try:
             resolver = self._dbus.Interface(
-                self.bus.get_object("org.freedesktop.Avahi", path),
-                "org.freedesktop.Avahi.ServiceResolver",
+                self.bus.get_object(AVAHI_SERVICE, path),
+                AVAHI_SERVICE + ".ServiceResolver",
             )
             bucket = []
             self.resolver_signals[key] = bucket
@@ -1395,18 +1445,18 @@ class AvahiBrowser:
             )
             self.resolvers[key] = path
         except Exception as exc:
+            self._release_resolver(key)
+            self._free(path, "ServiceResolver")
             self.pass_error = str(exc)
             self._set_status(True, self.pass_error)
             self._note_resolved(key)
         if not gate:
             self._maybe_publish()
 
-    def _on_found(
-        self, gen, key, attempt, _interface, _protocol, name, stype, _domain, _host, _aprotocol,
-        address, _port, txt, _flags,
-    ) -> None:
+    def _on_found(self, gen, key, attempt, *args) -> None:
         if gen != self.generation or attempt != self.resolve_attempt.get(key):
             return
+        _interface, _protocol, name, stype, _domain, _host, _aprotocol, address, _port, txt, _flags = args
         try:
             self._apply_found(key, name, stype, address, txt)
         finally:
@@ -1426,28 +1476,10 @@ class AvahiBrowser:
         is_raop = service_type.startswith("_raop")
         rec = self.records.get(ident)
         if rec is None:
-            rec = {
-                "name": label,
-                "address": text,
-                "model": props.get("model") or "",
-                "present": True,
-                "props": props,
-                "named_by_airplay": not is_raop,
-            }
+            rec = _new_record(label, text, props, is_raop)
             self.records[ident] = rec
         else:
-            rec["present"] = True
-            rec["address"] = text or rec.get("address") or ""
-            if is_raop and rec.get("named_by_airplay"):
-                merged = dict(props)
-                merged.update(rec.get("props") or {})
-                rec["props"] = merged
-            else:
-                rec["props"] = props
-            rec["model"] = props.get("model") or rec.get("model") or ""
-            if not is_raop or not rec.get("named_by_airplay"):
-                rec["name"] = label
-                rec["named_by_airplay"] = not is_raop
+            _refresh_record(rec, label, text, props, is_raop)
         self.services[key] = ident
         self._publish_live()
         if not self.snapshot_open:
@@ -1456,6 +1488,7 @@ class AvahiBrowser:
     def _on_resolver_failure(self, gen, key, attempt, _message) -> None:
         if gen != self.generation or attempt != self.resolve_attempt.get(key):
             return
+        self._release_resolver(key, keep_slot=True)
         self._note_resolved(key)
 
     def _note_resolved(self, key) -> None:
@@ -1505,8 +1538,8 @@ class AvahiBrowser:
                 self._dbus.UInt32(0),
             )
             browser = self._dbus.Interface(
-                self.bus.get_object("org.freedesktop.Avahi", path),
-                "org.freedesktop.Avahi.ServiceBrowser",
+                self.bus.get_object(AVAHI_SERVICE, path),
+                AVAHI_SERVICE + ".ServiceBrowser",
             )
             gen = self.wled_generation
             self._listen_wled(
@@ -1523,9 +1556,6 @@ class AvahiBrowser:
         except Exception:
             return
 
-    def _listen_wled(self, obj, signal: str, handler) -> None:
-        self.wled_matches.append(obj.connect_to_signal(signal, handler))
-
     def _drop_wled(self) -> None:
         for match in self.wled_matches:
             try:
@@ -1535,10 +1565,34 @@ class AvahiBrowser:
         self.wled_matches.clear()
         for path in self.wled_browsers:
             self._free(path, "ServiceBrowser")
-        for path in list(self.wled_resolvers.values()):
-            self._free(path, "ServiceResolver")
+        for path in self.wled_resolvers.values():
+            if path:
+                self._free(path, "ServiceResolver")
         self.wled_browsers.clear()
         self.wled_resolvers.clear()
+        self.wled_resolver_signals.clear()
+
+    def _listen_wled(self, obj, signal: str, handler, bucket=None) -> None:
+        match = obj.connect_to_signal(signal, handler)
+        self.wled_matches.append(match)
+        if bucket is not None:
+            bucket.append(match)
+
+    def _drop_wled_resolver_signals(self, key) -> None:
+        matches = self.wled_resolver_signals.pop(key, [])
+        if not matches:
+            return
+        match_ids = {id(match) for match in matches}
+        self._drop_signals(matches)
+        self.wled_matches[:] = [match for match in self.wled_matches if id(match) not in match_ids]
+
+    def _release_wled_resolver(self, key, keep_slot: bool = False) -> None:
+        self._drop_wled_resolver_signals(key)
+        path = self.wled_resolvers.pop(key, "")
+        if path:
+            self._free(path, "ServiceResolver")
+        if keep_slot:
+            self.wled_resolvers[key] = ""
 
     def _on_wled_new(self, gen, interface, protocol, name, stype, domain, _flags) -> None:
         if gen != self.wled_generation:
@@ -1559,25 +1613,28 @@ class AvahiBrowser:
         except Exception:
             return
         path = str(path)
+        self.wled_resolvers[key] = path
+        bucket = []
+        self.wled_resolver_signals[key] = bucket
         try:
             resolver = self._dbus.Interface(
-                self.bus.get_object("org.freedesktop.Avahi", path),
-                "org.freedesktop.Avahi.ServiceResolver",
+                self.bus.get_object(AVAHI_SERVICE, path),
+                AVAHI_SERVICE + ".ServiceResolver",
             )
             self._listen_wled(
                 resolver,
                 "Found",
                 lambda *args, generation=gen, ident=key: self._on_wled_found(generation, ident, *args),
+                bucket,
             )
-            self.wled_resolvers[key] = path
         except Exception:
-            self._free(path, "ServiceResolver")
+            self._release_wled_resolver(key)
 
     def _on_wled_remove(self, gen, _interface, _protocol, name, stype, _domain, _flags) -> None:
         if gen != self.wled_generation:
             return
         key = (int(_interface), str(name), str(stype))
-        self.wled_resolvers.pop(key, None)
+        self._release_wled_resolver(key)
         with _lock:
             for row in _wled_rows.values():
                 if row.get("service") == key:
@@ -1586,22 +1643,25 @@ class AvahiBrowser:
     def _on_wled_found(self, gen, key, _interface, _protocol, name, _stype, _domain, _host, _aprotocol, address, _port, _txt, _flags) -> None:
         if gen != self.wled_generation:
             return
-        text = _ipv4_text(address)
-        if not text or not address_on_network(text, self.wled_network):
-            return
-        with _lock:
-            row = _wled_rows.get(text)
-            if row is None:
-                _wled_rows[text] = {
-                    "address": text,
-                    "name": str(name),
-                    "online": True,
-                    "service": key,
-                }
-            else:
-                row["name"] = str(name) or row.get("name") or ""
-                row["online"] = True
-                row["service"] = key
+        try:
+            text = _ipv4_text(address)
+            if not text or not address_on_network(text, self.wled_network):
+                return
+            with _lock:
+                row = _wled_rows.get(text)
+                if row is None:
+                    _wled_rows[text] = {
+                        "address": text,
+                        "name": str(name),
+                        "online": True,
+                        "service": key,
+                    }
+                else:
+                    row["name"] = str(name) or row.get("name") or ""
+                    row["online"] = True
+                    row["service"] = key
+        finally:
+            self._release_wled_resolver(key, keep_slot=True)
 
     def _publish_live(self) -> None:
         _store_live(self.records)
@@ -1614,7 +1674,7 @@ class AvahiBrowser:
         if self.receiver_watch or glib is None:
             return
         self.receiver_watch = True
-        glib.idle_add(self._resolve_named_receiver)
+        glib.idle_add(self._resolve_named_receiver_once)
         glib.timeout_add_seconds(2, self._poll_receiver, self.generation)
 
     def _poll_receiver(self, gen: int) -> bool:
@@ -1626,19 +1686,22 @@ class AvahiBrowser:
         self._resolve_named_receiver()
         return True
 
-    def _resolve_named_receiver(self) -> bool:
+    def _resolve_named_receiver_once(self) -> bool:
+        self._resolve_named_receiver()
+        return False
+
+    def _resolve_named_receiver(self) -> None:
         name = _receiver_name()
         if not name or self.server is None or _current_self_id():
-            return False
+            return
         iface = self._interface_index(AIRPLAY_IFACE)
-        key = (iface, name, "_airplay._tcp")
+        key = (iface, name, AIRPLAY_SERVICE_TYPE)
         # A lookup started before Shairport is advertising stays in this slot.
         # Replace it, including one that has not answered, so the real
         # advertisement can be stored. Keep gating the target list only when
         # a browse resolve for this name is already part of that wait.
         gate = key in self.unresolved
-        self._resolve(iface, 0, name, "_airplay._tcp", "local", refresh=True, gate=gate)
-        return False
+        self._resolve(iface, 0, name, AIRPLAY_SERVICE_TYPE, "local", refresh=True, gate=gate)
 
     def _publish_snapshot(self) -> None:
         self._publish_live()

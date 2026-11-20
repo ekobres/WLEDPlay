@@ -39,6 +39,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/wledplay
           tags: |
+            type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -58,3 +59,16 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      - name: Verify published tags exist in GHCR
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          test -n "$IMAGE_TAGS"
+          printf '%s\n' "$IMAGE_TAGS" | while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Verifying ${tag}"
+            docker buildx imagetools inspect "$tag" > /dev/null
+            echo "Verified ${tag} is available"
+          done

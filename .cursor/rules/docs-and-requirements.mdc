@@ -5,6 +5,13 @@ alwaysApply: true
 
 # Docs stay current; requirements conflicts are surfaced
 
+## Public docs audience and privacy
+
+- Write tracked user-facing docs for any WLEDPlay user or contributor, not for the current conversation or one person's setup.
+- Do not include conversation-specific hardware, host roles, local paths, IPs, account names, or test procedures. Mention platforms only when they are deliberate, generally supported targets.
+- Do not hard-code a maintainer's GitHub username in docs, scripts, Compose defaults, or examples. Use repository-relative links, generic owner placeholders, derive the owner from the Git remote, or provide a configuration override.
+- Keep examples reproducible and clearly label placeholders; do not turn personal test-bed steps into project setup instructions.
+
 When a change alters behavior, config, the HTTP API, environment variables, Docker, or the operator UI, update the operator docs in the same change. Leave design records alone unless the user asks to change the requirements.
 
 ## Update these when the matching fact changes

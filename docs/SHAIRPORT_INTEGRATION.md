@@ -15,19 +15,19 @@ WLEDPlay uses upstream **Shairport Sync** (AirPlay 2) and **NQPTP** as replaceab
 
 The Dockerfile clones those tags with `git clone --depth 1 --branch`. That pins the tag name, not a commit SHA. A moved tag would change the build. Commit pins are a follow-up for the next version bump.
 
-The image applies two local patches by default. Both are build args, and both default to `1`, so a normal `docker compose build` matches the patched image.
+The image builds unmodified upstream tags by default. Both local patches remain available as opt-in build args; set a switch to `1` to apply that patch.
 
-| Arg | `1` (default) | `0` |
-|-----|----------------|-----|
-| `WLEDPLAY_SHAIRPORT_PATCH` | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata | Stock 5.6.3 |
-| `WLEDPLAY_NQPTP_PATCH` | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command | Stock 1.2.9, which keeps the first address and drops the rest |
+| Arg | `0` (default) | `1` |
+|-----|---------------|-----|
+| `WLEDPLAY_SHAIRPORT_PATCH` | Stock 5.6.3 | [docker/shairport-mixed-stack.patch](../docker/shairport-mixed-stack.patch): timing `T` list at SETUP (no `B`, no play lock), timing peers limited to the AirPlay interface, link-local IPv6 omitted, stdout plays before a PTP lock, `ssnc/lead` metadata |
+| `WLEDPLAY_NQPTP_PATCH` | Stock 1.2.9, which keeps the first address and drops the rest | [docker/nqptp-timing-peers.patch](../docker/nqptp-timing-peers.patch): NQPTP watches every address in a `T` command |
 
-`scripts/build-airplay.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
+`scripts/build-airplay-deps.sh` reads the same two variables. A patched Shairport describes itself as `5.6.3-dirty-...`. A stock build of the tag does not say `dirty`. That is the check that the switch took effect.
 
-Build a stock image without replacing the working one by tagging it yourself:
+Build the patched image by opting in:
 
 ```bash
-WLEDPLAY_SHAIRPORT_PATCH=0 WLEDPLAY_NQPTP_PATCH=0 docker compose build
+WLEDPLAY_SHAIRPORT_PATCH=1 WLEDPLAY_NQPTP_PATCH=1 docker compose build
 ```
 
 Auto Join does not depend on either patch. It still succeeds only when PCM arrives. Stock Shairport holds stdout until a PTP lock exists, so a group add that delivers audio before the clock locks produces no samples. The NQPTP patch does nothing useful unless the Shairport patch is also on, because stock Shairport sends a single address. Shairport patched with NQPTP stock sends several addresses and NQPTP keeps only the first.
@@ -41,11 +41,13 @@ Auto Join does not depend on either patch. It still succeeds only when PCM arriv
 | Linux (Docker, bare metal, LXC, Pi) | Yes — Shairport Sync + NQPTP |
 | macOS | No — NQPTP needs exclusive UDP 319/320, which the OS already uses ([AIRPLAY2.md](https://github.com/mikebrady/shairport-sync/blob/master/AIRPLAY2.md)) |
 
+The container builds Shairport Sync and NQPTP on Debian 13 Trixie slim and runs them in a matching Trixie runtime image.
+
 Native Linux:
 
 ```bash
-./scripts/build-airplay.sh
-./scripts/run-airplay.sh
+./scripts/build-wledplay.sh
+./scripts/run-wledplay.sh
 ```
 
 Config: copy [`config/shairport-sync-example.conf`](../config/shairport-sync-example.conf) to gitignored `config/shairport-sync.conf` (`./scripts/ensure-config.sh`). Native Linux and Docker share that file (`service_type = "airplay2"`, stdout **48000 / S16_LE / 2**). Docker Compose mounts `./config` and falls back to the example if the local file is missing.
@@ -107,7 +109,9 @@ WLEDPlay resamples and downmixes before analysis. The `--pcm-rate 44100` default
 
 Shairport Sync exposes title, artist, album, and cover art on a FIFO when built with `--with-metadata`. WLEDPlay reads that pipe (`--metadata-pipe` / `WLEDPLAY_METADATA_PIPE`) and serves it on `/status` and `/artwork`.
 
-Not required for audio-reactive operation.
+Shairport's explicit `ssnc/paus` and `ssnc/pres` events also update `receiver_paused` on `/status` and `paused` on `/levels`. When a pause is observed during the current Auto Join attempt, WLEDPlay keeps waiting for PCM without timing out until playback resumes; the join is not confirmed just because the group request succeeded. The events depend on the receiver session and sender: missing PCM alone is not treated as a confirmed pause.
+
+Metadata is not required for audio-reactive operation.
 
 ---
 

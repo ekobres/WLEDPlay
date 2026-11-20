@@ -41,7 +41,7 @@ GPL applies to **distribution of combined works**. Mitigation:
 2. **Docker image:** Aggregates independent programs (like a Linux distro). The image runs Shairport Sync and NQPTP as separate processes.
 3. **No static linking** of Shairport Sync into WLEDPlay.
 
-A default image build is Shairport Sync tag **5.6.3** plus [`docker/shairport-mixed-stack.patch`](../docker/shairport-mixed-stack.patch), and NQPTP tag **1.2.9** plus [`docker/nqptp-timing-peers.patch`](../docker/nqptp-timing-peers.patch). Those tags are cloned by name, not by commit SHA. `WLEDPLAY_SHAIRPORT_PATCH=0` or `WLEDPLAY_NQPTP_PATCH=0` omits the matching patch and ships the unmodified tag.
+A default image build ships the unmodified Shairport Sync tag **5.6.3** and NQPTP tag **1.2.9**. Those tags are cloned by name, not by commit SHA. Set `WLEDPLAY_SHAIRPORT_PATCH=1` or `WLEDPLAY_NQPTP_PATCH=1` to opt into the matching local patch.
 
 Corresponding source for a patched binary is the upstream tag plus the patch file in this repository. [`docker/NOTICE`](../docker/NOTICE) states that offer. WLEDPlay's own code stays MIT.
 

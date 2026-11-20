@@ -2,19 +2,22 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+      - release/**
   pull_request:
 
 jobs:
   test:
+    if: >-
+      github.event_name != 'push' ||
+      (!contains(github.event.head_commit.message, '[skip ci]') &&
+      !contains(github.event.head_commit.message, '[ci skip]'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
-          components: rustfmt, clippy
-      - name: Format
-        run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-      - name: Test
-        run: cargo test
+          components: rustfmt, clippy, rust-analyzer
+      - name: Contributor checks
+        run: bash scripts/check.sh

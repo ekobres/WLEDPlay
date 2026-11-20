@@ -14,7 +14,7 @@ This requires AirPlay 2 so WLEDPlay can join a group with HomePods, Apple TVs, a
 
 ## Quick start
 
-WLEDPlay runs on a Linux host (Pi, NUC, LXC, or Docker). NQPTP needs UDP 319 and 320, which macOS already uses, so the receiver cannot run on a Mac. Docker Desktop for Mac cannot advertise AirPlay on the LAN because `network_mode: host` is a Linux feature.
+WLEDPlay runs on a Linux host or Linux container using host networking. NQPTP needs UDP 319 and 320, which macOS already uses, so the receiver stack cannot run on macOS. Docker Desktop does not provide the required LAN host networking for AirPlay discovery.
 
 ```bash
 ./scripts/ensure-config.sh
@@ -25,13 +25,13 @@ WLEDPLAY_MULTICAST_INTERFACE=eth2 \
 docker compose up -d --build
 ```
 
-`192.0.2.10` is a documentation address. Substitute your WLED controller. Leave a NIC variable unset when you do not need to pin that traffic. Compose builds this repo and tags it as `${WLEDPLAY_IMAGE}` (default `ghcr.io/ekobres/wledplay:latest`).
+`192.0.2.10` is a documentation address. Substitute a WLED controller address. Leave a NIC variable unset when that traffic does not need interface pinning. Compose builds this checkout and tags the local image as `wledplay:local` by default.
 
 Without Docker, on a Linux host:
 
 ```bash
-./scripts/build-airplay.sh
-./scripts/run-airplay.sh
+./scripts/build-wledplay.sh
+./scripts/run-wledplay.sh
 ```
 
 ### WLED
@@ -73,8 +73,8 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 
 - `GET /` — operator UI
 - `GET /health` — liveness
-- `GET /status` — JSON runtime state (default `:8080`)
-- `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) for the UI poll
+- `GET /status` — JSON runtime state, including `receiver_paused` (default `:8080`)
+- `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) and receiver `paused` state for the UI poll
 - `GET /artwork` — current cover art (404 if none)
 - `GET /config` / `PATCH /config` — live settings
 - `GET /interfaces` — usable IPv4 NICs
@@ -98,7 +98,7 @@ Copy the examples to gitignored local files and edit. Pulls update the examples 
 
 That copies [`config/config-example.yaml`](config/config-example.yaml) to `config/config.yaml` and [`config/shairport-sync-example.conf`](config/shairport-sync-example.conf) to `config/shairport-sync.conf` when those files are missing. Docker Compose mounts `./config` and uses the local Shairport file if present, otherwise the example. Name, NIC pins, and Shairport lead are patched at start from yaml or env. Docker always creates the metadata FIFO at `WLEDPLAY_METADATA_PIPE` (default `/run/wledplay.meta`) and passes it to Shairport and `wledplay`. An empty `metadata.pipe` in yaml does not turn metadata off inside the container.
 
-On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The container starts its own D-Bus and Avahi. If the host already owns UDP 5353, stop host `avahi-daemon` or set `ENABLE_AVAHI=0` and mount `/run/dbus`.
+On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (management UI), AirPlay/mDNS (user VLAN), unicast (WLED device IPs), and multicast (`239.0.0.1`, often a third IoT NIC). Empty means no pin. HTTP then uses `0.0.0.0:8080`. The entrypoint detects an existing host Avahi socket and reuses host Avahi; otherwise it starts D-Bus and Avahi in the container. `WLEDPLAY_AVAHI_MODE=auto|host|container` selects automatic detection or forces a mode. Host mode requires host D-Bus and Avahi sockets, which Compose mounts read-only; see [`SECURITY.md`](SECURITY.md) for the trust implications. Legacy `ENABLE_AVAHI=0|1` remains supported (`0` = host, `1` = container); `0` also supports the older `/run/dbus:/run/dbus` mount when host Avahi is accessible through that bus.
 
 | Variable | Purpose |
 |----------|---------|
@@ -115,19 +115,22 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 | `WLEDPLAY_METADATA_PIPE` | Shairport metadata FIFO (Docker: `/run/wledplay.meta`) |
 | `WLEDPLAY_SHAIRPORT_LATENCY_OFFSET` | Shairport `audio_backend_latency_offset_in_seconds` (e.g. `-1.2`) |
 | `WLEDPLAY_MULTICAST_ENABLED` | `false` / `0` disables multicast send (unicast still works) |
-| `ENABLE_AVAHI` | `1` (default) starts D-Bus + Avahi in the container; `0` uses host Avahi |
-| `WLEDPLAY_IPV4_ONLY` | `1` sets Avahi `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
-| `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `1` (default) applies `docker/shairport-mixed-stack.patch`; `0` builds stock 5.6.3 |
-| `WLEDPLAY_NQPTP_PATCH` | Build arg. `1` (default) applies `docker/nqptp-timing-peers.patch`; `0` builds stock 1.2.9 |
+| `WLEDPLAY_AVAHI_MODE` | `auto` (default) reuses host Avahi when detected, otherwise starts it in the container; force with `host` or `container` |
+| `ENABLE_AVAHI` | Legacy override: `0` uses host Avahi; `1` starts D-Bus + Avahi in the container |
+| `WLEDPLAY_IPV4_ONLY` | In container Avahi mode, `1` sets `use-ipv6=no`. Does not change host IPv6 or Shairport's timing-peer list |
+| `WLEDPLAY_SHAIRPORT_PATCH` | Build arg. `0` (default) builds stock 5.6.3; `1` applies `docker/shairport-mixed-stack.patch` |
+| `WLEDPLAY_NQPTP_PATCH` | Build arg. `0` (default) builds stock 1.2.9; `1` applies `docker/nqptp-timing-peers.patch` |
 | `WLEDPLAY_SYNC_OFFSET_MS` | Live send delay in milliseconds (`audio.sync_offset_ms`). Negative values clamp to `0` |
 | `WLEDPLAY_LOG_LEVEL` | Log level at startup (`logging.level`). The Logs card can change the running level |
 | `WLEDPLAY_LOG_DIR` | Directory of `wledplay.log`, `shairport.log`, `nqptp.log`, and `console.log` (default `/var/log/wledplay`) |
 
 ## Docker
 
-Requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
+The runtime image uses Debian 13 Trixie slim. It requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
 
-Stack: `dbus` + `avahi` → `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
+The entrypoint selects Avahi mode inside the container: it reuses host D-Bus/Avahi when the host Avahi socket is mounted, otherwise it starts container D-Bus and Avahi. `WLEDPLAY_AVAHI_MODE=host` or `container` can force either mode. In host mode, the root-run container connects to the host system bus; review the trust implications in [`SECURITY.md`](SECURITY.md).
+
+Stack after mDNS setup: `nqptp` → `shairport-sync` (stdout) → `wledplay` → UDP → WLED
 
 The entrypoint also writes `/var/log/wledplay/`. WLEDPlay and NQPTP logs are their own output, Shairport's log is stderr (stdout stays the PCM FIFO), and `console.log` is the combined container output. Each file keeps its last 2 MB after it grows past 8 MB. The Logs card reads those files. WLEDPlay lines are stamped in the container's local time with a numeric offset such as `-05:00` or `+00:00`. Compose mounts `/etc/localtime` so that clock matches the host, and the image includes `tzdata` so an explicit `TZ` works when the mount is absent. Debug and trace add one analysis line per second while audio is playing (RMS, a peak latched across that second, frequency, FFT bands, UDP sends, audio frames, delay-queue drops, and the timing offset), and another line when one of those counters changes while idle.
 
@@ -144,12 +147,37 @@ GitHub Actions publishes multi-arch images to `ghcr.io/<repo-owner>/wledplay` fr
 - Pre-release tags (for example `v0.4.0-rc.1`) publish semver/SHA tags but skip `latest`.
 - Published images target `linux/amd64` and `linux/arm64`.
 
-To run from a published image instead of local build, set `WLEDPLAY_IMAGE` (useful for forks) and skip build:
+To run from a published image instead of a local build, set `WLEDPLAY_IMAGE` to `ghcr.io/<repository-owner>/wledplay:<tag>` and skip building:
 
 ```bash
-WLEDPLAY_IMAGE=ghcr.io/ekobres/wledplay:latest
+export WLEDPLAY_IMAGE=ghcr.io/OWNER/wledplay:latest
 docker compose pull
-docker compose up -d
+docker compose up -d --no-build
+```
+
+### Development images
+
+To build a multi-platform development image locally for remote Linux test hosts, first commit and push the source to `dev`, then authenticate to GHCR once:
+
+```bash
+git switch dev
+git add -p
+git commit -m "Describe the change"
+git push
+docker login ghcr.io
+./scripts/build-dev.sh
+```
+
+`build-dev.sh` requires a clean worktree whose `HEAD` matches `origin/dev`. It derives the GHCR owner from the `origin` remote; set `WLEDPLAY_DEV_IMAGE=ghcr.io/OWNER/wledplay` to override it. The script publishes both `dev` and `dev-<commit>` tags for `linux/amd64` and `linux/arm64`; use the printed commit-specific tag on test hosts. The app displays Cargo's package version plus `+dev.<commit>`, keeping `Cargo.toml` as the sole release-version source. The authenticated account needs package write access, and the package must be public for anonymous pulls.
+
+On each test host, update the source branch and run the matching image without a local build:
+
+```bash
+git switch dev
+git pull --ff-only
+export WLEDPLAY_IMAGE=ghcr.io/OWNER/wledplay:dev-COMMIT
+docker compose pull
+docker compose up -d --no-build --pull never
 ```
 
 ## Documentation
@@ -173,7 +201,7 @@ Design records, not the operator manual:
 
 ## Development
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). The toolchain is Rust 1.89 ([`rust-toolchain.toml`](rust-toolchain.toml)). Feeding a PCM file without AirPlay is documented there.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The toolchain is Rust 1.100.0 ([`rust-toolchain.toml`](rust-toolchain.toml)). Feeding a PCM file without AirPlay is documented there.
 
 ## License
 

@@ -3,9 +3,10 @@ services:
     build:
       context: .
       args:
-        WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-1}
-        WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-1}
-    image: "${WLEDPLAY_IMAGE:-ghcr.io/ekobres/wledplay:latest}"
+        WLEDPLAY_SHAIRPORT_PATCH: ${WLEDPLAY_SHAIRPORT_PATCH:-0}
+        WLEDPLAY_NQPTP_PATCH: ${WLEDPLAY_NQPTP_PATCH:-0}
+    # Local source-build tag; set WLEDPLAY_IMAGE to pull a published GHCR image.
+    image: "${WLEDPLAY_IMAGE:-wledplay:local}"
     container_name: wledplay
     network_mode: host
     restart: unless-stopped
@@ -17,6 +18,9 @@ services:
       - ./config:/host-config
       # Host zone file, so WLEDPlay log timestamps match local time.
       - /etc/localtime:/etc/localtime:ro
+      # Read-only host service sockets; entrypoint uses these only in host Avahi mode.
+      - /run/dbus:/host/run/dbus:ro
+      - /run/avahi-daemon:/host/run/avahi-daemon:ro
     environment:
       WLEDPLAY_AIRPLAY_NAME: "${WLEDPLAY_AIRPLAY_NAME:-}"
       WLEDPLAY_MULTICAST_ADDRESS: "${WLEDPLAY_MULTICAST_ADDRESS:-239.0.0.1}"
@@ -32,5 +36,6 @@ services:
       WLEDPLAY_METADATA_PIPE: "${WLEDPLAY_METADATA_PIPE:-/run/wledplay.meta}"
       WLEDPLAY_SHAIRPORT_LATENCY_OFFSET: "${WLEDPLAY_SHAIRPORT_LATENCY_OFFSET:-}"
       WLEDPLAY_PCM_RATE: "48000"
-      ENABLE_AVAHI: "${ENABLE_AVAHI:-1}"
+      WLEDPLAY_AVAHI_MODE: "${WLEDPLAY_AVAHI_MODE:-auto}"
+      ENABLE_AVAHI: "${ENABLE_AVAHI:-}"
       WLEDPLAY_IPV4_ONLY: "${WLEDPLAY_IPV4_ONLY:-0}"

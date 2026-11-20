@@ -8,7 +8,7 @@
 
 ## Non-negotiable project invariants
 - AirPlay 1 stays unsupported; AirPlay 2 + NQPTP is required.
-- Keep optional upstream patch toggles intact and default-on: `WLEDPLAY_SHAIRPORT_PATCH=1`, `WLEDPLAY_NQPTP_PATCH=1` (`Dockerfile`, `docker-compose.yml`).
+- Keep optional upstream patch toggles intact and default-off: `WLEDPLAY_SHAIRPORT_PATCH=0`, `WLEDPLAY_NQPTP_PATCH=0` (`Dockerfile`, `docker-compose.yml`).
 - A paused AirPlay group stays joined (do not change Auto Join semantics).
 - Operator-facing Auto Join text must not say “phone” (internal identifiers may still use phone-owned naming).
 
@@ -36,3 +36,9 @@
 ## Documentation sync rules (project-specific)
 - When changing behavior/config/API, update matching operator docs in the same PR: `README.md`, `config/config-example.yaml`, `docs/ARCHITECTURE.md`, `SECURITY.md`, `docs/SHAIRPORT_INTEGRATION.md`, and `CHANGELOG.md`.
 - Treat `docs/design/software-requirements.md` and `docs/design/auto-join.md` as design records: if a request conflicts with them, call out the exact section and get confirmation before implementing behavior changes.
+
+## Public documentation audience and privacy
+- Write tracked user-facing docs for any WLEDPlay user or contributor, not for the current conversation or one person's setup.
+- Do not include conversation-specific hardware, host roles, local paths, IPs, account names, or test procedures. Mention a platform only when it is a deliberate, generally supported deployment target.
+- Do not hard-code a maintainer's GitHub username in docs, scripts, Compose defaults, or examples. Use repository-relative GitHub links, a generic `<repository-owner>` placeholder, derive the owner from the Git remote, or provide an explicit configuration override.
+- Keep examples reproducible and clearly label placeholders; do not turn personal test-bed steps into project setup instructions.

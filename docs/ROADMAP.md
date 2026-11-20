@@ -49,11 +49,11 @@ These are named and explicitly postponed:
 
 Ship upstream Shairport Sync and NQPTP with no local patches. Remove the patch files, the `WLEDPLAY_SHAIRPORT_PATCH` and `WLEDPLAY_NQPTP_PATCH` build args, and the Dockerfile branches that apply them. Update `docker/NOTICE`, `docs/LICENSING.md`, `docs/SHAIRPORT_INTEGRATION.md`, `docs/ARCHITECTURE.md`, and the README so they stop describing patches that are no longer built.
 
-This matches the requirement to use an upstream Shairport Sync release. Do it once stock AirPlay 2 grouping is the path we support. The patches default on today.
+This matches the requirement to use an upstream Shairport Sync release. Do it once stock AirPlay 2 grouping is the path we support. Patch toggles now default off while stock behavior is evaluated.
 
 ### Debian stable slim
 
-The image is Debian 12. Build and runtime stages use `debian:bookworm-slim`, and the runtime library names (`libavcodec59` and the rest) are bookworm names. Move those stages to the current Debian stable slim image, which is Trixie, and update the package names. Revisit `rust:1.89-bookworm` in the same change if a matching builder image exists.
+Done. The image uses Debian 13 Trixie slim for its build and runtime stages, with the matching slim Rust builder and Trixie runtime library packages.
 
 ### Statistics card
 

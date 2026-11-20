@@ -85,6 +85,10 @@ pub struct RuntimeStatus {
     pub airplay_devices: Vec<AirPlayDeviceInfo>,
     #[serde(skip)]
     pub clock_session: ClockSession,
+    #[serde(default)]
+    pub receiver_paused: bool,
+    #[serde(skip)]
+    pub receiver_pause_sequence: u64,
     pub clock: ClockStatus,
 }
 
@@ -141,6 +145,8 @@ pub struct TrackMetadataStatus {
     pub position_base_s: Option<f32>,
     #[serde(skip)]
     pub progress_unix_ms: Option<u64>,
+    #[serde(skip)]
+    pub progress_sample: Option<(f32, Option<u64>)>,
 }
 
 impl TrackMetadataStatus {
@@ -159,14 +165,18 @@ impl TrackMetadataStatus {
         // AirPlay 2 puts elapsed time in the now-playing plist and does not
         // write it to the metadata pipe. A later item (lead, artwork) must
         // not wipe a clock that is already running for this track.
-        if let Some(pos) = meta.position_s() {
+        let progress_sample = meta.position_s().map(|pos| (pos, meta.progress_unix_ms));
+        if let Some((pos, sampled_at)) =
+            progress_sample.filter(|_| self.progress_sample != progress_sample)
+        {
             self.position_base_s = Some(pos);
-            self.progress_unix_ms = meta.progress_unix_ms;
-        } else if !same_track {
+            self.progress_unix_ms = sampled_at;
+        } else if progress_sample.is_none() && !same_track {
             self.position_s = None;
             self.position_base_s = None;
             self.progress_unix_ms = None;
         }
+        self.progress_sample = progress_sample;
     }
 
     pub fn refresh_position(&mut self, playing: bool) {
@@ -341,7 +351,7 @@ async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
     let s = {
         let mut s = state.status.lock().unwrap();
         s.clock = clock;
-        let playing = s.airplay.connected;
+        let playing = s.airplay.connected && !s.receiver_paused;
         s.metadata.refresh_position(playing);
         s.clone()
     };
@@ -352,6 +362,8 @@ async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LiveLevels {
     pub connected: bool,
+    #[serde(default)]
+    pub paused: bool,
     pub rms: f32,
     pub peak: bool,
     pub dominant_frequency: f32,
@@ -369,6 +381,7 @@ pub struct LiveLevels {
 pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
     LiveLevels {
         connected: status.airplay.connected,
+        paused: status.receiver_paused,
         rms: status.audio.rms,
         peak: status.audio.peak,
         dominant_frequency: status.audio.dominant_frequency,
@@ -624,7 +637,7 @@ mod tests {
     fn bare_state() -> AppState {
         AppState {
             status: Arc::new(Mutex::new(RuntimeStatus {
-                version: "0.3.0".into(),
+                version: crate::APP_VERSION.into(),
                 ..Default::default()
             })),
             artwork: Arc::new(Mutex::new(None)),
@@ -761,6 +774,44 @@ mod tests {
     }
 
     #[test]
+    fn track_progress_keeps_paused_anchor_between_metadata_events() {
+        let mut status = TrackMetadataStatus::default();
+        let mut track = TrackMetadata {
+            title: Some("Song".into()),
+            rtp_start: Some(0),
+            rtp_current: Some(44_100),
+            rtp_end: Some(4_410_000),
+            progress_unix_ms: Some(unix_ms_now().saturating_sub(5_000)),
+            ..TrackMetadata::default()
+        };
+        status.set_from_track(&track);
+        status.refresh_position(false);
+        let frozen = status.position_s.unwrap();
+        assert!(frozen >= 5.9);
+
+        status.set_from_track(&track);
+        status.refresh_position(false);
+        assert_eq!(status.position_s, Some(frozen));
+        assert!(status.progress_unix_ms.is_none());
+
+        status.set_from_track(&track);
+        status.refresh_position(true);
+        assert!((status.position_s.unwrap() - frozen).abs() < 0.1);
+
+        track.rtp_current = Some(882_000);
+        track.progress_unix_ms = Some(unix_ms_now());
+        status.set_from_track(&track);
+        status.refresh_position(true);
+        assert!((status.position_s.unwrap() - 20.0).abs() < 0.1);
+
+        track.title = Some("Next song".into());
+        status.set_from_track(&track);
+        assert_eq!(status.position_base_s, Some(20.0));
+        status.set_from_track(&track);
+        assert_eq!(status.position_base_s, Some(20.0));
+    }
+
+    #[test]
     fn track_progress_runs_when_airplay_omits_elapsed() {
         let mut md = TrackMetadataStatus::default();
         let mut track = TrackMetadata {
@@ -822,7 +873,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(String::from_utf8_lossy(&body).contains("0.3.0"));
+        assert!(String::from_utf8_lossy(&body).contains(crate::APP_VERSION));
         assert!(String::from_utf8_lossy(&body).contains("auto_join"));
         assert!(String::from_utf8_lossy(&body).contains("\"clock\""));
         {

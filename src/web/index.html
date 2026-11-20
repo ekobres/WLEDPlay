@@ -752,9 +752,9 @@
       $("sum-now").textContent = remain ? trackTitle + " · " + remain : trackTitle;
     }
 
-    function paintConn(live) {
-      $("conn").textContent = live ? "live" : "idle";
-      $("conn").className = "pill" + (live ? " live" : "");
+    function paintConn(live, paused) {
+      $("conn").textContent = paused ? "paused" : (live ? "live" : "idle");
+      $("conn").className = "pill" + (live && !paused ? " live" : "");
     }
 
     function sourceMeters(s) {
@@ -763,6 +763,7 @@
       }
       return {
         connected: !!s.connected,
+        paused: !!s.paused,
         rms: Number(s.tx_rms ?? 0),
         peak: !!s.tx_peak,
         dominant_frequency: Number(s.tx_dominant_frequency ?? 0),
@@ -774,7 +775,7 @@
     }
 
     function paintSpectrum(s) {
-      paintConn(!!s.connected);
+      paintConn(!!s.connected, !!s.paused);
       const now = performance.now();
       const dt = lastPaintMs ? Math.min(0.1, (now - lastPaintMs) / 1000) : 0;
       lastPaintMs = now;
@@ -817,7 +818,7 @@
       trackTitle = md.title || (parts.length ? parts.join(" · ") : "No metadata yet");
       $("track").textContent = parts.length ? parts.join(" · ") : "No metadata yet";
       adoptTrackProgress(md);
-      paintTrackProgress(!!s.airplay.connected);
+      paintTrackProgress(!!s.airplay.connected && !s.receiver_paused);
       const art = $("art");
       if (md.has_artwork) {
         const key = parts.join("|") + "#" + (md.artwork_rev || 0);
@@ -1316,7 +1317,7 @@
     function paintFromLevels(s) {
       lastLevels = s;
       paintSpectrum(sourceMeters(s));
-      paintTrackProgress(!!s.connected);
+      paintTrackProgress(!!s.connected && !s.paused);
     }
 
     async function levelsTick() {
@@ -1348,7 +1349,7 @@
         const s = await fetch("/status").then((r) => r.json());
         paintMeta(s);
         paintAutoJoin(s.auto_join);
-        if (!vizOn) paintConn(!!s.airplay.connected);
+        if (!vizOn) paintConn(!!s.airplay.connected, !!s.receiver_paused);
         refreshDevices();
         refreshWled(false);
       } catch { /* ignore */ }

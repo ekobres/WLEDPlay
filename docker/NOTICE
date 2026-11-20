@@ -5,18 +5,18 @@ they run as separate processes.
 Shairport Sync 5.6.3 (GPL-2.0-or-later)
   Upstream: https://github.com/mikebrady/shairport-sync
   Tag: 5.6.3
-  Local patch, applied when WLEDPLAY_SHAIRPORT_PATCH=1 (the default):
+  Optional local patch, applied when WLEDPLAY_SHAIRPORT_PATCH=1:
     docker/shairport-mixed-stack.patch
   Corresponding source is that upstream tag plus this patch.
 
 NQPTP 1.2.9 (GPL-2.0)
   Upstream: https://github.com/mikebrady/nqptp
   Tag: 1.2.9
-  Local patch, applied when WLEDPLAY_NQPTP_PATCH=1 (the default):
+  Optional local patch, applied when WLEDPLAY_NQPTP_PATCH=1:
     docker/nqptp-timing-peers.patch
   Corresponding source is that upstream tag plus this patch.
 
-Set either build arg to 0 to ship the unmodified tag instead.
+Both build args default to 0, shipping the unmodified upstream tags.
 
 Also installed from pip, and not linked into the WLEDPlay binary:
 
