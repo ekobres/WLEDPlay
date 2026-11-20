@@ -1,0 +1,144 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Setup: check prerequisites",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/setup.sh",
+			"args": ["--check"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Setup: install Rust toolchain",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/setup.sh",
+			"args": ["--install"],
+			"problemMatcher": [],
+			"detail": "Installs the pinned Rust toolchain with rustfmt and clippy using an existing rustup installation."
+		},
+		{
+			"label": "Setup: install coverage tooling",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/setup.sh",
+			"args": ["--install", "--coverage"],
+			"problemMatcher": [],
+			"detail": "Installs the pinned Rust toolchain's LLVM tools and cargo-llvm-cov if missing."
+		},
+		{
+			"label": "Setup: install rustup (interactive)",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/setup.sh",
+			"args": ["--install-rustup"],
+			"problemMatcher": [],
+			"detail": "Runs the official interactive rustup installer if rustup is missing; may modify shell startup files."
+		},
+		{
+			"label": "Cargo: build",
+			"type": "process",
+			"command": "cargo",
+			"args": ["build"],
+			"group": { "kind": "build", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: build release",
+			"type": "process",
+			"command": "cargo",
+			"args": ["build", "--release"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: format",
+			"type": "process",
+			"command": "cargo",
+			"args": ["fmt"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: format check",
+			"type": "process",
+			"command": "cargo",
+			"args": ["fmt", "--check"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: clippy",
+			"type": "process",
+			"command": "cargo",
+			"args": ["clippy", "--all-targets", "--", "-D", "warnings"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: test",
+			"type": "process",
+			"command": "cargo",
+			"args": ["test"],
+			"group": { "kind": "test", "isDefault": true },
+			"problemMatcher": []
+		},
+		{
+			"label": "Python: sidecar tests",
+			"type": "process",
+			"command": "python3",
+			"args": ["-m", "unittest", "discover", "-s", "docker", "-p", "test_*.py", "-v"],
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "Shell: setup tests",
+			"type": "process",
+			"command": "bash",
+			"args": ["tests/setup_test.sh"],
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "Check: format, clippy, and tests",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/check.sh",
+			"problemMatcher": []
+		},
+		{
+			"label": "Native: build WLEDPlay and AirPlay dependencies",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/build-wledplay.sh",
+			"problemMatcher": [],
+			"detail": "Builds the native AirPlay dependencies and WLEDPlay; requires a supported host and build tools."
+		},
+		{
+			"label": "Native: run WLEDPlay",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/run-wledplay.sh",
+			"problemMatcher": [],
+			"detail": "Runs the native receiver stack until stopped; requires a supported host and AirPlay dependencies."
+		},
+		{
+			"label": "Cargo: coverage",
+			"type": "process",
+			"command": "cargo",
+			"args": ["llvm-cov", "--lib", "--fail-under-lines", "100", "--fail-under-functions", "100"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: package",
+			"type": "process",
+			"command": "cargo",
+			"args": ["package", "--locked"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Cargo: clean",
+			"type": "process",
+			"command": "cargo",
+			"args": ["clean"],
+			"problemMatcher": []
+		},
+		{
+			"label": "Container: build and push dev image",
+			"type": "process",
+			"command": "${workspaceFolder}/scripts/build-dev.sh",
+			"problemMatcher": [],
+			"detail": "Builds and pushes multi-platform images to GHCR; requires a clean, pushed dev branch and registry login."
+		}
+	]
+}

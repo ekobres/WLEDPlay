@@ -8,4 +8,5 @@
 /config/pyatv/
 __pycache__/
 *.pyc
-.vscode/
+.vscode/*
+!.vscode/tasks.json
