@@ -53,7 +53,7 @@ This matches the requirement to use an upstream Shairport Sync release. Do it on
 
 ### Debian stable slim
 
-The image is Debian 12. Build and runtime stages use `debian:bookworm-slim`, and the runtime library names (`libavcodec59` and the rest) are bookworm names. Move those stages to the current Debian stable slim image, which is Trixie, and update the package names. Revisit `rust:1.100.0-bookworm` in the same change if a matching builder image exists.
+Done. The image uses Debian 13 Trixie slim for its build and runtime stages, with the matching slim Rust builder and Trixie runtime library packages.
 
 ### Statistics card
 

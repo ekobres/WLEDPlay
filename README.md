@@ -126,7 +126,7 @@ On a multi-homed host, pin each traffic type to a NIC (`ip -br addr`): HTTP (man
 
 ## Docker
 
-Requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
+The runtime image uses Debian 13 Trixie slim. It requires **host networking** (mDNS, multicast, AirPlay 2 PTP).
 
 The entrypoint selects Avahi mode inside the container: it reuses host D-Bus/Avahi when the host Avahi socket is mounted, otherwise it starts container D-Bus and Avahi. `WLEDPLAY_AVAHI_MODE=host` or `container` can force either mode. In host mode, the root-run container connects to the host system bus; review the trust implications in [`SECURITY.md`](SECURITY.md).
 

@@ -41,6 +41,8 @@ Auto Join does not depend on either patch. It still succeeds only when PCM arriv
 | Linux (Docker, bare metal, LXC, Pi) | Yes — Shairport Sync + NQPTP |
 | macOS | No — NQPTP needs exclusive UDP 319/320, which the OS already uses ([AIRPLAY2.md](https://github.com/mikebrady/shairport-sync/blob/master/AIRPLAY2.md)) |
 
+The container builds Shairport Sync and NQPTP on Debian 13 Trixie slim and runs them in a matching Trixie runtime image.
+
 Native Linux:
 
 ```bash
