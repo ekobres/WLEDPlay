@@ -14,7 +14,7 @@
 			"command": "${workspaceFolder}/scripts/setup.sh",
 			"args": ["--install"],
 			"problemMatcher": [],
-			"detail": "Installs the pinned Rust toolchain with rustfmt and clippy using an existing rustup installation."
+			"detail": "Installs the pinned Rust toolchain with rustfmt, clippy, and rust-analyzer using an existing rustup installation."
 		},
 		{
 			"label": "Setup: install coverage tooling",

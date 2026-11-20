@@ -10,7 +10,7 @@ Install Git, Python 3, a C compiler/linker, and the Rust Analyzer extension for 
 ./scripts/setup.sh --check
 ```
 
-The check is read-only and reports missing prerequisites. If rustup is already installed, install the pinned toolchain and its formatting and lint components explicitly:
+The check is read-only and reports missing prerequisites. If rustup is already installed, install the pinned toolchain and its rustfmt, clippy, and matching rust-analyzer components explicitly:
 
 ```bash
 ./scripts/setup.sh --install

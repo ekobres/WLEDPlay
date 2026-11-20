@@ -5,7 +5,7 @@
 ARG SHAIRPORT_VERSION=5.6.3
 ARG NQPTP_VERSION=1.2.9
 
-FROM rust:1.89-bookworm AS wledplay-build
+FROM rust:1.100.0-bookworm AS wledplay-build
 ARG WLEDPLAY_BUILD_METADATA=
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

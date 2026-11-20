@@ -43,9 +43,12 @@ case "$1" in
     fi
     ;;
   toolchain)
-    echo "install toolchain $3" >> "$MOCK_STATE/actions"
+    echo "install toolchain $3 $*" >> "$MOCK_STATE/actions"
     if [[ "$3" != stable ]]; then
       : > "$MOCK_STATE/toolchain"
+      case " $* " in
+        *" --component rust-analyzer "*) : > "$MOCK_STATE/analyzer" ;;
+      esac
     fi
     ;;
   component)
@@ -54,6 +57,9 @@ case "$1" in
         if [[ -f "$MOCK_STATE/toolchain" ]]; then
           echo 'rustfmt-test-target'
           echo 'clippy-test-target'
+        fi
+        if [[ -f "$MOCK_STATE/analyzer" ]]; then
+          echo 'rust-analyzer-test-target'
         fi
         if [[ -f "$MOCK_STATE/coverage" ]]; then
           echo 'llvm-tools-test-target'
@@ -76,6 +82,7 @@ chmod +x "$fixture/cargo/bin/cargo"
 run_setup --install >"$fixture/install.log" 2>&1
 channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/rust-toolchain.toml")"
 grep -Fq "install toolchain $channel" "$fixture/state/actions"
+grep -Fq -- '--component rust-analyzer' "$fixture/state/actions"
 [[ ! -e "$fixture/state/coverage" ]]
 [[ ! -e "$fixture/cargo/bin/cargo-llvm-cov" ]]
 run_setup --install --coverage >"$fixture/coverage.log" 2>&1
@@ -91,6 +98,16 @@ actions_after="$(wc -l < "$fixture/state/actions")"
 [[ "$actions_before" == "$actions_after" ]]
 run_setup --check --coverage >"$fixture/ready.log" 2>&1
 grep -q 'Development prerequisites are available' "$fixture/ready.log"
+
+rm "$fixture/state/analyzer"
+if run_setup --check >"$fixture/analyzer-missing.log" 2>&1; then
+  echo "Expected a missing rust-analyzer component to fail the check." >&2
+  exit 1
+fi
+grep -q 'Missing Rust component rust-analyzer' "$fixture/analyzer-missing.log"
+run_setup --install >"$fixture/analyzer-install.log" 2>&1
+[[ -f "$fixture/state/analyzer" ]]
+actions_after="$(wc -l < "$fixture/state/actions")"
 
 if env HOME="$fixture/home" CARGO_HOME="$fixture/cargo" PATH="$fixture/bin" \
   MOCK_STATE="$fixture/state" bash "$ROOT/scripts/setup.sh" --check >"$fixture/path.log" 2>&1; then

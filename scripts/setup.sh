@@ -118,17 +118,18 @@ component_installed() {
 if [[ "$mode" != check ]]; then
   if "$rustup_cmd" run "$channel" rustc --version >/dev/null 2>&1 \
     && "$rustup_cmd" run "$channel" cargo --version >/dev/null 2>&1 \
-    && component_installed rustfmt && component_installed clippy; then
-    echo "Rust $channel with rustfmt and clippy is already installed."
+    && component_installed rustfmt && component_installed clippy \
+    && component_installed rust-analyzer; then
+    echo "Rust $channel with rustfmt, clippy, and rust-analyzer is already installed."
   else
-    echo "Installing the Rust $channel toolchain with rustfmt and clippy."
-    "$rustup_cmd" toolchain install "$channel" --profile minimal --component rustfmt --component clippy --no-self-update
+    echo "Installing the Rust $channel toolchain with rustfmt, clippy, and rust-analyzer."
+    "$rustup_cmd" toolchain install "$channel" --profile minimal --component rustfmt --component clippy --component rust-analyzer --no-self-update
   fi
 fi
 
 if "$rustup_cmd" run "$channel" rustc --version; then
   "$rustup_cmd" run "$channel" cargo --version
-  for component in rustfmt clippy; do
+  for component in rustfmt clippy rust-analyzer; do
     if ! component_installed "$component"; then
       echo "Missing Rust component $component for $channel; run scripts/setup.sh --install." >&2
       missing=1

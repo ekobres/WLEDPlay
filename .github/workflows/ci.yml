@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, rust-analyzer
       - name: Contributor checks
         run: bash scripts/check.sh

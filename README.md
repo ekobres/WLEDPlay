@@ -201,7 +201,7 @@ Design records, not the operator manual:
 
 ## Development
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). The toolchain is Rust 1.89 ([`rust-toolchain.toml`](rust-toolchain.toml)). Feeding a PCM file without AirPlay is documented there.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The toolchain is Rust 1.100.0 ([`rust-toolchain.toml`](rust-toolchain.toml)). Feeding a PCM file without AirPlay is documented there.
 
 ## License
 
