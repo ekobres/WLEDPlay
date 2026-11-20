@@ -85,6 +85,10 @@ pub struct RuntimeStatus {
     pub airplay_devices: Vec<AirPlayDeviceInfo>,
     #[serde(skip)]
     pub clock_session: ClockSession,
+    #[serde(default)]
+    pub receiver_paused: bool,
+    #[serde(skip)]
+    pub receiver_pause_sequence: u64,
     pub clock: ClockStatus,
 }
 
@@ -341,7 +345,7 @@ async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
     let s = {
         let mut s = state.status.lock().unwrap();
         s.clock = clock;
-        let playing = s.airplay.connected;
+        let playing = s.airplay.connected && !s.receiver_paused;
         s.metadata.refresh_position(playing);
         s.clone()
     };
@@ -352,6 +356,8 @@ async fn status_handler(State(state): State<AppState>) -> Json<RuntimeStatus> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LiveLevels {
     pub connected: bool,
+    #[serde(default)]
+    pub paused: bool,
     pub rms: f32,
     pub peak: bool,
     pub dominant_frequency: f32,
@@ -369,6 +375,7 @@ pub struct LiveLevels {
 pub fn live_levels(status: &RuntimeStatus) -> LiveLevels {
     LiveLevels {
         connected: status.airplay.connected,
+        paused: status.receiver_paused,
         rms: status.audio.rms,
         peak: status.audio.peak,
         dominant_frequency: status.audio.dominant_frequency,

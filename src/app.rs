@@ -686,8 +686,23 @@ pub(crate) fn apply_metadata_line(
     raw.push_str(line);
     let mut session = status.lock().unwrap().clock_session.clone();
     let mut art_changed = false;
+    let mut receiver_paused = None;
+    let mut pause_events = 0u64;
     for item in metadata::drain_items(raw) {
         clock::fold_metadata(&item, &mut session);
+        match (item.type_code.as_str(), item.code.as_str()) {
+            ("ssnc", "paus") => {
+                receiver_paused = Some(true);
+                pause_events = pause_events.wrapping_add(1);
+                continue;
+            }
+            ("ssnc", "pres") => {
+                receiver_paused = Some(false);
+                continue;
+            }
+            ("ssnc", "conn" | "pend") => receiver_paused = Some(false),
+            _ => {}
+        }
         let mut art = artwork.lock().unwrap();
         let accepted = metadata::accept_item(meta, &mut art, &mut fold.batch, &item);
         art_changed |= accepted.art_changed;
@@ -707,11 +722,15 @@ pub(crate) fn apply_metadata_line(
     }
     let mut s = status.lock().unwrap();
     s.clock_session = session;
+    if let Some(paused) = receiver_paused {
+        s.receiver_paused = paused;
+    }
+    s.receiver_pause_sequence = s.receiver_pause_sequence.wrapping_add(pause_events);
     s.metadata.set_from_track(meta);
     if art_changed {
         s.metadata.artwork_rev = s.metadata.artwork_rev.wrapping_add(1);
     }
-    let playing = s.airplay.connected;
+    let playing = s.airplay.connected && !s.receiver_paused;
     s.metadata.refresh_position(playing);
     s.airplay.source = meta.source.clone();
     s.airplay.encoding = metadata::stream_encoding(
@@ -1250,6 +1269,32 @@ mod tests {
         note_track(&TrackMetadata::default(), &mut logged);
         note_track(&meta, &mut logged);
         note_track(&meta, &mut logged);
+    }
+
+    #[test]
+    fn metadata_tracks_airplay_pause_and_resume() {
+        let status = status();
+        let artwork = Arc::new(Mutex::new(None));
+        let pause = "<item><type>73736e63</type><code>70617573</code></item>\n";
+        let resume = "<item><type>73736e63</type><code>70726573</code></item>\n";
+        let flush = "<item><type>73736e63</type><code>70666c73</code></item>\n";
+        let connect = "<item><type>73736e63</type><code>636f6e6e</code></item>\n";
+        let end = "<item><type>73736e63</type><code>70656e64</code></item>\n";
+
+        consume_metadata_reader(&mut Cursor::new(pause), &status, &artwork);
+        assert!(status.lock().unwrap().receiver_paused);
+        assert_eq!(status.lock().unwrap().receiver_pause_sequence, 1);
+        consume_metadata_reader(&mut Cursor::new(flush), &status, &artwork);
+        assert!(status.lock().unwrap().receiver_paused);
+        consume_metadata_reader(&mut Cursor::new(resume), &status, &artwork);
+        assert!(!status.lock().unwrap().receiver_paused);
+        consume_metadata_reader(&mut Cursor::new(pause), &status, &artwork);
+        consume_metadata_reader(&mut Cursor::new(connect), &status, &artwork);
+        assert!(!status.lock().unwrap().receiver_paused);
+        consume_metadata_reader(&mut Cursor::new(pause), &status, &artwork);
+        consume_metadata_reader(&mut Cursor::new(end), &status, &artwork);
+        assert!(!status.lock().unwrap().receiver_paused);
+        assert_eq!(status.lock().unwrap().receiver_pause_sequence, 3);
     }
 
     #[test]

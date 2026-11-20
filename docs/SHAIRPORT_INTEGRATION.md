@@ -109,7 +109,9 @@ WLEDPlay resamples and downmixes before analysis. The `--pcm-rate 44100` default
 
 Shairport Sync exposes title, artist, album, and cover art on a FIFO when built with `--with-metadata`. WLEDPlay reads that pipe (`--metadata-pipe` / `WLEDPLAY_METADATA_PIPE`) and serves it on `/status` and `/artwork`.
 
-Not required for audio-reactive operation.
+Shairport's explicit `ssnc/paus` and `ssnc/pres` events also update `receiver_paused` on `/status` and `paused` on `/levels`. When a pause is observed during the current Auto Join attempt, WLEDPlay keeps waiting for PCM without timing out until playback resumes; the join is not confirmed just because the group request succeeded. The events depend on the receiver session and sender: missing PCM alone is not treated as a confirmed pause.
+
+Metadata is not required for audio-reactive operation.
 
 ---
 

@@ -73,8 +73,8 @@ The UI listens on `0.0.0.0:8080` by default and does not authenticate. `PATCH /c
 
 - `GET /` — operator UI
 - `GET /health` — liveness
-- `GET /status` — JSON runtime state (default `:8080`)
-- `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) for the UI poll
+- `GET /status` — JSON runtime state, including `receiver_paused` (default `:8080`)
+- `GET /levels` — slim live meters (RMS, peak, frequency, 16 bands) and receiver `paused` state for the UI poll
 - `GET /artwork` — current cover art (404 if none)
 - `GET /config` / `PATCH /config` — live settings
 - `GET /interfaces` — usable IPv4 NICs

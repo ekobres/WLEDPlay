@@ -578,7 +578,8 @@ pub fn update_status(
         .stream_since
         .map(|t| now.saturating_duration_since(t).as_secs_f32())
         .unwrap_or(0.0);
-    s.metadata.refresh_position(rt.stream_active);
+    let playing = rt.stream_active && !s.receiver_paused;
+    s.metadata.refresh_position(playing);
 }
 
 /// Counters compared between once-per-second analysis lines.

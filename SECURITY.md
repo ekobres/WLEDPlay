@@ -12,7 +12,7 @@ The HTTP server listens on `0.0.0.0:8080` unless you bind it to one interface. T
 - `GET /wled/controllers` lists saved and discovered WLED controllers. `POST /wled/rescan` starts another WLED lookup. `POST /wled/measure` requests `/json/info` from the controller addresses in the body. None of these routes authenticate.
 - `GET /logs` and `GET /logs/download` return process logs. `PATCH /config` with `log_level` changes the WLEDPlay log level. None of these authenticate.
 
-Anyone who can open that port can do both. `GET /status`, `GET /levels`, and `GET /artwork` also expose now-playing metadata and cover art.
+Anyone who can open that port can do both. `GET /status`, `GET /levels`, and `GET /artwork` also expose playback state, now-playing metadata, and cover art.
 
 The Compose service adds `SYS_NICE` so Shairport Sync can set realtime scheduling on its audio thread. That capability does not authenticate the HTTP API.
 

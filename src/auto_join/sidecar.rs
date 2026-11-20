@@ -132,6 +132,10 @@ impl AutoJoinHub {
         }
         let now_ms = now.saturating_duration_since(self.epoch).as_millis() as u64;
         let discovery = self.discovery.lock().unwrap().clone();
+        let (receiver_paused, receiver_pause_sequence) = {
+            let status = status.lock().unwrap();
+            (status.receiver_paused, status.receiver_pause_sequence)
+        };
         let results = {
             let mut queued = self.results.lock().unwrap();
             std::mem::take(&mut *queued)
@@ -140,6 +144,8 @@ impl AutoJoinHub {
             svc.tick(TickInput {
                 now_ms,
                 raw_busy,
+                receiver_paused,
+                receiver_pause_sequence,
                 enabled: auto.enabled,
                 target_id: &auto.target_id,
                 target_name: &auto.target_name,
@@ -799,6 +805,66 @@ mod tests {
             .airplay_devices
             .iter()
             .any(|d| d.label.contains("unavailable")));
+    }
+
+    #[test]
+    fn hub_propagates_receiver_pause_to_join_status() {
+        let mut hub = AutoJoinHub::inactive();
+        let (sender, receiver) = mpsc::channel();
+        hub.cmd_tx = Some(sender);
+        let status = Arc::new(Mutex::new(RuntimeStatus::default()));
+        let auto = AutoJoinConfig {
+            enabled: true,
+            target_id: "aa".into(),
+            target_name: "Kitchen".into(),
+        };
+        {
+            let mut discovery = hub.discovery.lock().unwrap();
+            discovery.self_id = "self".into();
+            discovery.discovery_active = true;
+            discovery.devices.push(AirPlayDevice {
+                id: "aa".into(),
+                name: "Kitchen".into(),
+                model: String::new(),
+                address: String::new(),
+                available: true,
+                playing: true,
+                paused: false,
+                airplay2: true,
+                phone_owned: false,
+            });
+        }
+        let now = Instant::now();
+        hub.drive(false, &auto, "WLEDPlay", now, &status);
+        let WorkerMsg::Join(request) = receiver.try_recv().unwrap() else {
+            panic!("expected a join request");
+        };
+        hub.results.lock().unwrap().push(JoinResult {
+            revision: request.revision,
+            generation: request.generation,
+            ok: true,
+            error: String::new(),
+        });
+        {
+            let mut status = status.lock().unwrap();
+            status.receiver_paused = true;
+            status.receiver_pause_sequence = 1;
+        }
+        hub.drive(
+            false,
+            &auto,
+            "WLEDPlay",
+            now + Duration::from_secs(60),
+            &status,
+        );
+        let status = status.lock().unwrap();
+        assert_eq!(status.auto_join.state, "joining");
+        assert_eq!(status.auto_join.target_status, "Paused");
+        assert!(crate::web::live_levels(&status).paused);
+        assert_eq!(
+            serde_json::to_value(&*status).unwrap()["receiver_paused"],
+            true
+        );
     }
 
     #[test]

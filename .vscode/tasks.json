@@ -34,7 +34,7 @@
 		},
 		{
 			"label": "Cargo: build",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["build"],
 			"group": { "kind": "build", "isDefault": true },
@@ -42,35 +42,35 @@
 		},
 		{
 			"label": "Cargo: build release",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["build", "--release"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: format",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["fmt"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: format check",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["fmt", "--check"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: clippy",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["clippy", "--all-targets", "--", "-D", "warnings"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: test",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["test"],
 			"group": { "kind": "test", "isDefault": true },
@@ -114,21 +114,21 @@
 		},
 		{
 			"label": "Cargo: coverage",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["llvm-cov", "--lib", "--fail-under-lines", "100", "--fail-under-functions", "100"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: package",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["package", "--locked"],
 			"problemMatcher": []
 		},
 		{
 			"label": "Cargo: clean",
-			"type": "process",
+			"type": "shell",
 			"command": "cargo",
 			"args": ["clean"],
 			"problemMatcher": []

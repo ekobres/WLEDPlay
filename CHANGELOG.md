@@ -2,13 +2,14 @@
 
 ## Unreleased
 
+- The UI and Auto Join use Shairport receiver pause and resume metadata when available. A confirmed pause during a pending join suspends the PCM deadline; resuming re-arms it, and PCM remains necessary to confirm the join.
 - Docker builds and the runtime image now use Debian 13 Trixie slim, with matching runtime libraries.
 - Development, CI, and Docker builds now use Rust 1.100.0.
 - The app uses `Cargo.toml` as its version source; development images append `+dev.<commit>` metadata to CLI, log, and status versions.
 - Public setup and release guidance now uses generic repository-owner placeholders and deployment-neutral examples; Compose builds use a local image tag by default.
 - Docker and native upstream builds now default to unpatched Shairport Sync and NQPTP; local patches remain opt-in with build args.
 - Docker Compose now detects host Avahi inside the container and reuses it when present; `WLEDPLAY_AVAHI_MODE` can force host or container mode.
-- Auto Join keeps AirPlay resolvers open for playback-state updates and releases their signal matches on removal, refresh, failure, or rescan; WLED resolvers are released after a result. This avoids stale pause status without accumulating matches across service churn.
+- Auto Join keeps AirPlay resolvers open for TXT updates and releases their signal matches on removal, refresh, failure, or rescan; WLED resolvers are released after a result. This keeps discovery data current without accumulating matches across service churn.
 - The Visualizer switch in the card header has no extra label.
 - The Statistics card shows CPU, memory, send lateness, jitter, and the protocol counters, each with a description. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.
 - The visualizer Decay switch stays off after a page refresh.
