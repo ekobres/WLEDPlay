@@ -6,7 +6,7 @@
 - Public setup and release guidance now uses generic repository-owner placeholders and deployment-neutral examples; Compose builds use a local image tag by default.
 - Docker and native upstream builds now default to unpatched Shairport Sync and NQPTP; local patches remain opt-in with build args.
 - Docker Compose now detects host Avahi inside the container and reuses it when present; `WLEDPLAY_AVAHI_MODE` can force host or container mode.
-- Auto Join releases Avahi resolver signal matches and resolver objects after discovery completes or a service is removed, preventing DBus match-rule accumulation.
+- Auto Join keeps AirPlay resolvers open for playback-state updates and releases their signal matches on removal, refresh, failure, or rescan; WLED resolvers are released after a result. This avoids stale pause status without accumulating matches across service churn.
 - The Visualizer switch in the card header has no extra label.
 - The Statistics card shows CPU, memory, send lateness, jitter, and the protocol counters, each with a description. Stream duration is on the Session card. Sync offset and WLED destinations stay on Control and Configuration.
 - The visualizer Decay switch stays off after a page refresh.

@@ -1369,16 +1369,17 @@ class AvahiBrowser:
         if gen != self.generation:
             return
         key = (int(_interface), str(name), str(stype))
+        self._release_resolver(key)
+        if key in self.resolve_attempt:
+            self.resolve_attempt[key] += 1
         ident = self.services.pop(key, "")
-        if not ident:
-            return
-        if any(other == ident for other in self.services.values()):
+        if ident and not any(other == ident for other in self.services.values()):
+            rec = self.records.get(ident)
+            if rec is not None:
+                rec["present"] = False
+        if ident:
             self._publish_live()
-            return
-        rec = self.records.get(ident)
-        if rec is not None:
-            rec["present"] = False
-        self._publish_live()
+        self._note_resolved(key)
 
     def _resolve(
         self,
@@ -1459,7 +1460,6 @@ class AvahiBrowser:
         try:
             self._apply_found(key, name, stype, address, txt)
         finally:
-            self._release_resolver(key, keep_slot=True)
             self._note_resolved(key)
 
     def _apply_found(self, key, name, stype, address, txt) -> None:

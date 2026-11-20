@@ -1551,6 +1551,37 @@ mod tests {
         );
         assert_eq!(live.view.state, "joined");
 
+        let paused_after_playback = tick(
+            &mut held_svc,
+            20 + IDLE_DEBOUNCE_MS + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(paused_after_playback.view.state, "joined");
+        assert_eq!(paused_after_playback.view.target_status, "Paused");
+        assert!(paused_after_playback.view.last_error.is_empty());
+        assert!(paused_after_playback.join.is_none());
+        let paused_after_debounce = tick(
+            &mut held_svc,
+            20 + 2 * IDLE_DEBOUNCE_MS + JOIN_TIMEOUT_MS,
+            false,
+            true,
+            "aa",
+            "Kitchen",
+            "self",
+            &paused,
+            true,
+            &[],
+        );
+        assert_eq!(paused_after_debounce.view.label, "Joined, playback paused");
+        assert!(paused_after_debounce.join.is_none());
+
         let mut mid = AutoJoinService::new();
         let playing_now = [dev("aa", "Kitchen", true)];
         let req = tick(

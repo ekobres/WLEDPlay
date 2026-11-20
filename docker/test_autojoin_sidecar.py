@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import autojoin_sidecar
 
@@ -12,6 +13,83 @@ class FakeMatch:
 
 
 class AvahiBrowserTests(unittest.TestCase):
+    def test_speaker_resolver_tracks_play_pause_and_resume(self):
+        browser = autojoin_sidecar.AvahiBrowser()
+        key = (1, "speaker", "_airplay._tcp")
+        match = FakeMatch()
+        browser.generation = 1
+        browser.resolve_attempt[key] = 1
+        browser.resolvers[key] = "/resolver/speaker"
+        browser.resolver_signals[key] = [match]
+        browser.unresolved.add(key)
+        def found(flags):
+            properties = {
+                "deviceid": "AA:BB:CC:DD:EE:FF",
+                "pi": "home",
+                "gid": "group",
+                "flags": flags,
+            }
+            txt = [list(f"{field}={value}".encode()) for field, value in properties.items()]
+            browser._on_found(
+                1, key, 1, 1, 0, "speaker", "_airplay._tcp", "local",
+                "speaker.local", 0, "192.0.2.1", 7000, txt, 0,
+            )
+
+        with patch.multiple(
+            autojoin_sidecar,
+            _records={},
+            _snapshot=[],
+            _snapshot_at="",
+            _self_id="",
+            _index={"devices": {}, "self_deviceid": "", "self_name": ""},
+        ), patch.object(autojoin_sidecar, "airplay_network", return_value=None):
+            found("0x10644")
+            self.assertFalse(match.removed)
+            device = autojoin_sidecar.scan_payload()["devices"][0]
+            self.assertTrue(device["paused"])
+            self.assertFalse(device["playing"])
+            found("0x30e44")
+            self.assertTrue(autojoin_sidecar.scan_payload()["devices"][0]["playing"])
+            found("0x10644")
+            self.assertTrue(autojoin_sidecar.scan_payload()["devices"][0]["paused"])
+            found("0x30e44")
+            self.assertTrue(autojoin_sidecar.scan_payload()["devices"][0]["playing"])
+
+    def test_speaker_removal_releases_resolver_under_churn(self):
+        browser = autojoin_sidecar.AvahiBrowser()
+        freed = []
+        browser._free = lambda path, kind: freed.append((path, kind))
+        browser._publish_live = lambda: None
+
+        for index in range(600):
+            key = (1, f"speaker-{index}", "_airplay._tcp")
+            match = FakeMatch()
+            path = f"/resolver/{index}"
+            browser.resolve_attempt[key] = 1
+            browser.resolvers[key] = path
+            browser.resolver_signals[key] = [match]
+            browser.unresolved.add(key)
+            browser._on_remove(0, "_airplay._tcp", 1, 0, key[1], key[2], "local", 0)
+
+            self.assertTrue(match.removed)
+            self.assertNotIn(key, browser.resolvers)
+            self.assertNotIn(key, browser.resolver_signals)
+            self.assertNotIn(key, browser.unresolved)
+            self.assertEqual(browser.resolve_attempt[key], 2)
+
+        self.assertEqual(len(freed), 600)
+
+    def test_removed_speaker_rejects_stale_resolver_callback(self):
+        browser = autojoin_sidecar.AvahiBrowser()
+        key = (1, "speaker", "_airplay._tcp")
+        browser.resolve_attempt[key] = 1
+        browser._on_remove(0, "_airplay._tcp", 1, 0, key[1], key[2], "local", 0)
+        browser.resolve_attempt[key] += 1
+
+        with patch.object(browser, "_apply_found") as apply_found:
+            browser._on_found(0, key, 1)
+            apply_found.assert_not_called()
+
     def test_speaker_resolver_failure_releases_signal_and_object(self):
         browser = autojoin_sidecar.AvahiBrowser()
         key = (1, "speaker", "_airplay._tcp")
